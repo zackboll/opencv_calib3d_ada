@@ -1,26 +1,104 @@
 {
-  "status": "bootstrap_targets_not_yet_hash_verified",
+  "status": "official_tags_peeled_and_source_sha256_verified",
   "opencv": [
     {
       "tag": "4.1.0",
       "commit": "371bba8f54560b374fbcd47e7e02f015ac4969ad",
       "backend": "calib3d",
       "header": "modules/calib3d/include/opencv2/calib3d.hpp",
-      "implementation": "modules/calib3d/src/solvepnp.cpp"
+      "implementation": "modules/calib3d/src/solvepnp.cpp",
+      "files": [
+        {
+          "path": "modules/calib3d/include/opencv2/calib3d.hpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/include/opencv2/calib3d.hpp",
+          "sha256": "b525513f3cbdd148aa59feca0da775fe93dd8d2de31f648c473d255d688d415e",
+          "git_blob_sha1": "b6f3b30696705d8ebe7486beb23429fff52974f2"
+        },
+        {
+          "path": "modules/calib3d/src/calibration.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/calibration.cpp",
+          "sha256": "10255dda042c02b660b913d3993a1012cf66d20b23ba624cb790a85538878b92",
+          "git_blob_sha1": "1b5a8db06a028267a69a067ef102ae6fe53ae27d"
+        },
+        {
+          "path": "modules/calib3d/src/epnp.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/epnp.cpp",
+          "sha256": "2197093b6cf325b5bfb7a9a6eef30cc3d1596efc4ab5aa5cd3a811dd3f9d8a4d",
+          "git_blob_sha1": "a173b8808717cc9470c9e0ffc71c0b0cf85876c9"
+        },
+        {
+          "path": "modules/calib3d/src/solvepnp.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/solvepnp.cpp",
+          "sha256": "b4824ed50e82952c08ce957c12e7914c93fef2ecd41d3725472b903b0e77e229",
+          "git_blob_sha1": "0f76e8c4528b400458dfeab739c9e26d81205ce1"
+        }
+      ]
     },
     {
       "tag": "4.10.0",
       "commit": "71d3237a093b60a27601c20e9ee6c3e52154e8b1",
       "backend": "calib3d",
       "header": "modules/calib3d/include/opencv2/calib3d.hpp",
-      "implementation": "modules/calib3d/src/solvepnp.cpp"
+      "implementation": "modules/calib3d/src/solvepnp.cpp",
+      "files": [
+        {
+          "path": "modules/calib3d/include/opencv2/calib3d.hpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/include/opencv2/calib3d.hpp",
+          "sha256": "f937d4fbd7d9bd0226092e9bc2f4a56c439a27bcf059ee35de299ed2f6ba96f0",
+          "git_blob_sha1": "0280e05e21845b71097aac657ae33ecddec80f4a"
+        },
+        {
+          "path": "modules/calib3d/src/calibration.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/calibration.cpp",
+          "sha256": "fbbd22d1d01ece77b58f923270e64b07183584e7d7e239eac7a7a91086c6fe30",
+          "git_blob_sha1": "c428da6bd5c417bec0306e4599da59e8be85e1c0"
+        },
+        {
+          "path": "modules/calib3d/src/epnp.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/epnp.cpp",
+          "sha256": "3845c2e96f833d510dab4afc7236f1e4c0db65451e2484a0f18ddb376053c8a6",
+          "git_blob_sha1": "9a887c80671d1d79d011c73780c4eead2bc48c4e"
+        },
+        {
+          "path": "modules/calib3d/src/solvepnp.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/solvepnp.cpp",
+          "sha256": "e448aff150f29631c27d8fb7ededf66507abff97960c4175aaa7f106ae67861c",
+          "git_blob_sha1": "771abff483b5884eef3682cdaa842c1cc210fc13"
+        }
+      ]
     },
     {
       "tag": "5.0.0",
       "commit": "40738fb16ceddb5fb3fea747585f7ce6abb0605b",
       "backend": "geometry",
       "header": "modules/geometry/include/opencv2/geometry/3d.hpp",
-      "implementation": "modules/geometry/src/solvepnp.cpp"
+      "implementation": "modules/geometry/src/solvepnp.cpp",
+      "files": [
+        {
+          "path": "modules/geometry/include/opencv2/geometry/3d.hpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/include/opencv2/geometry/3d.hpp",
+          "sha256": "3e23154729137cce7c1574c7d70d00e1fff4a8d3e1548b4b128d8337e5861c34",
+          "git_blob_sha1": "64178c3a99e6e37535a9d49fe3f13372ca282f65"
+        },
+        {
+          "path": "modules/geometry/src/calibration_base.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/calibration_base.cpp",
+          "sha256": "886b515003df67ffbbc196a6ecad12dea6cb08b8e7b715ee7f8d417e7e239b62",
+          "git_blob_sha1": "6b77da4a4eb88612954920f90929b395ab1d2f4c"
+        },
+        {
+          "path": "modules/geometry/src/epnp.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/epnp.cpp",
+          "sha256": "7cd01aad27b3f96385b59660b9eea73c5c2558f74bef86b9ceaaeab2e064c7cb",
+          "git_blob_sha1": "09bff11362329e3f59c35d6bd2cadbb68f926778"
+        },
+        {
+          "path": "modules/geometry/src/solvepnp.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/solvepnp.cpp",
+          "sha256": "536fdf3c00192302f3e91a9c0744e91b0156bca2784c75bd7cb6505d5813c8e5",
+          "git_blob_sha1": "4251927ceb8aae5f9354105b645f3f630cb8839b"
+        }
+      ]
     }
   ],
   "core_pin": "4da9d35ea21e1b2efe96296243ea668b488c6326"

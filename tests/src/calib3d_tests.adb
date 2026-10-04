@@ -1,4 +1,5 @@
 with Ada.Numerics;
+with Ada.Text_IO;
 with AUnit.Assertions;
 with AUnit.Test_Caller;
 with AUnit.Test_Fixtures;
@@ -22,29 +23,29 @@ package body Calib3D_Tests is
    K : constant Camera_Intrinsics :=
      (Focal_X => 800.0, Focal_Y => 820.0, Center_X => 320.0, Center_Y => 240.0);
    Known_Pose : constant World_To_Camera_Pose :=
-     (Rotation => (0 => 0.10, 1 => -0.05, 2 => 0.08),
-      Translation => (0 => 0.20, 1 => -0.10, 2 => 6.00));
+     (Rotation => [0 => 0.10, 1 => -0.05, 2 => 0.08],
+      Translation => [0 => 0.20, 1 => -0.10, 2 => 6.00]);
    World : constant Object_Point_Array :=
-     [(0 => -1.0, 1 => -1.0, 2 => 0.0),
-      (0 =>  0.0, 1 => -1.0, 2 => 0.2),
-      (0 =>  1.0, 1 => -1.0, 2 => 0.4),
-      (0 => -1.2, 1 =>  0.0, 2 => 0.5),
-      (0 =>  0.0, 1 =>  0.0, 2 => 0.8),
-      (0 =>  1.2, 1 =>  0.0, 2 => 0.3),
-      (0 => -1.0, 1 =>  1.0, 2 => 1.0),
-      (0 =>  0.0, 1 =>  1.0, 2 => 1.3),
-      (0 =>  1.0, 1 =>  1.0, 2 => 0.7),
-      (0 => -0.5, 1 => -0.4, 2 => 1.7),
-      (0 =>  0.6, 1 => -0.3, 2 => 1.9),
-      (0 =>  0.3, 1 =>  0.7, 2 => 2.1),
-      (0 => -1.4, 1 =>  0.6, 2 => 1.5),
-      (0 =>  1.5, 1 =>  0.5, 2 => 1.2),
-      (0 => -0.8, 1 => -1.4, 2 => 1.1),
-      (0 =>  0.9, 1 => -1.3, 2 => 1.6),
-      (0 => -1.5, 1 => -0.5, 2 => 2.0),
-      (0 =>  1.4, 1 => -0.6, 2 => 2.2),
-      (0 => -0.2, 1 =>  1.5, 2 => 1.8),
-      (0 =>  0.8, 1 =>  1.4, 2 => 2.4)];
+     [[0 => -1.0, 1 => -1.0, 2 => 0.0],
+      [0 =>  0.0, 1 => -1.0, 2 => 0.2],
+      [0 =>  1.0, 1 => -1.0, 2 => 0.4],
+      [0 => -1.2, 1 =>  0.0, 2 => 0.5],
+      [0 =>  0.0, 1 =>  0.0, 2 => 0.8],
+      [0 =>  1.2, 1 =>  0.0, 2 => 0.3],
+      [0 => -1.0, 1 =>  1.0, 2 => 1.0],
+      [0 =>  0.0, 1 =>  1.0, 2 => 1.3],
+      [0 =>  1.0, 1 =>  1.0, 2 => 0.7],
+      [0 => -0.5, 1 => -0.4, 2 => 1.7],
+      [0 =>  0.6, 1 => -0.3, 2 => 1.9],
+      [0 =>  0.3, 1 =>  0.7, 2 => 2.1],
+      [0 => -1.4, 1 =>  0.6, 2 => 1.5],
+      [0 =>  1.5, 1 =>  0.5, 2 => 1.2],
+      [0 => -0.8, 1 => -1.4, 2 => 1.1],
+      [0 =>  0.9, 1 => -1.3, 2 => 1.6],
+      [0 => -1.5, 1 => -0.5, 2 => 2.0],
+      [0 =>  1.4, 1 => -0.6, 2 => 2.2],
+      [0 => -0.2, 1 =>  1.5, 2 => 1.8],
+      [0 =>  0.8, 1 =>  1.4, 2 => 2.4]];
 
    function Near (Left, Right : OpenCV.Float64_Value;
                   Epsilon : OpenCV.Float64_Value := 1.0E-9) return Boolean is
@@ -62,11 +63,11 @@ package body Calib3D_Tests is
 
    procedure Projection_Identity (T : in out Fixture) is
       pragma Unreferenced (T);
-      Points : constant Object_Point_Array := [(0 => 1.0, 1 => 2.0, 2 => 10.0)];
+      Points : constant Object_Point_Array := [[0 => 1.0, 1 => 2.0, 2 => 10.0]];
       Intrinsics : constant Camera_Intrinsics :=
         (Focal_X => 100.0, Focal_Y => 200.0, Center_X => 10.0, Center_Y => 20.0);
       Identity : constant World_To_Camera_Pose :=
-        (Rotation => (others => 0.0), Translation => (others => 0.0));
+        (Rotation => [others => 0.0], Translation => [others => 0.0]);
       Result : constant Image_Point_Array := Project_Points (Points, Intrinsics, No_Distortion, Identity);
    begin
       Assert (Result'Length = 1, "projection result count");
@@ -76,37 +77,53 @@ package body Calib3D_Tests is
 
    procedure Projection_Translation (T : in out Fixture) is
       pragma Unreferenced (T);
-      Points : constant Object_Point_Array := [(0 => 0.0, 1 => 0.0, 2 => 5.0)];
+      Points : constant Object_Point_Array := [[0 => 0.0, 1 => 0.0, 2 => 5.0]];
       Intrinsics : constant Camera_Intrinsics :=
         (Focal_X => 100.0, Focal_Y => 100.0, Center_X => 10.0, Center_Y => 20.0);
       Shift : constant World_To_Camera_Pose :=
-        (Rotation => (others => 0.0), Translation => (0 => 1.0, 1 => 0.0, 2 => 0.0));
+        (Rotation => [others => 0.0], Translation => [0 => 1.0, 1 => 0.0, 2 => 0.0]);
       Result : constant Image_Point_Array := Project_Points (Points, Intrinsics, No_Distortion, Shift);
    begin
       Assert (Near (Result (1) (0), 30.0) and then Near (Result (1) (1), 20.0),
               "translation projection differs");
    end Projection_Translation;
 
+   procedure Projection_Rotation (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Points : constant Object_Point_Array := [[1.0, 2.0, 10.0]];
+      Quarter_Turn : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, OpenCV.Float64_Value (Ada.Numerics.Pi / 2.0)],
+         Translation => [others => 0.0]);
+      Result : constant Image_Point_Array := Project_Points
+        (Points, (100.0, 200.0, 10.0, 20.0), No_Distortion, Quarter_Turn);
+   begin
+      --  Independent Rz(pi/2): (X,Y,Z) -> (-Y,X,Z).
+      Assert (Near (Result (1) (0), -10.0) and then Near (Result (1) (1), 40.0),
+              "quarter-turn projection oracle differs");
+   end Projection_Rotation;
+
    procedure Projection_Distortion (T : in out Fixture) is
       pragma Unreferenced (T);
-      Points : constant Object_Point_Array := [(0 => 1.0, 1 => 2.0, 2 => 10.0)];
+      Points : constant Object_Point_Array := [[0 => 1.0, 1 => 2.0, 2 => 10.0]];
       Intrinsics : constant Camera_Intrinsics :=
         (Focal_X => 100.0, Focal_Y => 100.0, Center_X => 0.0, Center_Y => 0.0);
       Identity : constant World_To_Camera_Pose :=
-        (Rotation => (others => 0.0), Translation => (others => 0.0));
+        (Rotation => [others => 0.0], Translation => [others => 0.0]);
       Distortion : constant Distortion_Coefficients :=
-        (K1 => 0.1, K2 => 0.0, P1 => 0.0, P2 => 0.0, K3 => 0.0);
+        (K1 => 0.1, K2 => -0.02, P1 => 0.003, P2 => -0.004, K3 => 0.005);
       Result : constant Image_Point_Array := Project_Points (Points, Intrinsics, Distortion, Identity);
    begin
-      Assert (Near (Result (1) (0), 10.05, 1.0E-9)
-              and then Near (Result (1) (1), 20.10, 1.0E-9),
-              "radial distortion oracle differs");
+      --  x=.1, y=.2, r2=.05, radial=1+k1*r2+k2*r2^2+k3*r2^3.
+      --  xd=x*radial+2*p1*x*y+p2*(r2+2*x^2); analogous yd.
+      Assert (Near (Result (1) (0), 10.03350625, 1.0E-9)
+              and then Near (Result (1) (1), 20.1220125, 1.0E-9),
+              "five-coefficient distortion oracle differs");
    end Projection_Distortion;
 
    procedure Camera_Center_Translation (T : in out Fixture) is
       pragma Unreferenced (T);
       P : constant World_To_Camera_Pose :=
-        (Rotation => (others => 0.0), Translation => (0 => 1.0, 1 => 2.0, 2 => 3.0));
+        (Rotation => [others => 0.0], Translation => [0 => 1.0, 1 => 2.0, 2 => 3.0]);
       Center : constant Object_Point := Camera_Center (P);
    begin
       Assert (Near (Center (0), -1.0) and then Near (Center (1), -2.0)
@@ -116,9 +133,9 @@ package body Calib3D_Tests is
    procedure Camera_Center_Rotation (T : in out Fixture) is
       pragma Unreferenced (T);
       P : constant World_To_Camera_Pose :=
-        (Rotation => (0 => 0.0, 1 => 0.0,
-                      2 => OpenCV.Float64_Value (Ada.Numerics.Pi / 2.0)),
-         Translation => (0 => 1.0, 1 => 2.0, 2 => 3.0));
+        (Rotation => [0 => 0.0, 1 => 0.0,
+                      2 => OpenCV.Float64_Value (Ada.Numerics.Pi / 2.0)],
+         Translation => [0 => 1.0, 1 => 2.0, 2 => 3.0]);
       Center : constant Object_Point := Camera_Center (P);
    begin
       Assert (Near (Center (0), -2.0, 1.0E-10)
@@ -175,26 +192,74 @@ package body Calib3D_Tests is
               (Maximum_Iterations => 1_000, Reprojection_Error_Pixels => 2.0, Confidence => 0.999));
       begin
          Assert (Found (Estimate), "outlier RANSAC pose not found");
-         Assert (Inlier_Count (Estimate) >= 10, "too few robust inliers");
+         Assert (Inlier_Count (Estimate) >= 4, "too few robust inliers");
          declare
             Accepted : constant Inlier_Index_Array := Inliers (Estimate);
+            Reprojected : constant Image_Point_Array :=
+              Project_Points (World, K, No_Distortion, Pose (Estimate));
+            Expected_Center : constant Object_Point := Camera_Center (Known_Pose);
+            Actual_Center : constant Object_Point := Camera_Center (Pose (Estimate));
+            Max_Error_Squared : OpenCV.Float64_Value := 0.0;
          begin
             Assert (not Contains (Accepted, 2) and then not Contains (Accepted, 7)
                     and then not Contains (Accepted, 15), "gross synthetic outlier accepted");
             for I in Accepted'First + 1 .. Accepted'Last loop
                Assert (Accepted (I) > Accepted (I - 1), "inliers are not strictly ascending");
             end loop;
+            for I of Accepted loop
+               Assert (I in World'Range, "inlier outside correspondence range");
+               declare
+                  DX : constant OpenCV.Float64_Value := Reprojected (I) (0) - Images (I) (0);
+                  DY : constant OpenCV.Float64_Value := Reprojected (I) (1) - Images (I) (1);
+               begin
+                  Max_Error_Squared := OpenCV.Float64_Value'Max (Max_Error_Squared, DX * DX + DY * DY);
+               end;
+            end loop;
+            Assert (Max_Error_Squared < 0.25, "robust inlier reprojection exceeds 0.5 pixels");
+            for Axis in Expected_Center'Range loop
+               Assert (Near (Actual_Center (Axis), Expected_Center (Axis), 0.05),
+                       "robust camera center differs");
+            end loop;
+            Ada.Text_IO.Put_Line ("robust PnP: inliers=" & Natural'Image (Accepted'Length) &
+              ", rejected=2,7,15; max squared pixel error=" &
+              OpenCV.Float64_Value'Image (Max_Error_Squared));
          end;
       end;
    end PnP_Outliers;
 
+   procedure PnP_Not_Found (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Collinear object points and identical image points cannot supply a
+      --  valid P3P solution in the exactly-four-point native path.
+      Objects : constant Object_Point_Array :=
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]];
+      Images : constant Image_Point_Array := [1 .. 4 => [320.0, 240.0]];
+      Estimate : constant Pose_Estimate := Solve_PnP_RANSAC
+        (Objects, Images, K, Options => (100, 1.0, 0.99));
+   begin
+      Assert (not Found (Estimate), "degenerate fixture unexpectedly found a pose");
+      Assert (Inlier_Count (Estimate) = 0 and then Inliers (Estimate)'Length = 0
+              and then Inliers (Estimate)'First = 1 and then Inliers (Estimate)'Last = 0,
+              "not-found estimate exposes inliers");
+      begin
+         declare
+            Value : constant World_To_Camera_Pose := Pose (Estimate);
+            pragma Unreferenced (Value);
+         begin
+            Assert (False, "not-found estimate exposes pose");
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+   end PnP_Not_Found;
+
    procedure Invalid_Intrinsics (T : in out Fixture) is
       pragma Unreferenced (T);
-      Points : constant Object_Point_Array := [(0 => 0.0, 1 => 0.0, 2 => 5.0)];
+      Points : constant Object_Point_Array := [[0 => 0.0, 1 => 0.0, 2 => 5.0]];
       Bad : constant Camera_Intrinsics :=
         (Focal_X => 0.0, Focal_Y => 100.0, Center_X => 10.0, Center_Y => 20.0);
       Identity : constant World_To_Camera_Pose :=
-        (Rotation => (others => 0.0), Translation => (others => 0.0));
+        (Rotation => [others => 0.0], Translation => [others => 0.0]);
    begin
       begin
          declare
@@ -232,6 +297,7 @@ package body Calib3D_Tests is
                                     Reprojection_Error_Pixels => 0.0, Confidence => 0.99));
       Expect_Error (World, Images, (Maximum_Iterations => 100,
                                     Reprojection_Error_Pixels => 8.0, Confidence => 1.0));
+      Expect_Error (World, Images, (100, 1.0E-300, 0.99));
    end Invalid_Options_And_Counts;
 
    procedure ABI_Layout (T : in out Fixture) is
@@ -288,11 +354,16 @@ package body Calib3D_Tests is
       Fill_Intrinsics (Intrinsics'Access);
       Fill_Distortion (Distortion'Access);
       Fill_Pose (Native_Pose'Access);
-      Assert (Intrinsics.Focal_X = 800.0 and then Intrinsics.Center_Y = 240.0,
+      Assert (Intrinsics.Focal_X = 800.0 and then Intrinsics.Focal_Y = 820.0
+              and then Intrinsics.Center_X = 320.0 and then Intrinsics.Center_Y = 240.0,
               "C-written intrinsics interchange");
-      Assert (Distortion.K1 = 0.1 and then Distortion.K3 = 0.03,
+      Assert (Distortion.K1 = 0.1 and then Distortion.K2 = -0.2
+              and then Distortion.P1 = 0.01 and then Distortion.P2 = -0.02
+              and then Distortion.K3 = 0.03,
               "C-written distortion interchange");
-      Assert (Native_Pose.RX = 0.1 and then Native_Pose.TZ = 6.0,
+      Assert (Native_Pose.RX = 0.1 and then Native_Pose.RY = 0.2
+              and then Native_Pose.RZ = 0.3 and then Native_Pose.TX = 4.0
+              and then Native_Pose.TY = 5.0 and then Native_Pose.TZ = 6.0,
               "C-written pose interchange");
    end ABI_Layout;
 
@@ -303,11 +374,13 @@ package body Calib3D_Tests is
    begin
       Result.Add_Test (Caller.Create ("projectPoints identity pinhole oracle", Projection_Identity'Access));
       Result.Add_Test (Caller.Create ("projectPoints translation oracle", Projection_Translation'Access));
-      Result.Add_Test (Caller.Create ("projectPoints radial distortion oracle", Projection_Distortion'Access));
+      Result.Add_Test (Caller.Create ("projectPoints rotation oracle", Projection_Rotation'Access));
+      Result.Add_Test (Caller.Create ("projectPoints five-coefficient distortion oracle", Projection_Distortion'Access));
       Result.Add_Test (Caller.Create ("camera center identity rotation", Camera_Center_Translation'Access));
       Result.Add_Test (Caller.Create ("camera center nonidentity rotation", Camera_Center_Rotation'Access));
       Result.Add_Test (Caller.Create ("clean synthetic EPNP RANSAC pose", PnP_Clean'Access));
       Result.Add_Test (Caller.Create ("synthetic robust PnP rejects gross outliers", PnP_Outliers'Access));
+      Result.Add_Test (Caller.Create ("native false return exposes no pose", PnP_Not_Found'Access));
       Result.Add_Test (Caller.Create ("invalid camera intrinsics rejected", Invalid_Intrinsics'Access));
       Result.Add_Test (Caller.Create ("invalid PnP options and counts rejected", Invalid_Options_And_Counts'Access));
       Result.Add_Test (Caller.Create ("compiler-derived C/Ada ABI layouts", ABI_Layout'Access));

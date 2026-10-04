@@ -58,6 +58,20 @@ class RepositoryTests(unittest.TestCase):
     def test_no_generated_binding_source(self):
         self.assertFalse(any(p.name.startswith("generate") for p in (ROOT / "scripts").iterdir()))
 
+    def test_topology_rejects_extra_windows_branch(self):
+        cross = (ROOT / ".github/workflows/cross-platform.yml").read_text()
+        windows = (ROOT / ".github/workflows/windows-post-merge.yml").read_text()
+        compatibility = (ROOT / ".github/workflows/opencv-compatibility.yml").read_text()
+        with self.assertRaises(ValueError):
+            check_topology(cross, windows.replace("- main", "- main\n      - feature/**"), compatibility)
+
+    def test_topology_rejects_extra_pr_job(self):
+        cross = (ROOT / ".github/workflows/cross-platform.yml").read_text()
+        windows = (ROOT / ".github/workflows/windows-post-merge.yml").read_text()
+        compatibility = (ROOT / ".github/workflows/opencv-compatibility.yml").read_text()
+        with self.assertRaises(ValueError):
+            check_topology(cross + "\n  windows:\n    runs-on: windows-latest\n", windows, compatibility)
+
 
 if __name__ == "__main__":
     unittest.main()

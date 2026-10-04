@@ -28,6 +28,8 @@ fi
 [ -n "$package" ] || fail 'OpenCV pkg-config metadata not found (opencv5, opencv4, opencv)'
 
 version=$("$pkg_config" --modversion "$package")
+printf '%s\n' "$version" | grep -Eq '^(4\.[1-9][0-9]*\.[0-9]+|5\.0\.[0-9]+)$' ||
+    fail "OpenCV $version is outside the bootstrap target range (4.1-4.x, 5.0.x)"
 major=$(printf '%s' "$version" | cut -d. -f1)
 minor=$(printf '%s' "$version" | cut -d. -f2)
 case "$major:$minor" in
@@ -41,6 +43,13 @@ include_dir=$("$pkg_config" --variable=includedir "$package")
 library_dir=$("$pkg_config" --variable=libdir "$package")
 [ -n "$include_dir" ] && [ -n "$library_dir" ] || fail 'OpenCV metadata lacks include/lib directories'
 [ -f "$include_dir/$header" ] || fail "Missing native header $header"
+case "$sysname" in
+    Darwin) native_library="$library_dir/libopencv_$backend.dylib" ;;
+    MINGW*|MSYS*) native_library="$library_dir/libopencv_$backend.dll.a" ;;
+    *) native_library="$library_dir/libopencv_$backend.so"
+       [ -f "$native_library" ] || native_library="$library_dir/libopencv_$backend.a" ;;
+esac
+[ -f "$native_library" ] || fail "Missing native backend library $native_library"
 
 core_prefix=${OPENCV_CORE_ALIRE_PREFIX:-}
 [ -n "$core_prefix" ] || fail 'Use alr build (or set OPENCV_CORE_ALIRE_PREFIX to the resolved Core crate/install)'

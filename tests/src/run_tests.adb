@@ -1,10 +1,14 @@
 with AUnit.Run;
 with AUnit.Reporter.Text;
+with Ada.Command_Line;
 with Calib3D_Tests;
 
 procedure Run_Tests is
-   procedure Runner is new AUnit.Run.Test_Runner (Calib3D_Tests.Suite);
+   function Runner is new AUnit.Run.Test_Runner_With_Status (Calib3D_Tests.Suite);
    Reporter : AUnit.Reporter.Text.Text_Reporter;
+   use type AUnit.Status;
 begin
-   Runner (Reporter);
+   if Runner (Reporter) /= AUnit.Success then
+      Ada.Command_Line.Set_Exit_Status (Ada.Command_Line.Failure);
+   end if;
 end Run_Tests;

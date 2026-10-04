@@ -56,4 +56,11 @@ jobs:
         run: |
           sh scripts/test.sh
           grep -F 'Native_Version := "${{ matrix.opencv }}";' config/opencv_calib3d_install.gpr
+          case '${{ matrix.opencv }}' in
+            4.*) backend=calib3d ;;
+            5.0.*) backend=geometry ;;
+          esac
+          grep -F "Native_Backend := \"$backend\";" config/opencv_calib3d_install.gpr
           alr -n exec -- sh scripts/run_sanitizers.sh
+          alr -n -C examples build
+          alr -n -C examples exec -- sh ../scripts/run_native.sh bin/pnp_synthetic

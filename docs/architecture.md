@@ -21,3 +21,9 @@ The C boundary contains only fixed-width/`double` C records, opaque temporary
 result handles and Core opaque Mat handles. C++ catches every exception before it
 can cross the ABI. RANSAC inliers are validated, sorted and copied to Ada-owned
 one-based values.
+
+`X_camera = R * X_world + t`, with `C_world = -R^T * t`. The caller supplies
+the metric Cartesian world frame; Translation is never camera position.
+Projection publishes a validated temporary matrix atomically; native result
+publication is guarded by unique ownership, and Ada copies values before destroying
+the temporary result. Test-only exception checkpoints are excluded from production.

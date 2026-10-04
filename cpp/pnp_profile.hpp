@@ -18,6 +18,7 @@ inline bool ransac_options_fit(std::int64_t iterations, double reprojection_erro
     return iterations > 0 && iterations <= std::numeric_limits<std::int32_t>::max() &&
            finite(reprojection_error) && reprojection_error > 0.0 &&
            reprojection_error <= std::numeric_limits<float>::max() &&
+            static_cast<float>(reprojection_error) > 0.0F &&
            finite(confidence) && confidence > 0.0 && confidence < 1.0;
 }
 } // namespace opencv_calib3d_detail

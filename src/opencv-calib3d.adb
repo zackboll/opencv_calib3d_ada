@@ -18,6 +18,8 @@ package body OpenCV.Calib3D is
    use type OpenCV.Core.Channel_Count;
    use type Interfaces.Integer_32;
    use type Interfaces.Unsigned_8;
+   use type Interfaces.Unsigned_64;
+   use type Interfaces.C.C_float;
    use type System.Address;
 
    procedure Free is new Ada.Unchecked_Deallocation
@@ -29,7 +31,7 @@ package body OpenCV.Calib3D is
          Free (Self.Data);
       end if;
       Self.Has_Pose := False;
-      Self.Value := (Rotation => (others => 0.0), Translation => (others => 0.0));
+      Self.Value := (Rotation => [others => 0.0], Translation => [others => 0.0]);
    end Finalize;
 
    function Is_Finite (Value : OpenCV.Float64_Value) return Boolean is
@@ -71,12 +73,18 @@ package body OpenCV.Calib3D is
       end loop;
    end Validate;
 
+   --  Check in a type wider than Positive: Positive is already INT32-bounded
+   --  on common GNAT targets, but the C ABI bound is independent of that.
+   function Native_Iterations_Fit (Value : Interfaces.Unsigned_64) return Boolean is
+     (Value > 0 and then Value <= Interfaces.Unsigned_64 (Interfaces.Integer_32'Last));
+
    procedure Validate (Value : RANSAC_Options) is
    begin
-      if Value.Maximum_Iterations > Natural (Interfaces.Integer_32'Last)
+      if not Native_Iterations_Fit (Interfaces.Unsigned_64 (Value.Maximum_Iterations))
         or else not Is_Finite (Value.Reprojection_Error_Pixels)
         or else Value.Reprojection_Error_Pixels <= 0.0
         or else Value.Reprojection_Error_Pixels > OpenCV.Float64_Value (Interfaces.C.C_float'Last)
+         or else Interfaces.C.C_float (Value.Reprojection_Error_Pixels) <= 0.0
         or else not Is_Finite (Value.Confidence)
         or else not (Value.Confidence > 0.0 and then Value.Confidence < 1.0)
       then
@@ -121,10 +129,10 @@ package body OpenCV.Calib3D is
       Interfaces.C.double (Value.Translation (1)), Interfaces.C.double (Value.Translation (2)));
 
    function From_C (Value : C.C_Pose) return World_To_Camera_Pose is
-     ((OpenCV.Float64_Value (Value.RX), OpenCV.Float64_Value (Value.RY),
-       OpenCV.Float64_Value (Value.RZ)),
-      (OpenCV.Float64_Value (Value.TX), OpenCV.Float64_Value (Value.TY),
-       OpenCV.Float64_Value (Value.TZ)));
+     ([OpenCV.Float64_Value (Value.RX), OpenCV.Float64_Value (Value.RY),
+       OpenCV.Float64_Value (Value.RZ)],
+      [OpenCV.Float64_Value (Value.TX), OpenCV.Float64_Value (Value.TY),
+       OpenCV.Float64_Value (Value.TZ)]);
 
    function Object_Matrix (Points : Object_Point_Array) return OpenCV.Core.Mat is
    begin
@@ -196,9 +204,9 @@ package body OpenCV.Calib3D is
       Validate (Pose);
       Native_Pose := To_C (Pose);
       C.Check (C.Camera_Center (Native_Pose'Access, Center'Access), "Calib3D.Camera_Center");
-      return (0 => OpenCV.Float64_Value (Center.X),
+      return [0 => OpenCV.Float64_Value (Center.X),
               1 => OpenCV.Float64_Value (Center.Y),
-              2 => OpenCV.Float64_Value (Center.Z));
+              2 => OpenCV.Float64_Value (Center.Z)];
    end Camera_Center;
 
    function Project_Points

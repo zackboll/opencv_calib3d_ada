@@ -54,7 +54,7 @@ def main() -> None:
 
     tests = (ROOT / "tests/src/calib3d_tests.adb").read_text()
     registrations = re.findall(r"Result\.Add_Test\s*\(Caller\.Create", tests)
-    check(len(registrations) == 10, "update documented AUnit inventory when changing tests")
+    check(len(registrations) == 12, "update documented AUnit inventory when changing tests")
 
     configure = (ROOT / "scripts/configure_opencv.sh").read_text()
     check("backend=calib3d" in configure and "backend=geometry" in configure,
@@ -63,7 +63,7 @@ def main() -> None:
           "backend headers are not checked")
 
     print(f"PASS: manifests, Core pin {commits[0][:12]}, {len(declared)} ABI declarations/imports, "
-          f"10 AUnit registrations, Core ownership, 4/5 backend split, CI topology")
+          f"12 AUnit registrations, Core ownership, 4/5 backend split, CI topology")
 
 
 if __name__ == "__main__":

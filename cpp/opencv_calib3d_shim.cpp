@@ -21,7 +21,13 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <utility>
 #include <vector>
+
+#if (CV_VERSION_MAJOR == 4 && CV_VERSION_MINOR < 1) || \
+    (CV_VERSION_MAJOR == 5 && CV_VERSION_MINOR != 0)
+# error "Review Calib3D compatibility outside OpenCV 4.1-4.x and 5.0.x"
+#endif
 
 static_assert(sizeof(int) == 4, "OpenCV native integer contract requires 32-bit int");
 static_assert(std::is_standard_layout<opencv_calib3d_camera_intrinsics>::value,
@@ -188,7 +194,7 @@ void validate_finite_image_points(const cv::Mat &mat) {
 }
 
 opencv_calib3d_pose pose_from_mats(const cv::Mat &rvec, const cv::Mat &tvec) {
-    require(rvec.checkVector(3, CV_64F) == 1 && tvec.checkVector(3, CV_64F) == 1,
+    require(rvec.checkVector(1, CV_64F) == 3 && tvec.checkVector(1, CV_64F) == 3,
             "native pose vectors must contain three Float64 scalars");
     cv::Mat r = rvec.reshape(1, 3);
     cv::Mat t = tvec.reshape(1, 3);
@@ -231,17 +237,17 @@ opencv_calib3d_status opencv_calib3d_project_points(
         const int count = validate_object_points(objects, true);
         if (count > 0) validate_finite_object_points(objects);
         cv::Mat &output = resolve_output(image_points);
+        cv::Mat projected;
         checkpoint(1);
-        if (count == 0) {
-            output.release();
-        } else {
+        if (count > 0) {
             cv::projectPoints(objects, rotation_vector(*pose), translation_vector(*pose),
-                              camera_matrix(*intrinsics), distortion_vector(*distortion), output);
-            require(output.dims == 2 && output.type() == CV_64FC2 && output.cols == 1 &&
-                    output.rows == count, "native projectPoints output schema differs");
-            validate_finite_image_points(output);
+                              camera_matrix(*intrinsics), distortion_vector(*distortion), projected);
+            require(projected.dims == 2 && projected.type() == CV_64FC2 && projected.cols == 1 &&
+                    projected.rows == count, "native projectPoints output schema differs");
+            validate_finite_image_points(projected);
         }
         checkpoint(2);
+        output = std::move(projected);
     });
 }
 

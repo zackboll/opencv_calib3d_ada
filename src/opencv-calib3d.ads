@@ -37,8 +37,8 @@ package OpenCV.Calib3D is
    --  Rotation is a Rodrigues rotation vector. Translation is t, NOT the
    --  camera position. Camera_Center returns C_world = -R^T * t.
    type World_To_Camera_Pose is record
-      Rotation    : Rotation_Vector := (others => 0.0);
-      Translation : Translation_Vector := (others => 0.0);
+      Rotation    : Rotation_Vector := [others => 0.0];
+      Translation : Translation_Vector := [others => 0.0];
    end record;
 
    type RANSAC_Options is record
@@ -75,7 +75,7 @@ private
    type Pose_Estimate is new Ada.Finalization.Limited_Controlled with record
       Has_Pose : Boolean := False;
       Value    : World_To_Camera_Pose :=
-        (Rotation => (others => 0.0), Translation => (others => 0.0));
+        (Rotation => [others => 0.0], Translation => [others => 0.0]);
       Data     : Inlier_Buffer := null;
    end record;
    overriding procedure Finalize (Self : in out Pose_Estimate);
