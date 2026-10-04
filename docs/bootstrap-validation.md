@@ -110,6 +110,10 @@ nonfinite pose, correctly rejected by the shim. Replaced that fixture with 20
 deterministic inconsistent correspondences and a 1e-6 pixel consensus threshold.
 No production validation or solver policy was weakened.
 
+Third run `37241198690`: macOS/5.0 passed all 12 AUnit tests, but the standalone
+raw-boundary driver lacked the Apple SDK sysroot (`cmath`/`limits` not found).
+It now passes the same xcrun-derived `-isysroot` as production GPR compilation.
+
 Expected PR jobs: repository-checks, Linux, macOS, linux-sanitizers.
 Windows is main-push-only. The manual pinned matrix targets OpenCV 4.1.0, 4.10.0
 and 5.0.0. At the local qualification commit these remote gates are **pending**;
