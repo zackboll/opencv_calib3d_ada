@@ -13,6 +13,7 @@
 #endif
 
 #include <algorithm>
+#include <initializer_list>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -123,22 +124,30 @@ void validate_pose(const opencv_calib3d_pose *value) {
     require(value != nullptr && finite_pose(*value), "pose must contain six finite components");
 }
 
+cv::Mat double_matrix(int rows, int columns, std::initializer_list<double> values) {
+    require(values.size() == static_cast<std::size_t>(rows * columns),
+            "internal matrix initializer size differs");
+    cv::Mat result(rows, columns, CV_64FC1);
+    std::copy(values.begin(), values.end(), result.ptr<double>());
+    return result;
+}
+
 cv::Mat camera_matrix(const opencv_calib3d_camera_intrinsics &value) {
-    return (cv::Mat_<double>(3, 3) << value.focal_x, 0.0, value.center_x,
-                                     0.0, value.focal_y, value.center_y,
-                                     0.0, 0.0, 1.0);
+    return double_matrix(3, 3, {value.focal_x, 0.0, value.center_x,
+                               0.0, value.focal_y, value.center_y,
+                               0.0, 0.0, 1.0});
 }
 
 cv::Mat distortion_vector(const opencv_calib3d_distortion5 &value) {
-    return (cv::Mat_<double>(5, 1) << value.k1, value.k2, value.p1, value.p2, value.k3);
+    return double_matrix(5, 1, {value.k1, value.k2, value.p1, value.p2, value.k3});
 }
 
 cv::Mat rotation_vector(const opencv_calib3d_pose &value) {
-    return (cv::Mat_<double>(3, 1) << value.rx, value.ry, value.rz);
+    return double_matrix(3, 1, {value.rx, value.ry, value.rz});
 }
 
 cv::Mat translation_vector(const opencv_calib3d_pose &value) {
-    return (cv::Mat_<double>(3, 1) << value.tx, value.ty, value.tz);
+    return double_matrix(3, 1, {value.tx, value.ty, value.tz});
 }
 
 const cv::Mat &resolve_input(const opencv_core_mat_handle *handle) {

@@ -97,6 +97,13 @@ Public API and version unchanged. Source review and hashes cover official peeled
 
 ## Remote qualification gates
 
+First PR run `37240632034` demonstrated an additional native defect on macOS
+with Homebrew OpenCV 5.0.0: deprecated `cv::Mat_` comma initialization failed
+`-Werror`. Replaced it with explicit allocated Float64 matrix filling, common to
+4/5, without suppressing deprecation warnings. The standalone raw driver treats
+upstream include paths as system headers, while retaining warnings-as-errors for
+the actual shim and harness (including Apple OpenCV's C11 header extensions).
+
 Expected PR jobs: repository-checks, Linux, macOS, linux-sanitizers.
 Windows is main-push-only. The manual pinned matrix targets OpenCV 4.1.0, 4.10.0
 and 5.0.0. At the local qualification commit these remote gates are **pending**;

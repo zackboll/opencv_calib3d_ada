@@ -26,6 +26,8 @@ case "${1:-sanitizers}" in
     *) echo 'error: expected native or sanitizers' >&2; exit 1 ;;
 esac
 core_shim="$core/lib/libopencv_core_shim.a"
+# Treat upstream headers as system headers, retaining -Werror for our sources.
+opencv_cflags=$(pkg-config --cflags "$package" | sed 's/-I/-isystem /g')
 compiler=${CXX:-g++}
 if [ "$platform" = Darwin ]; then
     compiler=$(xcrun --find clang++)
@@ -37,7 +39,7 @@ for variant in production fault-injection; do
     define=
     [ "$variant" != fault-injection ] || define=-DOPENCV_CALIB3D_TEST_HOOKS
     "$compiler" -std=c++17 -Wall -Wextra -Wpedantic -Werror \
-        $flags $define -Icpp "-I$core/cpp" $(pkg-config --cflags "$package") \
+        $flags $define -Icpp "-I$core/cpp" $opencv_cflags \
         cpp/opencv_calib3d_shim.cpp tests/cpp/native_boundary.cpp \
         "$core_shim" $(pkg-config --libs "$package") \
         -o "obj/sanitizers/$variant$suffix"
