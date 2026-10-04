@@ -1,0 +1,27 @@
+{
+  "status": "bootstrap_targets_not_yet_hash_verified",
+  "opencv": [
+    {
+      "tag": "4.1.0",
+      "commit": "371bba8f54560b374fbcd47e7e02f015ac4969ad",
+      "backend": "calib3d",
+      "header": "modules/calib3d/include/opencv2/calib3d.hpp",
+      "implementation": "modules/calib3d/src/solvepnp.cpp"
+    },
+    {
+      "tag": "4.10.0",
+      "commit": "71d3237a093b60a27601c20e9ee6c3e52154e8b1",
+      "backend": "calib3d",
+      "header": "modules/calib3d/include/opencv2/calib3d.hpp",
+      "implementation": "modules/calib3d/src/solvepnp.cpp"
+    },
+    {
+      "tag": "5.0.0",
+      "commit": "40738fb16ceddb5fb3fea747585f7ce6abb0605b",
+      "backend": "geometry",
+      "header": "modules/geometry/include/opencv2/geometry/3d.hpp",
+      "implementation": "modules/geometry/src/solvepnp.cpp"
+    }
+  ],
+  "core_pin": "4da9d35ea21e1b2efe96296243ea668b488c6326"
+}

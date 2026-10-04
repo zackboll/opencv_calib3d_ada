@@ -1,0 +1,100 @@
+name: Cross-platform Calib3D
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  repository-checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Repository and configuration tests
+        run: |
+          python3 scripts/check_repository.py
+          python3 -m unittest discover -s tests/configuration -v
+          sh scripts/run_profile_tests.sh
+          for script in scripts/*.sh; do sh -n "$script"; done
+          git diff --check
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ pkg-config libopencv-dev
+      - uses: alire-project/setup-alire@latest
+        with:
+          version: "2.1.1"
+          toolchain: "gnat_native gprbuild"
+      - name: Select Ada toolchain
+        run: alr -n --force toolchain --select gnat_native=16.1.0 gprbuild=26.0.1
+      - name: Record versions
+        run: |
+          for package in opencv5 opencv4 opencv; do
+            if pkg-config --exists "$package"; then pkg-config --modversion "$package"; break; fi
+          done
+          g++ --version
+          alr toolchain
+      - name: Build and run native tests
+        run: sh scripts/test.sh
+      - name: Build and run synthetic pose example
+        run: |
+          alr -n -C examples build
+          alr -n -C examples exec -- sh ../scripts/run_native.sh bin/pnp_synthetic
+  linux-sanitizers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ pkg-config libopencv-dev
+      - uses: alire-project/setup-alire@latest
+        with:
+          version: "2.1.1"
+          toolchain: "gnat_native gprbuild"
+      - name: Select Ada toolchain
+        run: alr -n --force toolchain --select gnat_native=16.1.0 gprbuild=26.0.1
+      - name: Instrument actual Calib3D shim
+        run: |
+          alr -n build
+          alr -n exec -- g++ --version
+          alr -n exec -- sh scripts/run_sanitizers.sh
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native dependencies
+        run: brew install opencv pkg-config
+      - uses: alire-project/setup-alire@latest
+        with:
+          version: "2.1.1"
+          toolchain: "gnat_native gprbuild"
+      - name: Select Ada toolchain
+        run: alr -n --force toolchain --select gnat_native=16.1.0 gprbuild=26.0.1
+      - name: Record versions
+        run: |
+          for package in opencv5 opencv4 opencv; do
+            if pkg-config --exists "$package"; then pkg-config --modversion "$package"; break; fi
+          done
+          xcrun clang++ --version
+          alr toolchain
+      - name: Build and run native tests
+        run: sh scripts/test.sh
+      - name: Verify C++ runtime boundary
+        run: |
+          set -eu
+          dylib=$(find lib -name '*opencv_calib3d_shim*.dylib' -print -quit)
+          test -n "$dylib"
+          otool -L "$dylib" | tee /tmp/calib3d-linkage.txt
+          grep -E 'libopencv_(calib3d|geometry)\.' /tmp/calib3d-linkage.txt
+          grep -E 'libopencv_core_shim' /tmp/calib3d-linkage.txt
+          grep -E 'libc\+\+' /tmp/calib3d-linkage.txt
+          if grep -E 'libstdc\+\+' /tmp/calib3d-linkage.txt; then exit 1; fi
