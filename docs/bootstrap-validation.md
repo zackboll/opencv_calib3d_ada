@@ -104,6 +104,12 @@ with Homebrew OpenCV 5.0.0: deprecated `cv::Mat_` comma initialization failed
 upstream include paths as system headers, while retaining warnings-as-errors for
 the actual shim and harness (including Apple OpenCV's C11 header extensions).
 
+Second run `37240869907` built on macOS/5.0 but proved the initial collinear
+four-point no-pose fixture nonportable: native P3P reported success with a
+nonfinite pose, correctly rejected by the shim. Replaced that fixture with 20
+deterministic inconsistent correspondences and a 1e-6 pixel consensus threshold.
+No production validation or solver policy was weakened.
+
 Expected PR jobs: repository-checks, Linux, macOS, linux-sanitizers.
 Windows is main-push-only. The manual pinned matrix targets OpenCV 4.1.0, 4.10.0
 and 5.0.0. At the local qualification commit these remote gates are **pending**;

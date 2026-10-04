@@ -229,15 +229,20 @@ package body Calib3D_Tests is
 
    procedure PnP_Not_Found (T : in out Fixture) is
       pragma Unreferenced (T);
-      --  Collinear object points and identical image points cannot supply a
-      --  valid P3P solution in the exactly-four-point native path.
-      Objects : constant Object_Point_Array :=
-        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [2.0, 0.0, 0.0], [3.0, 0.0, 0.0]];
-      Images : constant Image_Point_Array := [1 .. 4 => [320.0, 240.0]];
+      function Inconsistent_Images return Image_Point_Array is
+         Result : Image_Point_Array (World'Range);
+      begin
+         for I in Result'Range loop
+            Result (I) := [OpenCV.Float64_Value ((I * 7919) mod 997),
+                           OpenCV.Float64_Value ((I * 104729) mod 991)];
+         end loop;
+         return Result;
+      end Inconsistent_Images;
+      --  More than five points reaches consensus rather than direct P3P/EPNP.
       Estimate : constant Pose_Estimate := Solve_PnP_RANSAC
-        (Objects, Images, K, Options => (100, 1.0, 0.99));
+        (World, Inconsistent_Images, K, Options => (100, 1.0E-6, 0.99));
    begin
-      Assert (not Found (Estimate), "degenerate fixture unexpectedly found a pose");
+      Assert (not Found (Estimate), "inconsistent fixture unexpectedly found a pose");
       Assert (Inlier_Count (Estimate) = 0 and then Inliers (Estimate)'Length = 0
               and then Inliers (Estimate)'First = 1 and then Inliers (Estimate)'Last = 0,
               "not-found estimate exposes inliers");

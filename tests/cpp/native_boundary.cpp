@@ -184,15 +184,13 @@ void run() {
     fail(opencv_calib3d_solve_pnp_ransac(world.get(),image.get(),&k,&d,100,1.0,0.99,&sentinel));
     output(world.get()).at<cv::Vec3d>(0,0) = saved;
 
-    auto degenerate_world = matrix(4,1,OPENCV_CORE_DEPTH_FLOAT64,3);
-    auto degenerate_image = matrix(4,1,OPENCV_CORE_DEPTH_FLOAT64,2);
-    for (int i=0;i<4;++i) {
-        output(degenerate_world.get()).at<cv::Vec3d>(i,0) = cv::Vec3d(i,0,0);
-        output(degenerate_image.get()).at<cv::Vec2d>(i,0) = cv::Vec2d(320,240);
-    }
+    auto inconsistent_image = matrix(N,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    for (int i=0;i<N;++i)
+        output(inconsistent_image.get()).at<cv::Vec2d>(i,0) =
+            cv::Vec2d(((i+1)*7919)%997,((i+1)*104729)%991);
     opencv_calib3d_pose_result_handle *absent = nullptr;
-    check(opencv_calib3d_solve_pnp_ransac(degenerate_world.get(),degenerate_image.get(),
-          &k,&d,100,1.0,0.99,&absent) == 0 && absent, "native false became ABI error");
+    check(opencv_calib3d_solve_pnp_ransac(world.get(),inconsistent_image.get(),
+          &k,&d,100,1e-6,0.99,&absent) == 0 && absent, "native false became ABI error");
     Result no_pose(absent,opencv_calib3d_pose_result_destroy);
     found=9; count=99; pose={9,9,9,9,9,9};
     check(opencv_calib3d_pose_result_found(absent,&found) == 0 && found == 0 &&
