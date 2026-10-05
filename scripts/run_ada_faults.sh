@@ -18,16 +18,26 @@ if [ "$(uname -s)" = Darwin ]; then
 fi
 mkdir -p "$root/obj/ada-faults"
 object="$root/obj/ada-faults/shim.o"
+fault_link="$object"
 opencv_cflags=$(pkg-config --cflags "$package" | sed 's/-I/-isystem /g')
 "$compiler" "$@" -c -std=c++17 -Wall -Wextra -Wpedantic -Werror \
     -DOPENCV_CALIB3D_TEST_HOOKS -I"$root/cpp" -I"$core/cpp" $opencv_cflags \
     "$root/cpp/opencv_calib3d_shim.cpp" -o "$object"
+if [ "$(uname -s)" = Darwin ]; then
+    # Keep Apple C++ exceptions inside a libc++-linked Mach-O image. Linking the
+    # object directly into the GNAT executable lets its GNU libstdc++ personality
+    # interpose on libc++abi and prevents even our guarded catch from working.
+    fault_link="$root/obj/ada-faults/libopencv_calib3d_fault.dylib"
+    "$compiler" "$@" -dynamiclib "$object" "$core/lib/libopencv_core_shim.dylib" \
+        $(pkg-config --libs "$package") -lc++ \
+        -Wl,-install_name,"$fault_link" -o "$fault_link"
+fi
 cd "$root/tests"
-gprbuild -p -P refinement_faults.gpr -XOPENCV_CALIB3D_FAULT_OBJECT="$object" \
+gprbuild -p -P refinement_faults.gpr -XOPENCV_CALIB3D_FAULT_OBJECT="$fault_link" \
     -o "$root/tests/bin/run_refinement_faults" -largs \
     $(pkg-config --libs "$package") "$runtime"
 if [ "$(uname -s)" = Darwin ]; then
-    # The fault object resolves our calls first, but the production project still
+    # The fault artifact resolves our calls first, but the production project still
     # links its relocatable shim. Supply both runtime directories for this test
     # launch only; preserve any caller-provided search path and fail normally.
     # GPR's relative Ada runtime rpaths also differ for this helper output. Use

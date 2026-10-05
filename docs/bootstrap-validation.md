@@ -279,6 +279,23 @@ to absolute paths. This retains all production and fault linkage; it does not
 rewrite install names or suppress errors. The compatibility matrix remains
 undispatched until ordinary CI is completely green.
 
+Run `37253125008` on `b2a2d29592fefa35e87ccc1338d7c75677f59c0e` fixed the
+Darwin dylib lookup (no further dyld missing-library error). macOS again passed
+19/19 AUnit, zero assertions/errors and raw production/fault ABI. The Ada helper
+then terminated with `libc++abi: terminating due to uncaught exception of type
+std::invalid_argument` during injection. Directly placing the Apple-Clang C++
+object in GNAT's GNU-libstdc++-linked executable mixes exception personalities;
+the raw fault executable, linked by Apple Clang, passes the same barrier tests.
+
+The next test-only correction retains Linux's fault-object-first link behavior.
+On Darwin, the same instrumentable actual fault shim object is wrapped in a
+libc++-linked test dylib and that artifact resolves before the unchanged
+production Calib3D library. Its own Mach-O image keeps native exception catches
+bound to the Apple C++ runtime. This is not a production linkage/library-mode
+change, does not remove production-project linkage, and does not rewrite any
+existing install names. Runtime directories remain local to the helper launch.
+All injections remain enabled; the matrix is still undispatched.
+
 Ordinary repository-checks/Linux/macOS/linux-sanitizers and the single stable-head
 manual 4.1/4.10/5.0 compatibility matrix are **pending** at this local record.
 Exact final run IDs/results belong in the PR review evidence. Never infer remote

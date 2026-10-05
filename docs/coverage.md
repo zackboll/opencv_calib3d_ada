@@ -60,8 +60,9 @@ Production excludes every `opencv_calib3d_test_*` control.
 
 `run_refinement_faults` is a separate Ada boundary helper (not an AUnit
 registration). It checks exact finite Ada pose equality on false and all fifteen
-injected exception paths. The fault object is linked ahead of production archives
-using a test-only GPR project; production libraries are never replaced. This
+injected exception paths. The fault artifact is linked ahead of production
+libraries using a test-only GPR project: object on Linux, libc++-isolated test
+dylib on Darwin. Production libraries are never replaced. This
 helper runs serially in Linux/macOS ordinary tests and all pinned matrix targets.
 Raw production/fault driver variants run both uninstrumented and with Linux
 ASan+UBSan, leak detection enabled, no suppressions, actual shim instrumented.

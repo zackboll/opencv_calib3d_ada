@@ -42,6 +42,7 @@ proof of globally correct localization. The synthetic example refines local
 RANSAC inlier arrays; there is no public selection helper or Features dependency.
 
 The test-only false control and exception controls are excluded from production.
-A separate Ada executable links the actual fault-enabled shim object without
-replacing production libraries, checking false and all 15 refinement stage/kind
+A separate Ada executable links the actual fault-enabled shim artifact (object
+on Linux, Apple libc++-isolated test dylib on Darwin) without replacing production
+libraries, checking false and all 15 refinement stage/kind
 exception combinations through the public wrapper.
