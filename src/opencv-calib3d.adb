@@ -1,4 +1,5 @@
 with Ada.Unchecked_Deallocation;
+with Ada.Numerics.Generic_Elementary_Functions;
 with Interfaces;
 with Interfaces.C;
 with OpenCV.Core;
@@ -13,6 +14,8 @@ package body OpenCV.Calib3D is
    package Bridge renames OpenCV.Core.Module_Interop;
    package Vec2_Access renames OpenCV.Core.Float64_Vec2_Access;
    package Vec3_Access renames OpenCV.Core.Float64_Vec3_Access;
+   package Math is new Ada.Numerics.Generic_Elementary_Functions
+     (OpenCV.Float64_Value);
    use type OpenCV.Float64_Value;
    use type OpenCV.Core.Depth_Type;
    use type OpenCV.Core.Channel_Count;
@@ -263,6 +266,143 @@ package body OpenCV.Calib3D is
          end loop;
       end return;
    end Project_Points;
+
+   function Reprojection_Errors
+     (Object_Points : Object_Point_Array;
+      Image_Points  : Image_Point_Array;
+      Intrinsics    : Camera_Intrinsics;
+      Distortion    : Distortion_Coefficients;
+      Pose          : World_To_Camera_Pose) return Reprojection_Error_Array
+   is
+   begin
+      if Object_Points'Length /= Image_Points'Length then
+         raise OpenCV.OpenCV_Error with "Object/image correspondence counts differ";
+      end if;
+      Validate (Image_Points);
+      declare
+         Projected : constant Image_Point_Array :=
+           Project_Points (Object_Points, Intrinsics, Distortion, Pose);
+      begin
+         return Errors : Reprojection_Error_Array (1 .. Object_Points'Length) do
+            for I in Errors'Range loop
+               declare
+                  DX : constant OpenCV.Float64_Value :=
+                    Projected (I) (0) - Image_Points (Image_Points'First + (I - 1)) (0);
+                  DY : constant OpenCV.Float64_Value :=
+                    Projected (I) (1) - Image_Points (Image_Points'First + (I - 1)) (1);
+                  Scale : OpenCV.Float64_Value;
+               begin
+                  if not (Is_Finite (DX) and then Is_Finite (DY)) then
+                     raise OpenCV.OpenCV_Error with "Nonfinite reprojection subtraction";
+                  end if;
+                  Scale := OpenCV.Float64_Value'Max (abs DX, abs DY);
+                  Errors (I) :=
+                    (if Scale = 0.0 then 0.0 else
+                     Scale * Math.Sqrt ((DX / Scale) ** 2 + (DY / Scale) ** 2));
+                  if not Is_Finite (Errors (I)) then
+                     raise OpenCV.OpenCV_Error with "Nonfinite reprojection error";
+                  end if;
+               end;
+            end loop;
+         end return;
+      end;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Reprojection error exceeds Float64 range";
+   end Reprojection_Errors;
+
+   function Summarize_Reprojection
+     (Errors : Reprojection_Error_Array) return Reprojection_Summary
+   is
+      Scale : OpenCV.Float64_Value := 0.0;
+      SSQ   : OpenCV.Float64_Value := 1.0;
+      Result : Reprojection_Summary := (Count => Errors'Length, others => <>);
+   begin
+      for Error of Errors loop
+         if not Is_Finite (Error) or else Error < 0.0 then
+            raise OpenCV.OpenCV_Error with "Pixel errors must be finite and nonnegative";
+         end if;
+         if Error > 0.0 then
+            if Scale < Error then
+               SSQ := 1.0 + SSQ * (Scale / Error) ** 2;
+               Scale := Error;
+            else
+               SSQ := SSQ + (Error / Scale) ** 2;
+            end if;
+         end if;
+      end loop;
+      Result.Maximum_Error_Pixels := Scale;
+      if Errors'Length > 0 then
+         --  Divide before multiplying by Scale. RMS cannot exceed the maximum;
+         --  clamp rounding of SSQ/Count to one at the Float64 range boundary.
+         Result.RMS_Error_Pixels := Scale * Math.Sqrt
+           (OpenCV.Float64_Value'Min (1.0, SSQ / OpenCV.Float64_Value (Errors'Length)));
+      end if;
+      if not Is_Finite (Result.RMS_Error_Pixels) then
+         raise OpenCV.OpenCV_Error with "Nonfinite reprojection RMS";
+      end if;
+      return Result;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Reprojection summary exceeds Float64 range";
+   end Summarize_Reprojection;
+
+   procedure Refine_Pose_Iterative
+     (Object_Points : Object_Point_Array;
+      Image_Points  : Image_Point_Array;
+      Intrinsics    : Camera_Intrinsics;
+      Distortion    : Distortion_Coefficients := No_Distortion;
+      Pose          : in out World_To_Camera_Pose;
+      Refined       : out Boolean)
+   is
+      Native_Intrinsics : aliased C.C_Camera_Intrinsics;
+      Native_Distortion : aliased C.C_Distortion5;
+      Initial_Pose      : aliased C.C_Pose;
+      Native_Pose       : aliased C.C_Pose := (others => 0.0);
+      Native_Refined    : aliased Interfaces.Unsigned_8 := 0;
+      Objects, Images   : OpenCV.Core.Mat;
+      Code              : C.Status := C.Success;
+      procedure Object_Callback (Object_Handle : Bridge.Input_Mat_Handle) is
+         procedure Image_Callback (Image_Handle : Bridge.Input_Mat_Handle) is
+         begin
+            Code := C.Refine_Pose_Iterative
+              (Object_Handle, Image_Handle, Native_Intrinsics'Access,
+               Native_Distortion'Access, Initial_Pose'Access,
+               Native_Refined'Access, Native_Pose'Access);
+         end Image_Callback;
+      begin
+         Bridge.With_Input_Handle (Images, Image_Callback'Access);
+      end Object_Callback;
+   begin
+      Refined := False;
+      Validate (Intrinsics);
+      Validate (Distortion);
+      Validate (Pose);
+      Validate (Object_Points);
+      Validate (Image_Points);
+      if Object_Points'Length /= Image_Points'Length or else Object_Points'Length < 4 then
+         raise OpenCV.OpenCV_Error with "Iterative refinement requires equal counts >=4";
+      end if;
+      Objects := Object_Matrix (Object_Points);
+      Images := Image_Matrix (Image_Points);
+      Native_Intrinsics := To_C (Intrinsics);
+      Native_Distortion := To_C (Distortion);
+      Initial_Pose := To_C (Pose);
+      Bridge.With_Input_Handle (Objects, Object_Callback'Access);
+      C.Check (Code, "Calib3D.Refine_Pose_Iterative");
+      if Native_Refined = 0 then
+         return;
+      elsif Native_Refined /= 1 then
+         raise OpenCV.OpenCV_Error with "Invalid native refinement flag";
+      end if;
+      declare
+         Value : constant World_To_Camera_Pose := From_C (Native_Pose);
+      begin
+         Validate (Value);
+         Pose := Value;
+         Refined := True;
+      end;
+   end Refine_Pose_Iterative;
 
    function Solve_PnP_RANSAC
      (Object_Points : Object_Point_Array;

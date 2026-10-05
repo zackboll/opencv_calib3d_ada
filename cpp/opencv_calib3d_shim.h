@@ -68,6 +68,15 @@ OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_solve_pnp_ransac(
     double confidence,
     opencv_calib3d_pose_result_handle **result);
 
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_refine_pose_iterative(
+    const opencv_core_mat_handle *object_points,
+    const opencv_core_mat_handle *image_points,
+    const opencv_calib3d_camera_intrinsics *intrinsics,
+    const opencv_calib3d_distortion5 *distortion,
+    const opencv_calib3d_pose *initial_pose,
+    uint8_t *refined,
+    opencv_calib3d_pose *refined_pose);
+
 OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_pose_result_found(
     const opencv_calib3d_pose_result_handle *result, uint8_t *found);
 OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_pose_result_pose(

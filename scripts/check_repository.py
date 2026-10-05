@@ -54,7 +54,12 @@ def main() -> None:
 
     tests = (ROOT / "tests/src/calib3d_tests.adb").read_text()
     registrations = re.findall(r"Result\.Add_Test\s*\(Caller\.Create", tests)
-    check(len(registrations) == 12, "update documented AUnit inventory when changing tests")
+    check(len(registrations) == 19, "update documented AUnit inventory when changing tests")
+    check("opencv_calib3d_refine_pose_iterative" in declared,
+          "missing iterative refinement ABI")
+    check("true, cv::SOLVEPNP_ITERATIVE" in cpp, "refinement must use the initial guess")
+    check("solvePnPRefineLM(" not in cpp and "solvePnPRefineVVS(" not in cpp,
+          "refinement must retain the common solvePnP path")
 
     configure = (ROOT / "scripts/configure_opencv.sh").read_text()
     check("backend=calib3d" in configure and "backend=geometry" in configure,
@@ -63,7 +68,7 @@ def main() -> None:
           "backend headers are not checked")
 
     print(f"PASS: manifests, Core pin {commits[0][:12]}, {len(declared)} ABI declarations/imports, "
-          f"12 AUnit registrations, Core ownership, 4/5 backend split, CI topology")
+          f"{len(registrations)} AUnit registrations, Core ownership, 4/5 backend split, CI topology")
 
 
 if __name__ == "__main__":

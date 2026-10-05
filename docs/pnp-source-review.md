@@ -73,4 +73,51 @@ Rz(pi/2) projection `(-10,40)`, all-five distortion
 `(10.03350625,20.1220125)`, and Rz(pi/2) camera center `(-2,1,-3)`.
 These expected values are mathematical fixtures, not calls back into the binding.
 
-Pose refinement and other estimator policies remain outside this baseline.
+## Task 002: common iterative initial-guess path
+
+Task 002 re-fetched the official peeled tags and all twelve immutable files above:
+both SHA-256 and Git blob SHA-1 matched `source-provenance.json` exactly.
+
+The pinhole `solvePnP` declarations are header lines **764/966/1040** for
+4.1/4.10/5.0, with the common `useExtrinsicGuess` and `flags` parameters.
+They document three points with an iterative extrinsic guess, close to the true
+solution. The Ada contract deliberately requires **>=4**, not because native
+OpenCV cannot operate with three. There is no binding planarity heuristic.
+
+* **4.1:** solvepnp.cpp 83-196 checks matching contiguous Float32/Float64 point
+  vectors, permits >=4 or three with iterative/guess, and at 98-105 checks each
+  guess is scalar Float32/Float64, 3x1 or 1x3. At 162-170 the iterative branch
+  passes the supplied vectors to `cvFindExtrinsicCameraParams2` and sets true
+  after the optimizer returns. calibration.cpp 1043-1257 converts the guess into
+  six Float64 parameters at 1095-1102, skipping DLT/planar initialization. Its
+  iterative optimizer at 1221 uses `CvLevMarq`, projection residuals/Jacobians
+  with the supplied distortion, and copies the final parameters back.
+* **4.10:** solvepnp.cpp 120-137 calls its internal `solvePnPGeneric` dispatcher
+  and returns `solutions > 0`, copying the first solution to the supplied output
+  depth. This upstream internal call is not a public Ada binding. At 823-843 the
+  dispatcher validates counts and nonempty scalar Float32/Float64 3x1/1x3 guesses;
+  at 881-903 it forwards the provided guess to `cvFindExtrinsicCameraParams2` and
+  appends one solution. calibration.cpp 1152-1367 retains guess initialization
+  and the `CvLevMarq` projection-based iterative path (1331).
+* **5.0 geometry:** solvepnp.cpp 90-107 similarly returns `solutions > 0`.
+  Count/guess validation is 784-804 and the iterative branch 833-850 calls
+  `findExtrinsicCameraParams2`. geometry/src/calibration_base.cpp 1218-1428
+  initializes six Float64 parameters from the provided guess at 1259-1266;
+  its newer `LevMarq` implementation at 1390-1428 uses projection residuals and
+  Jacobians, then copies parameters back. Internal optimizer structure differs;
+  bit-identical refined vectors are not promised.
+
+The shim calls only `solvePnP(..., true, SOLVEPNP_ITERATIVE)` with local 3x1
+CV_64F vectors. It validates all six output components before publishing. False
+is status OK with cleared flag/pose, and Ada preserves its initial pose exactly.
+No portable native iterative false fixture is claimed: 4.1 sets true after its
+optimizer returns. A separate test-only false control overrides the result after
+a real solve; it is distinct from exception checkpoints and absent in production.
+
+`solvePnPRefineLM` is **absent from the reviewed 4.1 public header** (present in
+4.10 at 1087 and 5.0 at 1164). Task 002 therefore does not bind or market that
+API. It provides version-neutral **iterative refinement** instead.
+
+Diagnostics use the authoritative Float64 `Project_Points` path reviewed above;
+Euclidean residual norms and scaled RMS accumulation are entirely Ada, not an
+additional native diagnostic API. Other estimator policies remain deferred.

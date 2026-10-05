@@ -66,3 +66,47 @@ No-pose `Inliers` has bounds `1 .. 0` and count zero.
 At the raw ABI, scalar/result outputs are cleared before validation. Projection
 uses a temporary native matrix and publishes only after successful validation;
 failure leaves the borrowed caller output unchanged. No native handle is retained.
+
+## Reprojection diagnostics
+
+`Reprojection_Errors` requires equal object/image counts and finite coordinates,
+intrinsics, five distortion coefficients and pose. Empty/empty is valid (bounds
+`1 .. 0`). The one-based output follows correspondence order even when input
+arrays have different lower bounds. Each value is the **Euclidean pixel error**
+`hypot(projected.x-observed.x, projected.y-observed.y)`, not squared distance.
+Projection remains authoritative through `Project_Points`; Ada uses a scaled
+hypot-style norm, rejecting nonfinite subtraction or results with `OpenCV_Error`.
+
+`Summarize_Reprojection` accepts only finite, nonnegative errors. Empty errors
+return Count=0, RMS=0, maximum=0. Otherwise RMS is
+`sqrt(sum(error_i^2)/Count)` in **pixels**, computed by scaled sum-of-squares
+without squaring large unscaled errors. All public diagnostics are finite and
+nonnegative. They do not imply pose covariance or uncertainty; low reprojection
+error does not prove globally correct localization or navigation accuracy.
+
+## Iterative refinement
+
+`Refine_Pose_Iterative` supplies its in/out world-to-camera pose as the initial
+Rodrigues rvec/native tvec to `solvePnP(..., useExtrinsicGuess=true,
+flags=SOLVEPNP_ITERATIVE)`. It is **not `solvePnPRefineLM`**, which is absent from
+the reviewed OpenCV 4.1 public baseline. No selector, refinement LM/VVS API or
+RANSAC call is exposed through refinement.
+
+Equal correspondence counts **>=4** and finite object/image coordinates are
+required; intrinsics, distortion and initial pose reuse existing validation.
+This is a conservative binding contract, not a claim native iterative OpenCV
+cannot use three points with a guess. No planarity/nonplanarity heuristics apply.
+The initial estimate should be within the local convergence basin.
+
+Native inputs are copied into local Mats. Both C output pointers are required and
+cleared before validation. Native false returns status OK and no published pose;
+Ada sets Refined=False and leaves Pose exactly unchanged. On true, validated
+finite output is staged before assigning Pose and Refined=True. Any status error
+raises `OpenCV_Error` without partial Pose publication. Refined is initialized
+False before fallible wrapper work; Ada Boolean out parameters are by-copy, so
+copy-back on exceptional return is not guaranteed. Callers should initialize
+their flag False when observing it after a caught exception.
+
+For RANSAC composition, callers build local arrays from exactly the accepted
+`Inliers(Estimate)` correspondence pairs. Refinement is not itself robust outlier
+selection; do not include deliberately rejected outliers.

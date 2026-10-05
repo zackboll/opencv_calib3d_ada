@@ -6,5 +6,8 @@ alr -n build
 alr -n -C tests build
 alr -n -C tests exec -- sh ../scripts/run_native.sh bin/run_tests
 case "$(uname -s)" in
-    Linux|Darwin) alr -n exec -- sh scripts/run_sanitizers.sh native ;;
+    Linux|Darwin)
+        alr -n exec -- sh scripts/run_sanitizers.sh native
+        alr -n -C tests exec -- sh ../scripts/run_ada_faults.sh
+        ;;
 esac

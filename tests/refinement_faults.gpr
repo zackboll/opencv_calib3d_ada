@@ -1,0 +1,10 @@
+project Refinement_Faults extends "opencv_calib3d_tests.gpr" is
+   for Main use ("run_refinement_faults.adb");
+   for Object_Dir use "obj/refinement-faults";
+   package Linker is
+      --  Resolve the actual fault-enabled shim before the production archive.
+      --  Production builds never use this test-only project or object.
+      for Leading_Switches ("Ada") use
+        (external ("OPENCV_CALIB3D_FAULT_OBJECT"));
+   end Linker;
+end Refinement_Faults;

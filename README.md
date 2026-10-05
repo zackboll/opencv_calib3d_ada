@@ -11,6 +11,11 @@ builds, 12/12 AUnit cases, raw ABI, C/Ada layouts and both actual-shim ASan/UBSa
 variants pass. Cross-platform and pinned-matrix evidence is recorded separately
 in [`docs/bootstrap-validation.md`](docs/bootstrap-validation.md) and the PR.
 
+Task 002 adds iterative initial-guess refinement and Ada reprojection diagnostics.
+Local OpenCV **4.10.0 / calib3d** qualification passes **19/19 AUnit**, raw ABI,
+public false/exception atomicity, production/fault ASan+UBSan, and the extended
+example. Remote review gates are tracked separately; no new release is claimed.
+
 ## Native backend split
 
 The Ada API is intentionally stable while OpenCV moved the native implementation:
@@ -36,6 +41,16 @@ The bootstrap exposes:
 - fixed-flag `Solve_PnP_RANSAC` using `SOLVEPNP_EPNP`;
 - owned, one-based RANSAC inlier indices;
 - explicit success/no-pose result state.
+- `Reprojection_Errors` and `Summarize_Reprojection`: Euclidean errors, RMS and
+  maximum in pixels, with robust scaled arithmetic and valid empty summaries;
+- `Refine_Pose_Iterative`: `solvePnP` with a supplied extrinsic guess and fixed
+  `SOLVEPNP_ITERATIVE`, common to OpenCV 4.1/4.10/5.0, **not `solvePnPRefineLM`**.
+
+Refinement requires equal counts >=4, a finite initial pose and finite validated
+points/camera/distortion. Four is a conservative Ada contract; native OpenCV also
+permits three with a guess. Native false keeps the initial pose exactly unchanged;
+errors never publish partial pose data. Diagnostics do not imply pose uncertainty
+or covariance; low pixel error does not prove globally correct localization.
 
 The frame convention is part of the API contract:
 
@@ -93,7 +108,8 @@ public API.
 
 `examples/src/pnp_synthetic.adb` creates a noncoplanar 3-D point set, projects it
 from a known pose, corrupts three 2-D correspondences with large synthetic
-outliers, runs RANSAC PnP and prints pose/inlier/camera-center data. It has no
+outliers, runs RANSAC PnP, builds local accepted-correspondence arrays, refines
+iteratively and prints before/after RMS/max, pose and camera-center data. It has no
 image files, GUI, camera, Features, DTED or geospatial dependency.
 
 Synthetic thresholds and errors are demonstration fixtures, not navigation
@@ -110,7 +126,7 @@ The presence of those workflows alone is not evidence that they passed.
 
 This first slice does not bind camera calibration, chessboards, stereo,
 homography, essential/fundamental matrices, triangulation, USAC configuration,
-PnP refinement, P3P/AP3P/IPPE/SQPNP selection, fisheye, undistortion, DTED,
+`solvePnPRefineLM`/VVS, P3P/AP3P/IPPE/SQPNP selection, fisheye, undistortion, DTED,
 Features, optical flow, or estimator/fusion policy.
 
 The caller defines the world frame. A later navigation layer may use a local

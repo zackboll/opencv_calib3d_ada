@@ -1,4 +1,5 @@
 with Ada.Numerics;
+with Ada.Numerics.Generic_Elementary_Functions;
 with Ada.Text_IO;
 with AUnit.Assertions;
 with AUnit.Test_Caller;
@@ -17,6 +18,10 @@ package body Calib3D_Tests is
    use type Interfaces.C.double;
 
    package ABI renames OpenCV.Calib3D.Internal.C_API;
+   package Math is new Ada.Numerics.Generic_Elementary_Functions
+     (OpenCV.Float64_Value);
+   function Nonfinite (Kind : Interfaces.Integer_32) return Interfaces.C.double
+     with Import, Convention => C, External_Name => "calib3d_test_nonfinite";
 
    type Fixture is new AUnit.Test_Fixtures.Test_Fixture with null record;
 
@@ -372,6 +377,274 @@ package body Calib3D_Tests is
               "C-written pose interchange");
    end ABI_Layout;
 
+   procedure Diagnostic_Oracle (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Objects : constant Object_Point_Array (4 .. 6) :=
+        [others => [0 => 1.0, 1 => 2.0, 2 => 10.0]];
+      Pixels : constant Image_Point_Array (7 .. 9) :=
+        [[0 => 17.0, 1 => 56.0], [0 => 20.0, 1 => 60.0], [0 => 25.0, 1 => 72.0]];
+      Errors : constant Reprojection_Error_Array := Reprojection_Errors
+        (Objects, Pixels, (100.0, 200.0, 10.0, 20.0), No_Distortion, (others => <>));
+      Summary : constant Reprojection_Summary := Summarize_Reprojection (Errors);
+   begin
+      Assert (Errors'First = 1 and then Errors'Last = 3, "diagnostic result bounds");
+      Assert (Near (Errors (1), 5.0, 1.0E-13) and then Errors (2) = 0.0
+              and then Near (Errors (3), 13.0, 1.0E-13), "independent pixel offsets");
+      Assert (Summary.Count = 3 and then Near (Summary.Maximum_Error_Pixels, 13.0, 1.0E-13)
+              and then Near (Summary.RMS_Error_Pixels, Math.Sqrt (194.0 / 3.0), 1.0E-13),
+              "pixel RMS/maximum oracle");
+      Ada.Text_IO.Put_Line ("diagnostic oracle: errors=5,0,13 RMS=" &
+        OpenCV.Float64_Value'Image (Summary.RMS_Error_Pixels) & " max=13");
+   end Diagnostic_Oracle;
+
+   procedure Diagnostic_Empty_And_Counts (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Errors : constant Reprojection_Error_Array := Reprojection_Errors
+        ([1 .. 0 => <>], [1 .. 0 => <>], K, No_Distortion, Known_Pose);
+      Summary : constant Reprojection_Summary := Summarize_Reprojection (Errors);
+   begin
+      Assert (Errors'First = 1 and then Errors'Last = 0 and then Summary.Count = 0
+              and then Summary.RMS_Error_Pixels = 0.0
+              and then Summary.Maximum_Error_Pixels = 0.0, "empty diagnostic contract");
+      begin
+         declare
+            Bad : constant Reprojection_Error_Array := Reprojection_Errors
+              (World, [1 .. 0 => <>], K, No_Distortion, Known_Pose);
+            pragma Unreferenced (Bad);
+         begin
+            Assert (False, "diagnostic count mismatch accepted");
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+   end Diagnostic_Empty_And_Counts;
+
+   procedure Diagnostic_Range (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Deliberately construct IEEE NaN/infinity from C to exercise binding
+      --  validation, rather than GNAT rejecting the test fixture on assignment.
+      pragma Suppress (Validity_Check);
+      Objects : constant Object_Point_Array := [[0 => 0.0, 1 => 0.0, 2 => 1.0]];
+      Errors : constant Reprojection_Error_Array := Reprojection_Errors
+        (Objects, [[0 => 3.0E200, 1 => 4.0E200]], (1.0, 1.0, 0.0, 0.0),
+         No_Distortion, (others => <>));
+      Large : constant Reprojection_Summary := Summarize_Reprojection
+        ([3 => OpenCV.Float64_Value'Last, 4 => OpenCV.Float64_Value'Last]);
+      Tiny : constant Reprojection_Summary := Summarize_Reprojection ([1.0E-200, 1.0E-200]);
+   begin
+      Assert (abs (Errors (1) / 5.0E200 - 1.0) < 1.0E-14, "scaled hypot overflow");
+      Assert (Large.RMS_Error_Pixels = OpenCV.Float64_Value'Last
+              and then Large.Maximum_Error_Pixels = OpenCV.Float64_Value'Last,
+              "scaled RMS overflow at Float64 last");
+      Assert (abs (Tiny.RMS_Error_Pixels / 1.0E-200 - 1.0) < 1.0E-14,
+              "scaled RMS underflow");
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         begin
+            declare
+               Bad : constant Reprojection_Summary := Summarize_Reprojection
+                 ([OpenCV.Float64_Value (Nonfinite (Kind))]);
+               pragma Unreferenced (Bad);
+            begin
+               Assert (False, "nonfinite error accepted");
+            end;
+         exception
+            when OpenCV.OpenCV_Error => null;
+         end;
+      end loop;
+      begin
+         declare
+            Bad : constant Reprojection_Summary := Summarize_Reprojection ([-1.0]);
+            pragma Unreferenced (Bad);
+         begin
+            Assert (False, "negative error accepted");
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+      begin
+         declare
+            Bad : constant Reprojection_Error_Array := Reprojection_Errors
+              (Objects, [[0 => -OpenCV.Float64_Value'Last, 1 => 0.0]],
+               (1.0, 1.0, OpenCV.Float64_Value'Last, 0.0), No_Distortion, (others => <>));
+            pragma Unreferenced (Bad);
+         begin
+            Assert (False, "nonfinite subtraction accepted");
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+   end Diagnostic_Range;
+
+   Perturbed : constant World_To_Camera_Pose :=
+     (Rotation => [0.16, -0.09, 0.12], Translation => [0.45, -0.30, 6.40]);
+   Distorted : constant Distortion_Coefficients := (0.10, -0.04, 0.003, -0.002, 0.01);
+
+   function Center_Error (P : World_To_Camera_Pose) return OpenCV.Float64_Value is
+      C1 : constant Object_Point := Camera_Center (P);
+      C2 : constant Object_Point := Camera_Center (Known_Pose);
+   begin
+      return Math.Sqrt ((C1 (0) - C2 (0)) ** 2 + (C1 (1) - C2 (1)) ** 2 +
+                        (C1 (2) - C2 (2)) ** 2);
+   end Center_Error;
+
+   procedure Report_Refinement
+     (Name : String; Before, After : Reprojection_Summary;
+      Center_Before, Center_After : OpenCV.Float64_Value) is
+   begin
+      Ada.Text_IO.Put_Line (Name & " before RMS/max=" &
+        OpenCV.Float64_Value'Image (Before.RMS_Error_Pixels) & "/" &
+        OpenCV.Float64_Value'Image (Before.Maximum_Error_Pixels) & " after RMS/max=" &
+        OpenCV.Float64_Value'Image (After.RMS_Error_Pixels) & "/" &
+        OpenCV.Float64_Value'Image (After.Maximum_Error_Pixels) & " center before/after=" &
+        OpenCV.Float64_Value'Image (Center_Before) & "/" &
+        OpenCV.Float64_Value'Image (Center_After));
+   end Report_Refinement;
+
+   procedure Check_Refinement (D : Distortion_Coefficients; Name : String) is
+      Images : constant Image_Point_Array := Project_Points (World, K, D, Known_Pose);
+      P : World_To_Camera_Pose := Perturbed;
+      Before : constant Reprojection_Summary :=
+        Summarize_Reprojection (Reprojection_Errors (World, Images, K, D, P));
+      Center_Before : constant OpenCV.Float64_Value := Center_Error (P);
+      Refined : Boolean := False;
+   begin
+      Refine_Pose_Iterative (World, Images, K, D, P, Refined);
+      Assert (Refined, "iterative refinement returned false");
+      declare
+         After : constant Reprojection_Summary :=
+           Summarize_Reprojection (Reprojection_Errors (World, Images, K, D, P));
+      begin
+         Report_Refinement (Name, Before, After, Center_Before, Center_Error (P));
+         Assert (After.RMS_Error_Pixels < Before.RMS_Error_Pixels
+                 and then After.Maximum_Error_Pixels < Before.Maximum_Error_Pixels,
+                 "refinement did not improve reprojection");
+         Assert (Center_Error (P) < Center_Before, "refined camera center not closer to truth");
+         Assert (After.Maximum_Error_Pixels < 1.0E-7, "noiseless final pixel error");
+      end;
+   end Check_Refinement;
+
+   procedure Refinement_Exact (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Images : constant Image_Point_Array := Project_Points (World, K, No_Distortion, Known_Pose);
+      P : World_To_Camera_Pose := Perturbed;
+      Refined : Boolean;
+   begin
+      Check_Refinement (No_Distortion, "exact iterative");
+      Refine_Pose_Iterative (World (1 .. 4), Images (1 .. 4), K, Pose => P, Refined => Refined);
+      Assert (Refined and then Summarize_Reprojection
+        (Reprojection_Errors (World (1 .. 4), Images (1 .. 4), K, No_Distortion, P)).
+          Maximum_Error_Pixels < 1.0E-7, "conservative four-point refinement contract");
+   end Refinement_Exact;
+
+   procedure Refinement_Distorted (T : in out Fixture) is
+      pragma Unreferenced (T);
+   begin
+      Check_Refinement (Distorted, "distorted iterative");
+   end Refinement_Distorted;
+
+   procedure Refinement_Inliers (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Images : Image_Point_Array := Project_Points (World, K, No_Distortion, Known_Pose);
+   begin
+      for I in Images'Range loop
+         if I = 2 or else I = 7 or else I = 15 then
+            Images (I) (0) := Images (I) (0) + 5_000.0;
+            Images (I) (1) := Images (I) (1) - 4_000.0;
+         end if;
+      end loop;
+      declare
+         Estimate : constant Pose_Estimate := Solve_PnP_RANSAC
+           (World, Images, K, Options => (1_000, 2.0, 0.999));
+      begin
+         Assert (Found (Estimate), "RANSAC to refinement: no pose");
+         declare
+            Accepted : constant Inlier_Index_Array := Inliers (Estimate);
+            Objects : Object_Point_Array (1 .. Accepted'Length);
+            Pixels : Image_Point_Array (1 .. Accepted'Length);
+            P : World_To_Camera_Pose := Pose (Estimate);
+            Refined : Boolean;
+         begin
+            for I in Accepted'Range loop
+               Assert (Accepted (I) /= 2 and then Accepted (I) /= 7 and then Accepted (I) /= 15,
+                       "refinement subset contains gross outlier");
+               Objects (I) := World (Accepted (I));
+               Pixels (I) := Images (Accepted (I));
+            end loop;
+            declare
+               Before : constant Reprojection_Summary := Summarize_Reprojection
+                 (Reprojection_Errors (Objects, Pixels, K, No_Distortion, P));
+               Center_Before : constant OpenCV.Float64_Value := Center_Error (P);
+            begin
+               Refine_Pose_Iterative (Objects, Pixels, K, No_Distortion, P, Refined);
+               Assert (Refined, "RANSAC inlier refinement false");
+               declare
+                  After : constant Reprojection_Summary := Summarize_Reprojection
+                    (Reprojection_Errors (Objects, Pixels, K, No_Distortion, P));
+               begin
+                  Report_Refinement ("RANSAC inliers", Before, After, Center_Before, Center_Error (P));
+                  Assert (After.RMS_Error_Pixels <= Before.RMS_Error_Pixels + 1.0E-9,
+                          "inlier refinement materially worsened RMS");
+                  Assert (Center_Error (P) < 0.05, "refined inlier camera center differs");
+               end;
+            end;
+         end;
+      end;
+   end Refinement_Inliers;
+
+   procedure Refinement_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Only this negative-test scope permits deliberate IEEE invalid values.
+      pragma Suppress (Validity_Check);
+      Images : constant Image_Point_Array := Project_Points (World, K, No_Distortion, Known_Pose);
+      procedure Expect_Error (Objects : Object_Point_Array; Pixels : Image_Point_Array;
+                              Intrinsics : Camera_Intrinsics := K;
+                              D : Distortion_Coefficients := No_Distortion;
+                              Initial : World_To_Camera_Pose := Perturbed) is
+         P : World_To_Camera_Pose := Initial;
+         Refined : Boolean := False;
+      begin
+         begin
+            Refine_Pose_Iterative (Objects, Pixels, Intrinsics, D, P, Refined);
+            Assert (False, "invalid refinement accepted");
+         exception
+            when OpenCV.OpenCV_Error => null;
+         end;
+         --  NaN is not value-equal to itself: verify it remains NaN and every
+         --  finite component remains equal. Finite fault tests use record equality.
+         if Initial.Rotation (0) = Initial.Rotation (0) then
+            Assert (P = Initial and then not Refined, "failed refinement changed caller pose");
+         else
+            Assert (P.Rotation (0) /= P.Rotation (0) and then
+                    P.Rotation (1) = Initial.Rotation (1) and then
+                    P.Rotation (2) = Initial.Rotation (2) and then
+                    P.Translation (0) = Initial.Translation (0) and then
+                    P.Translation (1) = Initial.Translation (1) and then
+                    P.Translation (2) = Initial.Translation (2) and then not Refined,
+                    "failed refinement changed nonfinite initial pose");
+         end if;
+      end Expect_Error;
+   begin
+      Expect_Error (World (1 .. 3), Images (1 .. 3));
+      Expect_Error (World, Images (1 .. 19));
+      Expect_Error (World, Images, (0.0, 820.0, 320.0, 240.0));
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         declare
+            Invalid : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Kind));
+            Objects : Object_Point_Array := World;
+            Pixels : Image_Point_Array := Images;
+            Initial : World_To_Camera_Pose := Perturbed;
+         begin
+            Objects (1) (0) := Invalid;
+            Pixels (1) (1) := Invalid;
+            Initial.Rotation (0) := Invalid;
+            Expect_Error (Objects, Images);
+            Expect_Error (World, Pixels);
+            Expect_Error (World, Images, D => (K3 => Invalid, others => 0.0));
+            Expect_Error (World, Images, Initial => Initial);
+         end;
+      end loop;
+   end Refinement_Invalid;
+
    package Caller is new AUnit.Test_Caller (Fixture);
 
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
@@ -389,6 +662,13 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("invalid camera intrinsics rejected", Invalid_Intrinsics'Access));
       Result.Add_Test (Caller.Create ("invalid PnP options and counts rejected", Invalid_Options_And_Counts'Access));
       Result.Add_Test (Caller.Create ("compiler-derived C/Ada ABI layouts", ABI_Layout'Access));
+       Result.Add_Test (Caller.Create ("independent 5/0/13 pixel diagnostic oracle", Diagnostic_Oracle'Access));
+       Result.Add_Test (Caller.Create ("empty diagnostics and count mismatch", Diagnostic_Empty_And_Counts'Access));
+       Result.Add_Test (Caller.Create ("scaled diagnostic range and validation", Diagnostic_Range'Access));
+       Result.Add_Test (Caller.Create ("noiseless iterative refinement", Refinement_Exact'Access));
+       Result.Add_Test (Caller.Create ("all-five distorted iterative refinement", Refinement_Distorted'Access));
+       Result.Add_Test (Caller.Create ("RANSAC inlier subset iterative refinement", Refinement_Inliers'Access));
+       Result.Add_Test (Caller.Create ("invalid refinement preserves initial pose", Refinement_Invalid'Access));
       return Result;
    end Suite;
 end Calib3D_Tests;

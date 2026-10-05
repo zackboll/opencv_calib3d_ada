@@ -101,5 +101,20 @@
       ]
     }
   ],
-  "core_pin": "4da9d35ea21e1b2efe96296243ea668b488c6326"
+  "core_pin": "4da9d35ea21e1b2efe96296243ea668b488c6326",
+  "task_002_review": {
+    "verification": "official peeled tags re-fetched; all 12 file SHA-256 and Git blob SHA-1 hashes reverified unchanged",
+    "native_call": "solvePnP(objectPoints,imagePoints,cameraMatrix,distCoeffs,rvec,tvec,true,SOLVEPNP_ITERATIVE)",
+    "ada_minimum_correspondences": 4,
+    "native_minimum_with_iterative_guess": 3,
+    "solvePnPRefineLM": "not bound: absent from reviewed OpenCV 4.1.0 public header",
+    "reviewed_paths": [
+      "solvePnP declarations and implementation; count and guess schema validation",
+      "SOLVEPNP_ITERATIVE branches and return-value behavior",
+      "cvFindExtrinsicCameraParams2 in 4.1/4.10 calibration.cpp",
+      "findExtrinsicCameraParams2 in 5.0 geometry/src/calibration_base.cpp",
+      "provided-guess parameter initialization, optimizer and projection residual paths",
+      "Float64 projectPoints output used by Ada diagnostics"
+    ]
+  }
 }

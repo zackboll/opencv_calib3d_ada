@@ -14,6 +14,14 @@ package OpenCV.Calib3D is
    type Image_Point_Array is array (Positive range <>) of Image_Point;
    type Object_Point_Array is array (Positive range <>) of Object_Point;
    type Inlier_Index_Array is array (Positive range <>) of Positive;
+   type Reprojection_Error_Array is
+     array (Positive range <>) of OpenCV.Float64_Value;
+
+   type Reprojection_Summary is record
+      Count                : Natural := 0;
+      RMS_Error_Pixels     : OpenCV.Float64_Value := 0.0;
+      Maximum_Error_Pixels : OpenCV.Float64_Value := 0.0;
+   end record;
 
    type Camera_Intrinsics is record
       Focal_X  : OpenCV.Float64_Value;
@@ -69,6 +77,33 @@ package OpenCV.Calib3D is
       Intrinsics    : Camera_Intrinsics;
       Distortion    : Distortion_Coefficients := No_Distortion;
       Options       : RANSAC_Options := (others => <>)) return Pose_Estimate;
+
+   --  Euclidean pixel errors, one-based in correspondence order. Equal counts
+   --  are required; empty/empty returns 1 .. 0. These diagnostics are not pose
+   --  uncertainty and do not establish globally correct localization.
+   function Reprojection_Errors
+     (Object_Points : Object_Point_Array;
+      Image_Points  : Image_Point_Array;
+      Intrinsics    : Camera_Intrinsics;
+      Distortion    : Distortion_Coefficients;
+      Pose          : World_To_Camera_Pose) return Reprojection_Error_Array;
+
+   --  Finite, nonnegative errors only. Empty input returns all-zero summary.
+   function Summarize_Reprojection
+     (Errors : Reprojection_Error_Array) return Reprojection_Summary;
+
+   --  solvePnP with SOLVEPNP_ITERATIVE and useExtrinsicGuess=true, NOT
+   --  solvePnPRefineLM. Pose is the initial world -> camera estimate.
+   --  Equal counts >=4 are a conservative binding contract: native OpenCV
+   --  also permits three points with an extrinsic guess. No planarity policy.
+   --  False leaves Pose exactly unchanged; errors never publish partial Pose.
+   procedure Refine_Pose_Iterative
+     (Object_Points : Object_Point_Array;
+      Image_Points  : Image_Point_Array;
+      Intrinsics    : Camera_Intrinsics;
+      Distortion    : Distortion_Coefficients := No_Distortion;
+      Pose          : in out World_To_Camera_Pose;
+      Refined       : out Boolean);
 
 private
    type Inlier_Buffer is access Inlier_Index_Array;
