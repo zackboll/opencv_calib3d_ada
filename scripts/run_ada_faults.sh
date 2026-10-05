@@ -26,4 +26,12 @@ cd "$root/tests"
 gprbuild -p -P refinement_faults.gpr -XOPENCV_CALIB3D_FAULT_OBJECT="$object" \
     -o "$root/tests/bin/run_refinement_faults" -largs \
     $(pkg-config --libs "$package") "$runtime"
-sh "$root/scripts/run_native.sh" "$root/tests/bin/run_refinement_faults"
+if [ "$(uname -s)" = Darwin ]; then
+    # The fault object resolves our calls first, but the production project still
+    # links its relocatable shim. Supply both runtime directories for this test
+    # launch only; preserve any caller-provided search path and fail normally.
+    DYLD_LIBRARY_PATH="$root/lib:$core/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
+        "$root/tests/bin/run_refinement_faults"
+else
+    sh "$root/scripts/run_native.sh" "$root/tests/bin/run_refinement_faults"
+fi

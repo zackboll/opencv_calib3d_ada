@@ -238,6 +238,35 @@ to **1e-5 pixels** in Ada/raw tests and this record. Improvement assertions,
 validation, warnings and production solver remain unchanged. No blind rerun;
 the expensive matrix was not yet dispatched.
 
+Second ordinary run `37251777347` on
+`c710ee20cf04a328bc9ff7fd0a5b2de85b14897f` passed repository-checks, Linux and
+linux-sanitizers. The supplied completed macOS evidence reports OpenCV 5.0.0 /
+geometry, **19 registered/executed/passed**, zero failed assertions/unexpected
+errors, diagnostics, all three refinement fixtures and raw production/fault ABI
+PASS. The fault shim compiled/linked, but launching `run_refinement_faults` failed
+because dyld could not locate `libopencv_calib3d_shim.dylib`. The test's production
+project dependency retains a dylib runtime dependency even though the fault object
+resolves its calls first; Linux's static production shim hides that issue.
+
+The narrow correction preserves production linkage and the fault-object-first
+link order. Only the Darwin fault-helper launch receives `DYLD_LIBRARY_PATH`
+with the repository `lib`, resolved Core `lib`, and any existing caller path.
+The executable is launched directly with that environment, avoiding an additional
+system-shell hop. No production API/library mode, install name, test inventory or
+CI topology changes; dyld errors still fail normally. This Linux host cannot
+execute Darwin dyld: local helper and full serial validation must pass, and the
+new ordinary macOS job supplies the actual runtime qualification.
+
+After this correction, direct local `alr -n -C tests exec -- sh
+../scripts/run_ada_faults.sh` PASS (false + 15 exceptions), followed by the full
+Task 002 serial command list PASS. Counts unchanged: 19 AUnit registered/executed/
+passed, zero failed assertions/unexpected errors, 16 Python tests, two standalone
+C/C++ helpers, seven shell syntax checks, raw production/fault and actual-shim
+ASan+UBSan production/fault PASS, example PASS. Metrics match the table above.
+An isolated shell-routing check of the Darwin branch also PASS with unset and
+preexisting `DYLD_LIBRARY_PATH` and paths containing spaces; this verifies
+environment construction, not native macOS dyld execution.
+
 Ordinary repository-checks/Linux/macOS/linux-sanitizers and the single stable-head
 manual 4.1/4.10/5.0 compatibility matrix are **pending** at this local record.
 Exact final run IDs/results belong in the PR review evidence. Never infer remote
