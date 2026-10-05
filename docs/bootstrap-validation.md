@@ -309,3 +309,109 @@ the caller flag False if inspecting it after catching an error. Sanitizers cover
 the actual Calib3D shim, not all linked Core/OpenCV. False injection is not a
 claimed portable real iterative false fixture, and allocation injection does not
 prove allocator exhaustion. No broader APIs, version bump, merge or release.
+
+## Task 003 starting gate and Task 002 Windows post-merge
+
+Starting clean fetched main: `2c4df3aa96cff395abb16b7a9f92a5b6201b8172`.
+Branch: `feature/003-camera-rays-frame-transforms`. No open PR at start.
+Version remains `0.1.0-dev`; all Core pins remain
+`4da9d35ea21e1b2efe96296243ea668b488c6326`.
+
+Task 002 Windows post-merge run
+[37254729905](https://github.com/zackboll/opencv_calib3d_ada/actions/runs/37254729905)
+finished **SUCCESS** on that main SHA (windows job 111589266157). Exact completed
+logs were retrieved. This is the first Task 002 19-test Windows baseline:
+
+* OpenCV **5.0.0**, package `opencv5`, backend **geometry**.
+* MSYS2 MinGW64 `mingw-w64-x86_64-gcc` **16.2.0-4**, configured driver
+  `C:/Users/runneradmin/AppData/Local/alire/cache/msys64/mingw64/bin/g++.exe`.
+* AUnit **19 registered/executed/passed**, **0 failed assertions / 0 unexpected
+  errors**. Logs explicitly execute diagnostic 5/0/13, empty/range diagnostics,
+  noiseless/all-five refinement, RANSAC subset composition and invalid atomicity.
+* External Calib3D DLL and import library existence checks passed:
+  `lib/libopencv_calib3d_shim.dll` and `lib/libopencv_calib3d_shim.dll.a`.
+  All configured pose/Core/Core-shim import-library paths were checked.
+* PE imports include **libopencv_geometry-500.dll** and
+  **libopencv_core_shim.dll**. MSYS2 compiler-route assertion passed.
+
+No Windows correction was needed. Windows remains push-to-main only; no Task 003
+Windows qualification is claimed before merge, and no Windows PR job was added.
+
+## Task 003 local qualification
+
+Local OpenCV **4.10.0 / calib3d**, Alire 2.1.1, selected GNAT 16.1.0 /
+GPRbuild 26.0.1. Entire requested command list ran **serially and passed**:
+repository checker, Python discovery, C/C++ profile helpers, all shell syntax,
+production build, tests build/execution, `alr test` (including raw production/fault
+and the reused Ada fault helper), actual-shim sanitizers, example build/execution,
+and `git diff --check`.
+
+| Evidence | Result |
+|---|---|
+| AUnit registered/executed/passed | **32 / 32 / 32** |
+| Failed assertions / unexpected errors | **0 / 0** |
+| Python configuration/static tests | **18 / 18** |
+| Static C exports / private Ada imports | **14 / 14**, exact matching sets |
+| Standalone C11/C++17 helpers | **2 / 2** |
+| Shell syntax | **7 / 7** |
+| Raw actual-shim production / fault | **PASS / PASS** |
+| ASan production / fault | **PASS / PASS**, leaks enabled |
+| UBSan production / fault | **PASS / PASS**, halt-on-error |
+| Ada fault helper | refinement false + 15 exceptions; camera geometry 20 exceptions **PASS** |
+| Extended pnp_synthetic | **PASS**, principal/off-axis normalized/camera/world output |
+
+The actual `cpp/opencv_calib3d_shim.cpp` is instrumented. Linked Core/OpenCV are
+not claimed fully instrumented. No sanitizer suppressions; no production
+`opencv_calib3d_test_*` symbols. Warning-as-error policy retained.
+
+During development, the first new nonfinite fixtures triggered GNAT validity
+errors before wrapper execution (30 passed, 0 assertions, 2 unexpected errors).
+The tests now use the same local validity-check suppression as existing nonfinite
+fixtures. A separate initial helper compile exposed missing visibility of the
+Interfaces.C.int comparison operator; a use-type clause corrected it. These were
+resolved before the complete passing rerun, not hidden or counted as passes.
+
+| Independent numerical oracle | Observed / required evidence |
+|---|---|
+| Zero distortion K=(100,200,10,20) | principal=(0,0), off-axis=(1,0), negative=(-0.5,0.25); 1e-14 component tolerance |
+| Five-coefficient forward Brown inversion | max component error **6.43929354282591e-15**, tolerance 1e-10 |
+| Rodrigues | identity and Rz(pi/2) exact/simple matrix within 1e-14; general rows/columns/R^T R/det within 1e-12 |
+| Point transforms | (1,0,0)->(1,3,3), inverse recovers (1,0,0), camera center->zero |
+| Point roundtrip | origin/nonaxis/negative/1e6-scale points; max **1.77635683940025e-15**, absolute tolerance 1e-8 |
+| Directions | world X->camera Y; camera X->world -Y; changed t invariant; zero and magnitude-two retained; roundtrips pass |
+| Principal camera bearing | **(0,0,1)** within 1e-14 |
+| Off-axis camera bearing | **(1,0,1)/sqrt(2)** within 1e-14 |
+| Off-axis world ray | origin **(-2,1,-3)**, direction **(0,-1,1)/sqrt(2)** within 1e-12 |
+| Distorted world ray | **(-0.188144173676719,-0.282216260515079,0.940720868383598)** agrees with analytic (-0.2,-0.3,1)/sqrt(1.13) within 1e-10 |
+| Robust normalization | finite normalized coordinates at +/-1e300 give positive camera Z and unit norm within 1e-12 |
+
+The internal nine-double rotation record passed C sizeof/_Alignof/offsetof against
+Ada Size/Alignment/every Position, plus C-written values 1 through 9 read in Ada:
+**size 72 bytes, alignment 8, offsets 0,8,16,24,32,40,48,56,64**. These are actual
+compiler-derived results, not proof from handwritten expected constants.
+
+Raw tests use real Core handles, including a strided Nx1 C2 ROI, N-D input and
+all specified negative schemas/pointers/nonfinite parameters. Failure checks
+compare destination data pointer/schema/content, and all nine rotation fields
+are zero on failure. Four new checkpoints cover all five existing exception
+categories before/after native undistortion/Rodrigues (20 scenarios). The qualified
+macOS libc++ fault-dylib isolation is unchanged and reused.
+
+All **15** immutable source file SHA-256/Git blob hashes were independently
+re-fetched/verified; official peeled tags match the three documented commits.
+Explicit common undistortion policy: **COUNT | EPS, 20, 1e-12 pixel epsilon**;
+omitted R/P; empty coefficients for zero distortion. See the new source-review
+and contract documents for source locations and bounded fixture tolerance rationale.
+
+Ordinary repository-checks/Linux/macOS/linux-sanitizers and the single stable-head
+manual 4.1/4.10/5.0 matrix are **pending at this local commit record**. Final run
+IDs, logs, per-target counts/oracles and results are recorded in the PR review
+evidence. Do not infer remote PASS from local tests. Matrix `WITH_ADE=OFF` and
+Windows push-to-main-only topology remain unchanged.
+
+Limitations: iterative undistortion may not converge uniquely for extreme
+distortion; the moderate fixture tolerance is not a universal inverse guarantee.
+Directions are dimensionless; origins and s use caller units, not necessarily
+meters. Rays imply no range/terrain intersection, Earth model, geodetic/ENU/NED
+semantics or estimator/fusion policy. No excluded APIs, new dependencies, version
+bump, tag, release, merge or auto-merge.

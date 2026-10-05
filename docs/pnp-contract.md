@@ -110,3 +110,14 @@ their flag False when observing it after a caught exception.
 For RANSAC composition, callers build local arrays from exactly the accepted
 `Inliers(Estimate)` correspondence pairs. Refinement is not itself robust outlier
 selection; do not include deliberately rejected outliers.
+
+## Camera rays and frame transforms
+
+The next geometric layer preserves the same pose convention. Native Rodrigues
+matrix access drives explicit point transforms `R*X+t` and `R^T*(X-t)`;
+directions use R/R^T with no translation and no silent magnitude normalization.
+Distorted pixels become dimensionless normalized coordinates, then unit camera
+bearings, then unit world rays originating at `Camera_Center(Pose)`.
+`X_world(s) = C_world + s * d_world`, s > 0, uses caller-defined Cartesian units.
+No terrain/Earth interpretation is implied. See `camera-rays-contract.md` for
+the authoritative new API, fixed convergence, empty/validation and units contract.

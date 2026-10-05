@@ -24,6 +24,22 @@ package OpenCV.Calib3D.Internal.C_API is
       X, Y, Z : Interfaces.C.double;
    end record with Convention => C;
 
+   type C_Rotation_Matrix is record
+      M00, M01, M02, M10, M11, M12, M20, M21, M22 : Interfaces.C.double;
+   end record with Convention => C;
+
+   function Rotation_Matrix_Of
+     (Pose : access constant C_Pose;
+      Matrix : access C_Rotation_Matrix) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_rotation_matrix_of";
+
+   function Undistort_Normalized
+     (Image_Points : OpenCV.Core.Module_Interop.Input_Mat_Handle;
+      Intrinsics : access constant C_Camera_Intrinsics;
+      Distortion : access constant C_Distortion5;
+      Normalized_Points : OpenCV.Core.Module_Interop.Output_Mat_Handle) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_undistort_normalized";
+
    function Native_Version return Interfaces.C.Strings.chars_ptr
      with Import, Convention => C, External_Name => "opencv_calib3d_native_version";
    function Native_Backend return Interfaces.C.Strings.chars_ptr

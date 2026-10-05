@@ -5,6 +5,7 @@ with OpenCV.Calib3D;
 procedure Run_Refinement_Faults is
    use OpenCV.Calib3D;
    use type OpenCV.Float64_Value;
+   use type Interfaces.C.int;
    procedure Fail (Stage, Kind : Interfaces.C.int)
      with Import, Convention => C, External_Name => "opencv_calib3d_test_fail";
    procedure Return_False
@@ -49,4 +50,32 @@ begin
       end loop;
    end loop;
    Ada.Text_IO.Put_Line ("PASS: Ada refinement false + 15 exception atomicity scenarios");
+   --  Reuse this helper and its macOS libc++-isolated fault dylib.
+   for Stage in Interfaces.C.int range 13 .. 16 loop
+      for Kind in Interfaces.C.int range 1 .. 5 loop
+         Fail (Stage, Kind);
+         begin
+            if Stage <= 14 then
+               declare
+                  Values : constant Normalized_Image_Point_Array :=
+                    Undistort_To_Normalized ([[320.0, 240.0]], K);
+                  pragma Unreferenced (Values);
+               begin
+                  null;
+               end;
+            else
+               declare
+                  Matrix : constant Rotation_Matrix := Rotation_Matrix_Of (Truth);
+                  pragma Unreferenced (Matrix);
+               begin
+                  null;
+               end;
+            end if;
+            raise Program_Error with "camera geometry injection did not raise OpenCV_Error";
+         exception
+            when OpenCV.OpenCV_Error => null;
+         end;
+      end loop;
+   end loop;
+   Ada.Text_IO.Put_Line ("PASS: Ada camera geometry 20 exception translation scenarios");
 end Run_Refinement_Faults;

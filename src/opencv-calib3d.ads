@@ -14,6 +14,22 @@ package OpenCV.Calib3D is
    type Image_Point_Array is array (Positive range <>) of Image_Point;
    type Object_Point_Array is array (Positive range <>) of Object_Point;
    type Inlier_Index_Array is array (Positive range <>) of Positive;
+
+   --  Dimensionless normalized pinhole coordinates, NOT pixels: (x,y)
+   --  corresponds to the camera-frame projective direction (x,y,1).
+   type Normalized_Image_Point is new OpenCV.Core.Float64_Vec2.Vector;
+   type Normalized_Image_Point_Array is
+     array (Positive range <>) of Normalized_Image_Point;
+   type Camera_Direction is new OpenCV.Core.Float64_Vec3.Vector;
+   type World_Direction is new OpenCV.Core.Float64_Vec3.Vector;
+   type Camera_Direction_Array is array (Positive range <>) of Camera_Direction;
+   type World_Ray is record
+      Origin    : Object_Point;
+      Direction : World_Direction;
+   end record;
+   type World_Ray_Array is array (Positive range <>) of World_Ray;
+   type Rotation_Matrix is array (Natural range 0 .. 2, Natural range 0 .. 2)
+     of OpenCV.Float64_Value;
    type Reprojection_Error_Array is
      array (Positive range <>) of OpenCV.Float64_Value;
 
@@ -64,6 +80,42 @@ package OpenCV.Calib3D is
    function Inliers (Estimate : Pose_Estimate) return Inlier_Index_Array;
 
    function Camera_Center (Pose : World_To_Camera_Pose) return Object_Point;
+
+   --  R = native Rodrigues(Pose.Rotation), X_camera = R * X_world + t.
+   --  All six pose components must be finite, even for direction operations.
+   function Rotation_Matrix_Of (Pose : World_To_Camera_Pose) return Rotation_Matrix;
+   function World_To_Camera_Point
+     (Pose : World_To_Camera_Pose; Point : Object_Point) return Object_Point;
+   function Camera_To_World_Point
+     (Pose : World_To_Camera_Pose; Point : Object_Point) return Object_Point;
+   --  Translation has no effect; magnitude is preserved (rounding aside).
+   --  Arbitrary finite direction inputs are NOT silently normalized.
+   function World_To_Camera_Direction
+     (Pose : World_To_Camera_Pose; Direction : World_Direction) return Camera_Direction;
+   function Camera_To_World_Direction
+     (Pose : World_To_Camera_Pose; Direction : Camera_Direction) return World_Direction;
+
+   --  Distorted pixels -> normalized standard-model coordinates. No R/P.
+   --  Fixed native COUNT|EPS policy: 20 iterations, 1e-12 pixel epsilon.
+   --  One-based output preserves length/order; empty returns 1 .. 0 AFTER
+   --  validating parameters. No native undistortion for valid empty input.
+   function Undistort_To_Normalized
+     (Points : Image_Point_Array; Intrinsics : Camera_Intrinsics;
+      Distortion : Distortion_Coefficients := No_Distortion)
+      return Normalized_Image_Point_Array;
+   --  Unit finite directions (Float64 norm tolerance 1e-12), camera Z > 0.
+   function Camera_Bearing_Rays
+     (Points : Image_Point_Array; Intrinsics : Camera_Intrinsics;
+      Distortion : Distortion_Coefficients := No_Distortion)
+      return Camera_Direction_Array;
+   --  Origin = Camera_Center(Pose); direction = normalized R^T * bearing.
+   --  X_world(s) = Origin + s * Direction, s > 0 is forward along the ray.
+   --  Origin/s use caller-defined Cartesian units, not necessarily meters.
+   --  No terrain, Earth model, or geographic frame interpretation is implied.
+   function World_Bearing_Rays
+     (Points : Image_Point_Array; Intrinsics : Camera_Intrinsics;
+      Distortion : Distortion_Coefficients; Pose : World_To_Camera_Pose)
+      return World_Ray_Array;
 
    function Project_Points
      (Points     : Object_Point_Array;

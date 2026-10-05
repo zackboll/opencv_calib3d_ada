@@ -43,6 +43,21 @@ typedef struct opencv_calib3d_point3 {
     double x, y, z;
 } opencv_calib3d_point3;
 
+typedef struct opencv_calib3d_rotation_matrix {
+    double m00, m01, m02;
+    double m10, m11, m12;
+    double m20, m21, m22;
+} opencv_calib3d_rotation_matrix;
+
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_rotation_matrix_of(
+    const opencv_calib3d_pose *pose, opencv_calib3d_rotation_matrix *matrix);
+
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_undistort_normalized(
+    const opencv_core_mat_handle *image_points,
+    const opencv_calib3d_camera_intrinsics *intrinsics,
+    const opencv_calib3d_distortion5 *distortion,
+    opencv_core_mat_handle *normalized_points);
+
 OPENCV_CALIB3D_API const char *opencv_calib3d_last_error(void);
 OPENCV_CALIB3D_API const char *opencv_calib3d_native_version(void);
 OPENCV_CALIB3D_API const char *opencv_calib3d_native_backend(void);

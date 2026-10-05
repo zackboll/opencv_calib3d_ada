@@ -58,6 +58,20 @@ class RepositoryTests(unittest.TestCase):
     def test_no_generated_binding_source(self):
         self.assertFalse(any(p.name.startswith("generate") for p in (ROOT / "scripts").iterdir()))
 
+    def test_camera_rays_fixed_standard_policy(self):
+        text = (ROOT / "cpp/opencv_calib3d_shim.cpp").read_text()
+        self.assertIn("cv::TermCriteria::COUNT | cv::TermCriteria::EPS", text)
+        self.assertIn("20, 1.0e-12", text)
+        self.assertIn("images.isContinuous() ? images : images.clone()", text)
+        self.assertNotIn("cv::fisheye::", text)
+
+    def test_camera_ray_units_and_frames_documented(self):
+        text = (ROOT / "docs/camera-rays-contract.md").read_text()
+        for equation in ("X_world = R^T * (X_camera - t)", "d_world = R^T * d_camera",
+                         "X_world(s) = C_world + s * d_world"):
+            self.assertIn(equation, text)
+        self.assertIn("dimensionless", text)
+
     def test_topology_rejects_extra_windows_branch(self):
         cross = (ROOT / ".github/workflows/cross-platform.yml").read_text()
         windows = (ROOT / ".github/workflows/windows-post-merge.yml").read_text()

@@ -46,3 +46,15 @@ A separate Ada executable links the actual fault-enabled shim artifact (object
 on Linux, Apple libc++-isolated test dylib on Darwin) without replacing production
 libraries, checking false and all 15 refinement stage/kind
 exception combinations through the public wrapper.
+
+Task 003 adds only two private C exports: normalized standard undistortion and
+Rodrigues matrix access. Undistortion borrows real Core handles, clones valid
+strided input, computes into a local Mat, validates schema/count/finiteness, then
+publishes atomically. The private nine-double rotation record is checked by C
+sizeof/alignment/offsetof and Ada Size/Alignment/Position plus C-written interchange.
+Public matrices, semantic normalized coordinates, directions and world rays are
+Ada values. Matrix/vector transforms and scaled bearing normalization are Ada;
+Rodrigues remains native. R^T maps camera bearings to world; translation enters
+point transforms and the camera-center origin, never direction transforms.
+The existing fault helper/dylib architecture is reused for 20 new stage/kind cases.
+See `camera-rays-contract.md`; no terrain/Earth model or new dependencies.

@@ -85,6 +85,30 @@ begin
             Put_Vector ("refined camera center", Camera_Center (P));
             Put_Line ("X_camera = R * X_world + t; Translation is t, NOT camera position.");
             Put_Line ("C_world = -R^T * t; low pixel error is not navigation accuracy.");
+            declare
+               Samples : constant Image_Point_Array :=
+                 [[Intrinsics.Center_X, Intrinsics.Center_Y],
+                  [Intrinsics.Center_X + Intrinsics.Focal_X, Intrinsics.Center_Y]];
+               Normalized : constant Normalized_Image_Point_Array :=
+                 Undistort_To_Normalized (Samples, Intrinsics);
+               Camera : constant Camera_Direction_Array := Camera_Bearing_Rays (Samples, Intrinsics);
+               Rays : constant World_Ray_Array :=
+                 World_Bearing_Rays (Samples, Intrinsics, No_Distortion, P);
+            begin
+               for I in Samples'Range loop
+                  Put_Line ("pixel (pixels) = (" & OpenCV.Float64_Value'Image (Samples (I) (0)) & "," &
+                    OpenCV.Float64_Value'Image (Samples (I) (1)) & ")");
+                  Put_Line ("normalized (dimensionless) = (" &
+                    OpenCV.Float64_Value'Image (Normalized (I) (0)) & "," &
+                    OpenCV.Float64_Value'Image (Normalized (I) (1)) & ")");
+                  Put_Vector ("camera unit direction", Object_Point (Camera (I)));
+                  Put_Vector ("world ray origin", Rays (I).Origin);
+                  Put_Vector ("world unit direction", Object_Point (Rays (I).Direction));
+               end loop;
+               Put_Line ("Principal camera bearing is approximately (0,0,1).");
+               Put_Line ("World rays are metric-frame geometric rays only; no DTED/geodetic interpretation is performed.");
+               Put_Line ("X_world(s) = C_world + s * direction, s > 0; s uses caller world-coordinate units.");
+            end;
          end;
       end if;
    end;

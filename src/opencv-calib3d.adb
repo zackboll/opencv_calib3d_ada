@@ -212,6 +212,240 @@ package body OpenCV.Calib3D is
               2 => OpenCV.Float64_Value (Center.Z)];
    end Camera_Center;
 
+   function Rotation_Matrix_Of (Pose : World_To_Camera_Pose) return Rotation_Matrix is
+      Native_Pose : aliased C.C_Pose;
+      Matrix : aliased C.C_Rotation_Matrix := (others => 0.0);
+   begin
+      Validate (Pose);
+      Native_Pose := To_C (Pose);
+      C.Check (C.Rotation_Matrix_Of (Native_Pose'Access, Matrix'Access),
+               "Calib3D.Rotation_Matrix_Of");
+      return Result : constant Rotation_Matrix :=
+        [[OpenCV.Float64_Value (Matrix.M00), OpenCV.Float64_Value (Matrix.M01),
+          OpenCV.Float64_Value (Matrix.M02)],
+         [OpenCV.Float64_Value (Matrix.M10), OpenCV.Float64_Value (Matrix.M11),
+          OpenCV.Float64_Value (Matrix.M12)],
+         [OpenCV.Float64_Value (Matrix.M20), OpenCV.Float64_Value (Matrix.M21),
+          OpenCV.Float64_Value (Matrix.M22)]]
+      do
+         for Value of Result loop
+            if not Is_Finite (Value) then
+               raise OpenCV.OpenCV_Error with "Rodrigues produced a nonfinite matrix";
+            end if;
+         end loop;
+      end return;
+   end Rotation_Matrix_Of;
+
+   procedure Validate_Vector (Value : Object_Point) is
+   begin
+      for Component of Value loop
+         if not Is_Finite (Component) then
+            raise OpenCV.OpenCV_Error with "Point/direction must be finite";
+         end if;
+      end loop;
+   end Validate_Vector;
+
+   function Rotate
+     (Matrix : Rotation_Matrix; Value : Object_Point; Transpose : Boolean := False)
+      return Object_Point
+   is
+   begin
+      Validate_Vector (Value);
+      return Result : Object_Point := [others => 0.0] do
+         for Row in 0 .. 2 loop
+            for Col in 0 .. 2 loop
+               declare
+                  Factor : constant OpenCV.Float64_Value :=
+                    (if Transpose then Matrix (Col, Row) else Matrix (Row, Col));
+                  Product : constant OpenCV.Float64_Value := Factor * Value (Col);
+               begin
+                  if not Is_Finite (Product) then
+                     raise OpenCV.OpenCV_Error with "Nonfinite rotation intermediate";
+                  end if;
+                  Result (Row) := Result (Row) + Product;
+                  if not Is_Finite (Result (Row)) then
+                     raise OpenCV.OpenCV_Error with "Nonfinite rotation result";
+                  end if;
+               end;
+            end loop;
+         end loop;
+      end return;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Rotation exceeds Float64 range";
+   end Rotate;
+
+   function World_To_Camera_Point
+     (Pose : World_To_Camera_Pose; Point : Object_Point) return Object_Point
+   is
+      Matrix : constant Rotation_Matrix := Rotation_Matrix_Of (Pose);
+      Result : Object_Point := Rotate (Matrix, Point);
+   begin
+      for Axis in 0 .. 2 loop
+         Result (Axis) := Result (Axis) + Pose.Translation (Axis);
+      end loop;
+      Validate_Vector (Result);
+      return Result;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Point transform exceeds Float64 range";
+   end World_To_Camera_Point;
+
+   function Camera_To_World_Point
+     (Pose : World_To_Camera_Pose; Point : Object_Point) return Object_Point
+   is
+      Matrix : constant Rotation_Matrix := Rotation_Matrix_Of (Pose);
+      Shifted : Object_Point;
+   begin
+      Validate_Vector (Point);
+      for Axis in 0 .. 2 loop
+         Shifted (Axis) := Point (Axis) - Pose.Translation (Axis);
+      end loop;
+      Validate_Vector (Shifted);
+      return Rotate (Matrix, Shifted, Transpose => True);
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Point transform exceeds Float64 range";
+   end Camera_To_World_Point;
+
+   function World_To_Camera_Direction
+     (Pose : World_To_Camera_Pose; Direction : World_Direction) return Camera_Direction is
+     (Camera_Direction (Rotate (Rotation_Matrix_Of (Pose), Object_Point (Direction))));
+
+   function Camera_To_World_Direction
+     (Pose : World_To_Camera_Pose; Direction : Camera_Direction) return World_Direction is
+     (World_Direction (Rotate (Rotation_Matrix_Of (Pose), Object_Point (Direction), True)));
+
+   function Unit_Vector (Value : Object_Point) return Object_Point is
+      Scale : OpenCV.Float64_Value := 0.0;
+      Scaled : Object_Point;
+      Squared : OpenCV.Float64_Value := 0.0;
+      Norm : OpenCV.Float64_Value;
+   begin
+      Validate_Vector (Value);
+      for Component of Value loop
+         Scale := OpenCV.Float64_Value'Max (Scale, abs Component);
+      end loop;
+      if Scale = 0.0 then
+         raise OpenCV.OpenCV_Error with "Zero direction cannot be normalized";
+      end if;
+      for Axis in 0 .. 2 loop
+         Scaled (Axis) := Value (Axis) / Scale;
+         Squared := Squared + Scaled (Axis) * Scaled (Axis);
+      end loop;
+      --  Normalize in scaled space; do not form Scale*Norm, which could
+      --  overflow for a finite vector whose mathematical norm exceeds Last.
+      Norm := Math.Sqrt (Squared);
+      if not Is_Finite (Norm) or else Norm <= 0.0 then
+         raise OpenCV.OpenCV_Error with "Invalid scaled direction norm";
+      end if;
+      for Axis in 0 .. 2 loop
+         Scaled (Axis) := Scaled (Axis) / Norm;
+      end loop;
+      Validate_Vector (Scaled);
+      return Scaled;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Direction normalization exceeds Float64 range";
+   end Unit_Vector;
+
+   function Undistort_To_Normalized
+     (Points : Image_Point_Array; Intrinsics : Camera_Intrinsics;
+      Distortion : Distortion_Coefficients := No_Distortion)
+      return Normalized_Image_Point_Array
+   is
+      Native_Intrinsics : aliased C.C_Camera_Intrinsics;
+      Native_Distortion : aliased C.C_Distortion5;
+      Images, Output : OpenCV.Core.Mat;
+      Code : C.Status := C.Success;
+      procedure Input_Callback (Input : Bridge.Input_Mat_Handle) is
+         procedure Output_Callback (Destination : Bridge.Output_Mat_Handle) is
+         begin
+            Code := C.Undistort_Normalized
+              (Input, Native_Intrinsics'Access, Native_Distortion'Access, Destination);
+         end Output_Callback;
+      begin
+         Bridge.With_Output_Handle (Output, Output_Callback'Access);
+      end Input_Callback;
+   begin
+      Validate (Intrinsics);
+      Validate (Distortion);
+      Validate (Points);
+      if Points'Length = 0 then
+         return [1 .. 0 => <>];
+      end if;
+      Images := Image_Matrix (Points);
+      Output := OpenCV.Core.Create
+        (Points'Length, 1, (Depth => OpenCV.Core.Float64, Channels => 2));
+      Native_Intrinsics := To_C (Intrinsics);
+      Native_Distortion := To_C (Distortion);
+      Bridge.With_Input_Handle (Images, Input_Callback'Access);
+      C.Check (Code, "Calib3D.Undistort_To_Normalized");
+      if Output.Rows /= Points'Length or else Output.Columns /= 1
+        or else Output.Depth /= OpenCV.Core.Float64 or else Output.Channels /= 2
+      then
+         raise OpenCV.OpenCV_Error with "Invalid native undistortPoints output";
+      end if;
+      return Result : Normalized_Image_Point_Array (1 .. Points'Length) do
+         for I in Result'Range loop
+            Result (I) := Normalized_Image_Point (Vec2_Access.Get (Output, I - 1, 0));
+            for Component of Result (I) loop
+               if not Is_Finite (Component) then
+                  raise OpenCV.OpenCV_Error with "Nonfinite normalized coordinate";
+               end if;
+            end loop;
+         end loop;
+      end return;
+   end Undistort_To_Normalized;
+
+   function Camera_Bearing_Rays
+     (Points : Image_Point_Array; Intrinsics : Camera_Intrinsics;
+      Distortion : Distortion_Coefficients := No_Distortion)
+      return Camera_Direction_Array
+   is
+      Normalized : constant Normalized_Image_Point_Array :=
+        Undistort_To_Normalized (Points, Intrinsics, Distortion);
+   begin
+      return Result : Camera_Direction_Array (1 .. Points'Length) do
+         for I in Result'Range loop
+            Result (I) := Camera_Direction
+              (Unit_Vector ([Normalized (I) (0), Normalized (I) (1), 1.0]));
+            if Result (I) (2) <= 0.0 then
+               raise OpenCV.OpenCV_Error with "Camera bearing must have positive Z";
+            end if;
+         end loop;
+      end return;
+   end Camera_Bearing_Rays;
+
+   function World_Bearing_Rays
+     (Points : Image_Point_Array; Intrinsics : Camera_Intrinsics;
+      Distortion : Distortion_Coefficients; Pose : World_To_Camera_Pose)
+      return World_Ray_Array
+   is
+   begin
+      Validate (Pose);
+      declare
+         Camera : constant Camera_Direction_Array :=
+           Camera_Bearing_Rays (Points, Intrinsics, Distortion);
+      begin
+         if Points'Length = 0 then
+            return [1 .. 0 => <>];
+         end if;
+         declare
+            Matrix : constant Rotation_Matrix := Rotation_Matrix_Of (Pose);
+            Center : constant Object_Point := Camera_Center (Pose);
+         begin
+            Validate_Vector (Center);
+            return Result : World_Ray_Array (1 .. Points'Length) do
+               for I in Result'Range loop
+                  Result (I) := (Origin => Center, Direction => World_Direction
+                    (Unit_Vector (Rotate (Matrix, Object_Point (Camera (I)), True))));
+               end loop;
+            end return;
+         end;
+      end;
+   end World_Bearing_Rays;
+
    function Project_Points
      (Points     : Object_Point_Array;
       Intrinsics : Camera_Intrinsics;
