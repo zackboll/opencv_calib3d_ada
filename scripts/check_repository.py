@@ -54,7 +54,12 @@ def main() -> None:
 
     tests = (ROOT / "tests/src/calib3d_tests.adb").read_text()
     registrations = re.findall(r"Result\.Add_Test\s*\(Caller\.Create", tests)
-    check(len(registrations) == 19, "update documented AUnit inventory when changing tests")
+    check(len(registrations) == 32, "update documented AUnit inventory when changing tests")
+    check({"opencv_calib3d_undistort_normalized", "opencv_calib3d_rotation_matrix_of"} <= declared,
+          "missing camera geometry ABI")
+    check("20, 1.0e-12" in cpp and "cv::TermCriteria::COUNT | cv::TermCriteria::EPS" in cpp,
+          "fixed undistortion convergence policy changed")
+    check("cv::fisheye::" not in cpp, "camera rays use only the standard model")
     check("opencv_calib3d_refine_pose_iterative" in declared,
           "missing iterative refinement ABI")
     check("true, cv::SOLVEPNP_ITERATIVE" in cpp, "refinement must use the initial guess")

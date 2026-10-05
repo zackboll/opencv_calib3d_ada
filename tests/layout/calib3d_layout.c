@@ -44,3 +44,22 @@ void calib3d_test_fill_distortion(opencv_calib3d_distortion5 *v) {
 void calib3d_test_fill_pose(opencv_calib3d_pose *v) {
     *v = (opencv_calib3d_pose){0.1, 0.2, 0.3, 4.0, 5.0, 6.0};
 }
+
+int32_t calib3d_test_rotation_layout(int32_t field) {
+    const size_t values[] = {
+        sizeof(opencv_calib3d_rotation_matrix), _Alignof(opencv_calib3d_rotation_matrix),
+        offsetof(opencv_calib3d_rotation_matrix, m00),
+        offsetof(opencv_calib3d_rotation_matrix, m01),
+        offsetof(opencv_calib3d_rotation_matrix, m02),
+        offsetof(opencv_calib3d_rotation_matrix, m10),
+        offsetof(opencv_calib3d_rotation_matrix, m11),
+        offsetof(opencv_calib3d_rotation_matrix, m12),
+        offsetof(opencv_calib3d_rotation_matrix, m20),
+        offsetof(opencv_calib3d_rotation_matrix, m21),
+        offsetof(opencv_calib3d_rotation_matrix, m22)
+    };
+    return field >= 0 && field < 11 ? (int32_t)values[field] : -1;
+}
+void calib3d_test_fill_rotation(opencv_calib3d_rotation_matrix *v) {
+    *v = (opencv_calib3d_rotation_matrix){1,2,3,4,5,6,7,8,9};
+}

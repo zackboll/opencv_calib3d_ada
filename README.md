@@ -18,6 +18,21 @@ example. Remote review gates are tracked separately; no new release is claimed.
 
 ## Native backend split
 
+Task 003 adds the geometric bridge:
+
+```text
+distorted pixel -> normalized camera coordinate -> camera ray -> world ray
+```
+
+`Undistort_To_Normalized`, `Camera_Bearing_Rays`, `World_Bearing_Rays`,
+`Rotation_Matrix_Of`, and explicit world/camera point and direction transforms
+return Ada values. Normalized coordinates/directions are dimensionless; ray origins
+use the caller's Cartesian world units. Native standard undistortion uses fixed
+COUNT|EPS, 20 iterations, 1e-12 pixel epsilon, with no R/P or public tuning knob.
+See [the camera-ray contract](docs/camera-rays-contract.md) for equations, units,
+validation/empty semantics and limitations; actual qualification is recorded in
+[`docs/bootstrap-validation.md`](docs/bootstrap-validation.md).
+
 The Ada API is intentionally stable while OpenCV moved the native implementation:
 
 ```text
@@ -57,6 +72,7 @@ The frame convention is part of the API contract:
 ```text
 X_camera = R * X_world + t
 C_world  = -R^T * t
+X_world(s) = C_world + s * d_world, s > 0
 ```
 
 `Translation` is `t`; **it is not the camera position**.
@@ -111,6 +127,9 @@ from a known pose, corrupts three 2-D correspondences with large synthetic
 outliers, runs RANSAC PnP, builds local accepted-correspondence arrays, refines
 iteratively and prints before/after RMS/max, pose and camera-center data. It has no
 image files, GUI, camera, Features, DTED or geospatial dependency.
+It then prints principal/off-axis pixels, normalized coordinates, camera unit
+directions, world ray origins and world unit directions. These are metric-frame
+geometric rays only; no DTED/geodetic interpretation or intersection is performed.
 
 Synthetic thresholds and errors are demonstration fixtures, not navigation
 accuracy claims.
@@ -126,7 +145,7 @@ The presence of those workflows alone is not evidence that they passed.
 
 This first slice does not bind camera calibration, chessboards, stereo,
 homography, essential/fundamental matrices, triangulation, USAC configuration,
-`solvePnPRefineLM`/VVS, P3P/AP3P/IPPE/SQPNP selection, fisheye, undistortion, DTED,
+`solvePnPRefineLM`/VVS, P3P/AP3P/IPPE/SQPNP selection, fisheye, image undistortion/remap, DTED,
 Features, optical flow, or estimator/fusion policy.
 
 The caller defines the world frame. A later navigation layer may use a local

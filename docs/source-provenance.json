@@ -9,6 +9,12 @@
       "implementation": "modules/calib3d/src/solvepnp.cpp",
       "files": [
         {
+          "path": "modules/calib3d/src/undistort.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/undistort.cpp",
+          "sha256": "4a840da044d2f341d512c87c7bbe04b9b19c67e1f042336f695a4c2da09096e9",
+          "git_blob_sha1": "6817fcd3ac45e4a52c5eaf768da79815ba782763"
+        },
+        {
           "path": "modules/calib3d/include/opencv2/calib3d.hpp",
           "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/include/opencv2/calib3d.hpp",
           "sha256": "b525513f3cbdd148aa59feca0da775fe93dd8d2de31f648c473d255d688d415e",
@@ -41,6 +47,12 @@
       "header": "modules/calib3d/include/opencv2/calib3d.hpp",
       "implementation": "modules/calib3d/src/solvepnp.cpp",
       "files": [
+        {
+          "path": "modules/calib3d/src/undistort.dispatch.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/undistort.dispatch.cpp",
+          "sha256": "ea1431c7fb50b548bf54610c8e6b27cd2fdd8bedeca4d56ed35762a080235358",
+          "git_blob_sha1": "6c3d32941c372546815790161926540d013f7f79"
+        },
         {
           "path": "modules/calib3d/include/opencv2/calib3d.hpp",
           "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/include/opencv2/calib3d.hpp",
@@ -75,6 +87,12 @@
       "implementation": "modules/geometry/src/solvepnp.cpp",
       "files": [
         {
+          "path": "modules/geometry/src/pinhole.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/pinhole.cpp",
+          "sha256": "ac12950c0b959352d693334ede6a74214dad65e2fd83c0f02ce71a7bfde4fc4a",
+          "git_blob_sha1": "c1d4ac0435b8a580ca031cbbc76adb042598721e"
+        },
+        {
           "path": "modules/geometry/include/opencv2/geometry/3d.hpp",
           "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/include/opencv2/geometry/3d.hpp",
           "sha256": "3e23154729137cce7c1574c7d70d00e1fff4a8d3e1548b4b128d8337e5861c34",
@@ -102,6 +120,16 @@
     }
   ],
   "core_pin": "4da9d35ea21e1b2efe96296243ea668b488c6326",
+  "task_003_review": {
+    "verification": "immutable headers/Rodrigues hashes reverified; three undistortion implementation SHA-256/Git blob hashes added",
+    "undistortion": "standard cv::undistortPoints with omitted R/P and explicit COUNT|EPS, 20, 1e-12 pixel epsilon",
+    "zero_distortion": "empty coefficient Mat, documented standard zero model",
+    "input": "Nx1 CV_64FC2; valid noncontinuous input cloned",
+    "output": "same N, Nx1 CV_64FC2, finite, failure-atomic publication",
+    "rodrigues": "3x1 CV_64F rotation vector to 3x3 CV_64FC1; no Jacobian; all pose and result components finite",
+    "fixture_component_tolerance": 1e-10,
+    "unit_norm_tolerance": 1e-12
+  },
   "task_002_review": {
     "verification": "official peeled tags re-fetched; all 12 file SHA-256 and Git blob SHA-1 hashes reverified unchanged",
     "native_call": "solvePnP(objectPoints,imagePoints,cameraMatrix,distCoeffs,rvec,tvec,true,SOLVEPNP_ITERATIVE)",

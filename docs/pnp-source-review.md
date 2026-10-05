@@ -121,3 +121,7 @@ API. It provides version-neutral **iterative refinement** instead.
 Diagnostics use the authoritative Float64 `Project_Points` path reviewed above;
 Euclidean residual norms and scaled RMS accumulation are entirely Ada, not an
 additional native diagnostic API. Other estimator policies remain deferred.
+
+Task 003's sparse undistortion and public Rodrigues matrix path are reviewed in
+`camera-rays-source-review.md`, with additional immutable implementation hashes
+in `source-provenance.json`. The native 4.x calib3d / 5.0 geometry split is unchanged.

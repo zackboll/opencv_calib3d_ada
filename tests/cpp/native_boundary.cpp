@@ -147,7 +147,142 @@ void refinement_boundary() {
     std::cout << "PASS: iterative refinement/distortion/schema/output initialization raw ABI\n";
 }
 
+void camera_geometry_boundary() {
+    const opencv_calib3d_camera_intrinsics k{100,200,10,20};
+    const opencv_calib3d_distortion5 none{};
+    const opencv_calib3d_distortion5 d{0.1,-0.04,0.003,-0.002,0.01};
+    const opencv_calib3d_pose identity{};
+    const opencv_calib3d_pose quarter{0,0,std::acos(-1.0)/2,1,2,3};
+    auto input = matrix(3,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    auto destination = matrix(2,2,OPENCV_CORE_DEPTH_FLOAT64,1);
+    const cv::Vec2d known[] = {{0,0},{1,0},{0.3,-0.2}};
+    for (const auto &dist : {none,d}) {
+        for (int i=0;i<3;++i) {
+            const double x=known[i][0], y=known[i][1];
+            const double r2=x*x+y*y, radial=1+dist.k1*r2+dist.k2*r2*r2+dist.k3*r2*r2*r2;
+            output(input.get()).at<cv::Vec2d>(i,0) = cv::Vec2d(
+                k.focal_x*(x*radial+2*dist.p1*x*y+dist.p2*(r2+2*x*x))+k.center_x,
+                k.focal_y*(y*radial+dist.p1*(r2+2*y*y)+2*dist.p2*x*y)+k.center_y);
+        }
+        check(opencv_calib3d_undistort_normalized(input.get(),&k,&dist,destination.get()) == 0,
+              "raw undistortion");
+        const auto &m=output(destination.get());
+        check(m.rows==3 && m.cols==1 && m.type()==CV_64FC2, "raw normalized schema");
+        for (int i=0;i<3;++i)
+            check(cv::norm(m.at<cv::Vec2d>(i,0)-known[i]) < 1e-10, "independent Brown inversion");
+    }
+    auto region = matrix(3,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    cv::Mat parent(3,2,CV_64FC2);
+    output(input.get()).copyTo(parent.col(0));
+    output(region.get()) = parent.col(0);
+    check(!output(region.get()).isContinuous(), "fixture must be strided");
+    check(opencv_calib3d_undistort_normalized(region.get(),&k,&d,destination.get())==0 &&
+          cv::norm(output(destination.get()).at<cv::Vec2d>(2,0)-known[2])<1e-10,
+          "strided Core region undistortion");
+    auto alias = matrix(3,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    output(input.get()).copyTo(output(alias.get()));
+    check(opencv_calib3d_undistort_normalized(alias.get(),&k,&d,alias.get())==0 &&
+          cv::norm(output(alias.get()).at<cv::Vec2d>(2,0)-known[2])<1e-10,
+          "aliased Core input/output publication");
+    auto empty = matrix(1,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    output(empty.get()).release();
+    check(opencv_calib3d_undistort_normalized(empty.get(),&k,&d,destination.get())==0 &&
+          output(destination.get()).empty(), "raw empty undistortion");
+
+    auto invalid = [&](const opencv_core_mat_handle *in,
+                       const opencv_calib3d_camera_intrinsics *intrinsics,
+                       const opencv_calib3d_distortion5 *dist, bool have_output=true) {
+        cv::Mat &target=output(destination.get());
+        target=cv::Mat(2,3,CV_64FC1,cv::Scalar(42));
+        const cv::Mat saved=target.clone();
+        const auto *data=target.data;
+        check(opencv_calib3d_undistort_normalized(in,intrinsics,dist,
+              have_output ? destination.get() : nullptr)==1, "invalid undistort accepted");
+        check(target.data==data && target.size()==saved.size() && target.type()==saved.type() &&
+              cv::norm(target,saved,cv::NORM_INF)==0, "failed undistort published output");
+    };
+    invalid(nullptr,&k,&d); invalid(input.get(),nullptr,&d);
+    invalid(input.get(),&k,nullptr); invalid(input.get(),&k,&d,false);
+    for (int channels : {1,2,3}) {
+        auto bad=matrix(3,1,channels==2 ? OPENCV_CORE_DEPTH_FLOAT32 : OPENCV_CORE_DEPTH_FLOAT64,channels);
+        invalid(bad.get(),&k,&d);
+    }
+    auto bad_shape=matrix(2,2,OPENCV_CORE_DEPTH_FLOAT64,2);
+    invalid(bad_shape.get(),&k,&d);
+    const int sizes[]={2,2,2};
+    output(bad_shape.get())=cv::Mat(3,sizes,CV_64FC2,cv::Scalar(0,0));
+    invalid(bad_shape.get(),&k,&d);
+    const double nan=std::numeric_limits<double>::quiet_NaN();
+    for (double nonfinite : {nan,std::numeric_limits<double>::infinity(),
+                            -std::numeric_limits<double>::infinity()}) {
+        const auto saved=output(input.get()).at<cv::Vec2d>(0,0);
+        output(input.get()).at<cv::Vec2d>(0,0)[0]=nonfinite;
+        invalid(input.get(),&k,&d);
+        output(input.get()).at<cv::Vec2d>(0,0)=saved;
+        auto bad_k=k; bad_k.center_y=nonfinite; invalid(input.get(),&bad_k,&d);
+        auto bad_d=d; bad_d.k3=nonfinite; invalid(input.get(),&k,&bad_d);
+    }
+    auto bad_k=k; bad_k.focal_x=0; invalid(input.get(),&bad_k,&d);
+    bad_k=k; bad_k.focal_y=-1; invalid(input.get(),&bad_k,&d);
+    // Finite input that makes native output nonfinite must not publish either.
+    bad_k=k; bad_k.focal_x=std::numeric_limits<double>::min();
+    const auto saved_pixel=output(input.get()).at<cv::Vec2d>(0,0);
+    output(input.get()).at<cv::Vec2d>(0,0)[0]=std::numeric_limits<double>::max();
+    invalid(input.get(),&bad_k,&none);
+    output(input.get()).at<cv::Vec2d>(0,0)=saved_pixel;
+
+    opencv_calib3d_rotation_matrix rotation{};
+    check(opencv_calib3d_rotation_matrix_of(&identity,&rotation)==0 &&
+          rotation.m00==1 && rotation.m11==1 && rotation.m22==1 && rotation.m01==0,
+          "raw Rodrigues identity");
+    check(opencv_calib3d_rotation_matrix_of(&quarter,&rotation)==0 &&
+          std::abs(rotation.m00)<1e-14 && std::abs(rotation.m01+1)<1e-14 &&
+          std::abs(rotation.m10-1)<1e-14 && rotation.m22==1, "raw Rodrigues Rz(pi/2)");
+    auto zero_rotation = [&] {
+        return rotation.m00==0 && rotation.m01==0 && rotation.m02==0 &&
+               rotation.m10==0 && rotation.m11==0 && rotation.m12==0 &&
+               rotation.m20==0 && rotation.m21==0 && rotation.m22==0;
+    };
+    auto invalid_rotation = [&](const opencv_calib3d_pose *pose) {
+        rotation={9,9,9,9,9,9,9,9,9};
+        check(opencv_calib3d_rotation_matrix_of(pose,&rotation)==1 && zero_rotation(),
+              "invalid Rodrigues clearing");
+    };
+    invalid_rotation(nullptr);
+    check(opencv_calib3d_rotation_matrix_of(&quarter,nullptr)==1, "null Rodrigues output");
+    for (double nonfinite : {nan,std::numeric_limits<double>::infinity(),
+                            -std::numeric_limits<double>::infinity()}) {
+        auto p=quarter; p.rx=nonfinite; invalid_rotation(&p);
+        p=quarter; p.tz=nonfinite; invalid_rotation(&p);
+    }
+    auto huge_rotation=quarter; huge_rotation.rx=std::numeric_limits<double>::max();
+    invalid_rotation(&huge_rotation);
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+    const int expected[]={0,1,2,3,4,4};
+    for (int stage : {13,14}) for (int kind=1;kind<=5;++kind) {
+        auto &target=output(destination.get());
+        target=cv::Mat(2,3,CV_64FC1,cv::Scalar(42));
+        const cv::Mat before=target.clone();
+        const auto *data=target.data;
+        opencv_calib3d_test_fail(stage,kind);
+        check(opencv_calib3d_undistort_normalized(region.get(),&k,&d,destination.get())==expected[kind],
+              "undistortion exception mapping");
+        check(target.data==data && target.size()==before.size() && target.type()==before.type() &&
+              cv::norm(target,before,cv::NORM_INF)==0, "undistort exception publication");
+    }
+    for (int stage : {15,16}) for (int kind=1;kind<=5;++kind) {
+        rotation={9,9,9,9,9,9,9,9,9};
+        opencv_calib3d_test_fail(stage,kind);
+        check(opencv_calib3d_rotation_matrix_of(&quarter,&rotation)==expected[kind] && zero_rotation(),
+              "Rodrigues exception clearing");
+    }
+    std::cout << "PASS: camera geometry 20 exception checkpoints; output failure-atomic\n";
+#endif
+    std::cout << "PASS: normalized zero/five-coefficient inversion, strided ROI, Rodrigues identity/Rz; raw negatives\n";
+}
+
 void run() {
+    camera_geometry_boundary();
     refinement_boundary();
     constexpr int N = 20;
     auto world = matrix(N, 1, OPENCV_CORE_DEPTH_FLOAT64, 3);

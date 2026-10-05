@@ -37,6 +37,8 @@ static_assert(std::is_standard_layout<opencv_calib3d_distortion5>::value,
               "distortion must have standard C layout");
 static_assert(std::is_standard_layout<opencv_calib3d_pose>::value,
               "pose must have standard C layout");
+static_assert(std::is_standard_layout<opencv_calib3d_rotation_matrix>::value,
+              "rotation matrix must have standard C layout");
 
 struct opencv_calib3d_pose_result_handle {
     bool found = false;
@@ -234,6 +236,67 @@ const char *opencv_calib3d_native_backend(void) {
 #else
     return "geometry";
 #endif
+}
+
+opencv_calib3d_status opencv_calib3d_undistort_normalized(
+    const opencv_core_mat_handle *image_points,
+    const opencv_calib3d_camera_intrinsics *intrinsics,
+    const opencv_calib3d_distortion5 *distortion,
+    opencv_core_mat_handle *normalized_points) {
+    return guarded([&] {
+        validate_intrinsics(intrinsics);
+        validate_distortion(distortion);
+        const cv::Mat &images = resolve_input(image_points);
+        const int count = validate_image_points(images, true);
+        if (count > 0) validate_finite_image_points(images);
+        cv::Mat &output = resolve_output(normalized_points);
+        cv::Mat normalized;
+        if (count > 0) {
+            // All reviewed versions require continuous input. Snapshot a valid
+            // strided Core Region; never retain the borrowed header or handle.
+            const cv::Mat input = images.isContinuous() ? images : images.clone();
+            // Empty coefficients are the documented zero-distortion model.
+            // Avoid meaningless 0*r6 overflow for large finite ideal points.
+            const bool zero_distortion = distortion->k1 == 0 && distortion->k2 == 0 &&
+                distortion->p1 == 0 && distortion->p2 == 0 && distortion->k3 == 0;
+            const cv::Mat coefficients = zero_distortion ? cv::Mat() : distortion_vector(*distortion);
+            checkpoint(13);
+            cv::undistortPoints(input, normalized, camera_matrix(*intrinsics),
+                                coefficients, cv::noArray(), cv::noArray(),
+                                cv::TermCriteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS,
+                                                 20, 1.0e-12));
+            checkpoint(14);
+            require(normalized.dims == 2 && normalized.type() == CV_64FC2 &&
+                    normalized.cols == 1 && normalized.rows == count,
+                    "native undistortPoints output schema differs");
+            validate_finite_image_points(normalized);
+        }
+        output = std::move(normalized);
+    });
+}
+
+opencv_calib3d_status opencv_calib3d_rotation_matrix_of(
+    const opencv_calib3d_pose *pose, opencv_calib3d_rotation_matrix *matrix) {
+    if (matrix != nullptr) *matrix = {};
+    return guarded([&] {
+        require(matrix != nullptr, "null rotation-matrix output");
+        validate_pose(pose);
+        checkpoint(15);
+        cv::Mat rotation;
+        cv::Rodrigues(rotation_vector(*pose), rotation);
+        checkpoint(16);
+        require(rotation.dims == 2 && rotation.rows == 3 && rotation.cols == 3 &&
+                rotation.type() == CV_64FC1, "native Rodrigues output schema differs");
+        for (int row = 0; row < 3; ++row)
+            for (int col = 0; col < 3; ++col)
+                require(std::isfinite(rotation.at<double>(row,col)),
+                        "native Rodrigues output is nonfinite");
+        const opencv_calib3d_rotation_matrix value{
+            rotation.at<double>(0,0), rotation.at<double>(0,1), rotation.at<double>(0,2),
+            rotation.at<double>(1,0), rotation.at<double>(1,1), rotation.at<double>(1,2),
+            rotation.at<double>(2,0), rotation.at<double>(2,1), rotation.at<double>(2,2)};
+        *matrix = value;
+    });
 }
 
 opencv_calib3d_status opencv_calib3d_project_points(
