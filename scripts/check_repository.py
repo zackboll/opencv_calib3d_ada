@@ -33,6 +33,8 @@ def main() -> None:
     commits = [m["pins"][-1]["opencv_core"]["commit"] for m in manifests]
     check(len(set(commits)) == 1 and re.fullmatch(r"[0-9a-f]{40}", commits[0]) is not None,
           "Core pins must be identical full commits")
+    check(commits[0] == "4da9d35ea21e1b2efe96296243ea668b488c6326", "qualified Core pin changed")
+    check(production["version"] == "0.1.0-dev", "review task must not bump version")
 
     header = (ROOT / "cpp/opencv_calib3d_shim.h").read_text()
     ada = (ROOT / "src/internal/opencv-calib3d-internal-c_api.ads").read_text()
@@ -54,7 +56,12 @@ def main() -> None:
 
     tests = (ROOT / "tests/src/calib3d_tests.adb").read_text()
     registrations = re.findall(r"Result\.Add_Test\s*\(Caller\.Create", tests)
-    check(len(registrations) == 32, "update documented AUnit inventory when changing tests")
+    check(len(registrations) == 40, "update documented AUnit inventory when changing tests")
+    check(len(declared) == 20, "update private ABI inventory when changing exports")
+    check("final_homography_inlier(value->matrix" in cpp and "native_mask.copyTo" not in cpp,
+          "homography must independently classify final H")
+    check("count >= 5" in cpp and "cv::findHomography(source, destination, cv::RANSAC" in cpp,
+          "homography robust-only minimum/method changed")
     check({"opencv_calib3d_undistort_normalized", "opencv_calib3d_rotation_matrix_of"} <= declared,
           "missing camera geometry ABI")
     check("20, 1.0e-12" in cpp and "cv::TermCriteria::COUNT | cv::TermCriteria::EPS" in cpp,

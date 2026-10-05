@@ -63,3 +63,30 @@ int32_t calib3d_test_rotation_layout(int32_t field) {
 void calib3d_test_fill_rotation(opencv_calib3d_rotation_matrix *v) {
     *v = (opencv_calib3d_rotation_matrix){1,2,3,4,5,6,7,8,9};
 }
+
+int32_t calib3d_test_homography_layout(int32_t field) {
+    const size_t values[] = {
+        sizeof(opencv_calib3d_homography), _Alignof(opencv_calib3d_homography),
+        offsetof(opencv_calib3d_homography, h00), offsetof(opencv_calib3d_homography, h01),
+        offsetof(opencv_calib3d_homography, h02), offsetof(opencv_calib3d_homography, h10),
+        offsetof(opencv_calib3d_homography, h11), offsetof(opencv_calib3d_homography, h12),
+        offsetof(opencv_calib3d_homography, h20), offsetof(opencv_calib3d_homography, h21),
+        offsetof(opencv_calib3d_homography, h22)
+    };
+    return field >= 0 && field < 11 ? (int32_t)values[field] : -1;
+}
+void calib3d_test_fill_homography(opencv_calib3d_homography *v) {
+    *v = (opencv_calib3d_homography){1,2,3,4,5,6,7,8,9};
+}
+int32_t calib3d_test_homography_options_layout(int32_t field) {
+    const size_t values[] = {
+        sizeof(opencv_calib3d_homography_options), _Alignof(opencv_calib3d_homography_options),
+        offsetof(opencv_calib3d_homography_options, maximum_iterations),
+        offsetof(opencv_calib3d_homography_options, reprojection_threshold_pixels),
+        offsetof(opencv_calib3d_homography_options, confidence)
+    };
+    return field >= 0 && field < 5 ? (int32_t)values[field] : -1;
+}
+void calib3d_test_fill_homography_options(opencv_calib3d_homography_options *v) {
+    *v = (opencv_calib3d_homography_options){2000,3.0,0.995};
+}

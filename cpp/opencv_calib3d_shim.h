@@ -17,6 +17,7 @@ extern "C" {
 
 typedef struct opencv_core_mat_handle opencv_core_mat_handle;
 typedef struct opencv_calib3d_pose_result_handle opencv_calib3d_pose_result_handle;
+typedef struct opencv_calib3d_homography_result_handle opencv_calib3d_homography_result_handle;
 typedef int32_t opencv_calib3d_status;
 
 enum {
@@ -48,6 +49,34 @@ typedef struct opencv_calib3d_rotation_matrix {
     double m10, m11, m12;
     double m20, m21, m22;
 } opencv_calib3d_rotation_matrix;
+
+typedef struct opencv_calib3d_homography {
+    double h00, h01, h02;
+    double h10, h11, h12;
+    double h20, h21, h22;
+} opencv_calib3d_homography;
+
+typedef struct opencv_calib3d_homography_options {
+    int32_t maximum_iterations;
+    double reprojection_threshold_pixels;
+    double confidence;
+} opencv_calib3d_homography_options;
+
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_find_homography_ransac(
+    const opencv_core_mat_handle *source_points,
+    const opencv_core_mat_handle *destination_points,
+    const opencv_calib3d_homography_options *options,
+    opencv_calib3d_homography_result_handle **result);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_homography_result_found(
+    const opencv_calib3d_homography_result_handle *result, uint8_t *found);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_homography_result_matrix(
+    const opencv_calib3d_homography_result_handle *result, opencv_calib3d_homography *matrix);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_homography_result_inlier_count(
+    const opencv_calib3d_homography_result_handle *result, int32_t *count);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_homography_result_inlier(
+    const opencv_calib3d_homography_result_handle *result, int32_t index, int32_t *correspondence_index);
+OPENCV_CALIB3D_API void opencv_calib3d_homography_result_destroy(
+    opencv_calib3d_homography_result_handle *result);
 
 OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_rotation_matrix_of(
     const opencv_calib3d_pose *pose, opencv_calib3d_rotation_matrix *matrix);

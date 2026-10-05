@@ -997,11 +997,364 @@ package body Calib3D_Tests is
               and then Values (1) (2) > 0.0, "scaled bearing norm / positive Z");
    end Bearing_Range;
 
+   H_Policy : constant Homography_RANSAC_Options := (2_000, 0.1, 0.999);
+   function H_Source return Image_Point_Array is
+   begin
+      return Values : Image_Point_Array (1 .. 24) do
+         for I in Values'Range loop
+            Values (I) := [OpenCV.Float64_Value ((I - 1) mod 6) * 40.0 - 100.0,
+                           OpenCV.Float64_Value ((I - 1) / 6) * 35.0 - 50.0];
+         end loop;
+      end return;
+   end H_Source;
+   --  Independent fixture generation: neither new mapping API nor OpenCV.
+   function H_Destination (Source : Image_Point_Array) return Image_Point_Array is
+   begin
+      return Values : Image_Point_Array (Source'Range) do
+         for I in Source'Range loop
+            declare
+               X : constant OpenCV.Float64_Value := Source (I) (0);
+               Y : constant OpenCV.Float64_Value := Source (I) (1);
+               W : constant OpenCV.Float64_Value := 0.001 * X - 0.002 * Y + 1.0;
+            begin
+               Values (I) := [(1.2 * X + 0.1 * Y + 20.0) / W,
+                              (-0.05 * X + 0.9 * Y + 10.0) / W];
+            end;
+         end loop;
+      end return;
+   end H_Destination;
+
+   procedure Homography_Map (T : in out Fixture) is
+      pragma Unreferenced (T);
+      H : constant Homography_Matrix := [[2.0, 0.5, 10.0], [0.0, 3.0, -5.0], [0.01, 0.02, 1.0]];
+      Scaled : Homography_Matrix := H;
+      Points : constant Image_Point_Array := [[0.0, 0.0], [10.0, 20.0], [-20.0, 10.0]];
+      Expected : constant Image_Point_Array := [[10.0, -5.0], [40.0 / 1.5, 55.0 / 1.5], [-25.0, 25.0]];
+   begin
+      for V of Scaled loop
+         V := -2.0 * V;
+      end loop;
+      for I in Points'Range loop
+         declare
+            M : constant Homography_Point_Result := Map_With_Homography (H, Points (I));
+            S : constant Homography_Point_Result := Map_With_Homography (Scaled, Points (I));
+         begin
+            Assert (M.Finite and then S.Finite, "hand-authored mappings finite");
+            for J in 0 .. 1 loop
+               Assert (Near (M.Point (J), Expected (I) (J)) and then Near (S.Point (J), Expected (I) (J)),
+                       "independent projective/scale-invariance oracle");
+            end loop;
+         end;
+      end loop;
+      Assert (not Map_With_Homography (H, [-100.0, 0.0]).Finite, "w=0 point at infinity");
+      Ada.Text_IO.Put_Line ("homography mapping: hand-authored oracle, negative common scale, w=0 PASS");
+   end Homography_Map;
+
+   procedure Homography_Map_Range (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Deliberate IEEE nonfinite fixtures, as in existing negative tests.
+      pragma Suppress (Validity_Check);
+      H : Homography_Matrix := [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0E-200]];
+      Tiny : constant Homography_Point_Result := Map_With_Homography (H, [1.0E-200, 2.0E-200]);
+   begin
+      Assert (Tiny.Finite and then Near (Tiny.Point (0), 1.0) and then Near (Tiny.Point (1), 2.0),
+              "small nonzero denominator not rejected");
+      Assert (not Map_With_Homography (H, [1.0E200, 1.0E200]).Finite, "division overflow not finite");
+      H (2, 2) := 1.0;
+      H (0, 0) := 2.0;
+      Assert (not Map_With_Homography (H, [OpenCV.Float64_Value'Last, 0.0]).Finite, "product overflow not finite");
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         for Row in 0 .. 2 loop
+            for Col in 0 .. 2 loop
+               declare
+                  Bad : Homography_Matrix := H;
+               begin
+                  Bad (Row, Col) := OpenCV.Float64_Value (Nonfinite (Kind));
+                  begin
+                     declare
+                        M : constant Homography_Point_Result := Map_With_Homography (Bad, [1.0, 2.0]);
+                        pragma Unreferenced (M);
+                     begin
+                        Assert (False, "nonfinite H accepted");
+                     end;
+                  exception
+                     when OpenCV.OpenCV_Error => null;
+                  end;
+               end;
+            end loop;
+         end loop;
+         for J in 0 .. 1 loop
+            declare
+               P : Image_Point := [1.0, 2.0];
+            begin
+               P (J) := OpenCV.Float64_Value (Nonfinite (Kind));
+               begin
+                  declare
+                     M : constant Homography_Point_Result := Map_With_Homography (H, P);
+                     pragma Unreferenced (M);
+                  begin
+                     Assert (False, "nonfinite map input accepted");
+                  end;
+               exception
+                  when OpenCV.OpenCV_Error => null;
+               end;
+            end;
+         end loop;
+      end loop;
+   end Homography_Map_Range;
+
+   procedure Check_Homography_Final
+     (Estimate : Homography_Estimate; Source, Destination : Image_Point_Array;
+      Maximum_Error : out OpenCV.Float64_Value)
+   is
+      Indices : constant Inlier_Index_Array := Inliers (Estimate);
+      H : constant Homography_Matrix := Homography (Estimate);
+   begin
+      Maximum_Error := 0.0;
+      Assert (Found (Estimate) and then Inlier_Count (Estimate) >= 4, "usable homography support");
+      for I in Indices'Range loop
+         Assert (Indices (I) in 1 .. Source'Length and then Inlier (Estimate, I) = Indices (I), "valid correspondence index");
+         if I > 1 then
+            Assert (Indices (I) > Indices (I - 1), "unique ascending indices");
+         end if;
+      end loop;
+      for I in 1 .. Source'Length loop
+         declare
+            P : constant Image_Point := Source (Source'First + I - 1);
+            D : constant Image_Point := Destination (Destination'First + I - 1);
+            W : constant OpenCV.Float64_Value := H (2, 0) * P (0) + H (2, 1) * P (1) + H (2, 2);
+            --  Independent forward formula, not Map_With_Homography.
+            X : constant OpenCV.Float64_Value := (H (0, 0) * P (0) + H (0, 1) * P (1) + H (0, 2)) / W;
+            Y : constant OpenCV.Float64_Value := (H (1, 0) * P (0) + H (1, 1) * P (1) + H (1, 2)) / W;
+            Error : constant OpenCV.Float64_Value := Math.Sqrt ((X - D (0))**2 + (Y - D (1))**2);
+         begin
+            Assert (Contains (Indices, I) = (Error <= H_Policy.Reprojection_Threshold_Pixels),
+                    "every included/excluded point matches final-model threshold");
+            Maximum_Error := OpenCV.Float64_Value'Max (Maximum_Error, Error);
+         end;
+      end loop;
+      begin
+         declare
+            Index : constant Positive := Inlier (Estimate, Inlier_Count (Estimate) + 1);
+            pragma Unreferenced (Index);
+         begin
+            Assert (False, "invalid public homography index accepted");
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+   end Check_Homography_Final;
+
+   procedure Homography_Clean (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Non-one array bounds prove public indices are correspondence positions.
+      Source : constant Image_Point_Array (11 .. 34) := H_Source;
+      Destination : constant Image_Point_Array (51 .. 74) := H_Destination (Source);
+      Estimate : constant Homography_Estimate := Estimate_Homography_RANSAC (Source, Destination, H_Policy);
+      Error : OpenCV.Float64_Value;
+   begin
+      Check_Homography_Final (Estimate, Source, Destination, Error);
+      Assert (Inlier_Count (Estimate) = 24 and then Error < 1.0E-3, "clean known projective mapping");
+      Ada.Text_IO.Put_Line ("clean homography: 24/24 final inliers; max mapping error=" & OpenCV.Float64_Value'Image (Error));
+   end Homography_Clean;
+
+   procedure Homography_Outliers (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Source : constant Image_Point_Array := H_Source;
+      Destination : Image_Point_Array := H_Destination (Source);
+      Error : OpenCV.Float64_Value;
+   begin
+      for I in Destination'Range loop
+         if I = 2 or else I = 7 or else I = 15 then
+            Destination (I) := [Destination (I) (0) + 5_000.0, Destination (I) (1) - 4_000.0];
+         end if;
+      end loop;
+      declare
+         Estimate : constant Homography_Estimate := Estimate_Homography_RANSAC (Source, Destination, H_Policy);
+      begin
+         Check_Homography_Final (Estimate, Source, Destination, Error);
+         Assert (not Contains (Inliers (Estimate), 2) and then not Contains (Inliers (Estimate), 7) and then
+                 not Contains (Inliers (Estimate), 15), "gross outlier rejection");
+         Ada.Text_IO.Put_Line ("outlier homography: final inliers=" & Natural'Image (Inlier_Count (Estimate)) &
+           "; 2/7/15 rejected; every final-model inclusion/exclusion threshold checked");
+      end;
+   end Homography_Outliers;
+
+   procedure Homography_No_Model (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Source, Destination : Image_Point_Array (1 .. 24);
+   begin
+      for I in Source'Range loop
+         Source (I) := [OpenCV.Float64_Value (I), 2.0 * OpenCV.Float64_Value (I)];
+         Destination (I) := [3.0 * OpenCV.Float64_Value (I), 4.0 * OpenCV.Float64_Value (I)];
+      end loop;
+      declare
+         Estimate : constant Homography_Estimate := Estimate_Homography_RANSAC (Source, Destination, H_Policy);
+         Indices : constant Inlier_Index_Array := Inliers (Estimate);
+      begin
+         Assert (not Found (Estimate) and then Inlier_Count (Estimate) = 0 and then
+                 Indices'First = 1 and then Indices'Last = 0, "collinear no-model contract");
+         begin
+            declare
+               H : constant Homography_Matrix := Homography (Estimate);
+               pragma Unreferenced (H);
+            begin
+               Assert (False, "no-model homography accessible");
+            end;
+         exception
+            when OpenCV.OpenCV_Error => null;
+         end;
+         begin
+            declare
+               I : constant Positive := Inlier (Estimate, 1);
+               pragma Unreferenced (I);
+            begin
+               Assert (False, "no-model inlier accessible");
+            end;
+         exception
+            when OpenCV.OpenCV_Error => null;
+         end;
+      end;
+      Ada.Text_IO.Put_Line ("homography collinear: success status, Found=False, empty inliers, inaccessible H");
+   end Homography_No_Model;
+
+   procedure Reject_Homography
+     (Source, Destination : Image_Point_Array;
+      Options : Homography_RANSAC_Options := H_Policy) is
+   begin
+      declare
+         Estimate : constant Homography_Estimate := Estimate_Homography_RANSAC (Source, Destination, Options);
+         pragma Unreferenced (Estimate);
+      begin
+         Assert (False, "invalid homography accepted");
+      end;
+   exception
+      when OpenCV.OpenCV_Error => null;
+   end Reject_Homography;
+
+   procedure Homography_Counts (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Source : constant Image_Point_Array := H_Source;
+      Destination : constant Image_Point_Array := H_Destination (Source);
+      Five : constant Image_Point_Array := [Source (1), Source (6), Source (19), Source (24), Source (11)];
+      Five_D : constant Image_Point_Array := H_Destination (Five);
+      Estimate : constant Homography_Estimate := Estimate_Homography_RANSAC (Five, Five_D, H_Policy);
+   begin
+      for N in 0 .. 4 loop
+         Reject_Homography (Source (1 .. N), Destination (1 .. N));
+      end loop;
+      Reject_Homography (Source, Destination (1 .. 23));
+      Reject_Homography (Source (1 .. 23), Destination);
+      Assert (Found (Estimate), "five points may attempt robust path");
+      Ada.Text_IO.Put_Line ("homography counts: 0..4 rejected; 5 nondegenerate points robust PASS");
+   end Homography_Counts;
+
+   procedure Homography_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      Source : Image_Point_Array := H_Source;
+      Destination : Image_Point_Array := H_Destination (Source);
+      Bad : Homography_RANSAC_Options := H_Policy;
+      function Wider_Than_Native (Value : Interfaces.Unsigned_64) return Boolean is
+         use type Interfaces.Unsigned_64;
+      begin
+         return Value > Interfaces.Unsigned_64 (Interfaces.Integer_32'Last);
+      end Wider_Than_Native;
+      function Above_Native_Limit (Native_Limit : Interfaces.Unsigned_64) return Positive is
+         use type Interfaces.Unsigned_64;
+      begin
+         return Positive (Native_Limit + 1);
+      end Above_Native_Limit;
+   begin
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         for J in 0 .. 1 loop
+            declare
+               S : constant Image_Point := Source (1);
+               D : constant Image_Point := Destination (1);
+            begin
+               Source (1) (J) := OpenCV.Float64_Value (Nonfinite (Kind));
+               Reject_Homography (Source, Destination);
+               Source (1) := S;
+               Destination (1) (J) := OpenCV.Float64_Value (Nonfinite (Kind));
+               Reject_Homography (Source, Destination);
+               Destination (1) := D;
+            end;
+         end loop;
+         Bad := H_Policy; Bad.Confidence := OpenCV.Float64_Value (Nonfinite (Kind));
+         Reject_Homography (Source, Destination, Bad);
+         Bad := H_Policy; Bad.Reprojection_Threshold_Pixels := OpenCV.Float64_Value (Nonfinite (Kind));
+         Reject_Homography (Source, Destination, Bad);
+      end loop;
+      for Value of Reprojection_Error_Array'[0.0, -1.0, 1.0E-300, OpenCV.Float64_Value'Last] loop
+         Bad := H_Policy; Bad.Reprojection_Threshold_Pixels := Value;
+         Reject_Homography (Source, Destination, Bad);
+      end loop;
+      for Value of Reprojection_Error_Array'[-1.0, 0.0, 1.0, 2.0] loop
+         Bad := H_Policy; Bad.Confidence := Value;
+         Reject_Homography (Source, Destination, Bad);
+      end loop;
+      --  Positive excludes zero/negative iterations at Ada assignment. On
+      --  wider targets separately exercise the native INT32 bound.
+      if Wider_Than_Native (Interfaces.Unsigned_64 (Positive'Last)) then
+         Bad := H_Policy;
+         Bad.Maximum_Iterations := Above_Native_Limit (Interfaces.Unsigned_64 (Interfaces.Integer_32'Last));
+         Reject_Homography (Source, Destination, Bad);
+      end if;
+   end Homography_Invalid;
+
+   procedure Homography_Layout (T : in out Fixture) is
+      pragma Unreferenced (T);
+      function Layout (Field : Interfaces.Integer_32) return Interfaces.Integer_32
+        with Import, Convention => C, External_Name => "calib3d_test_homography_layout";
+      procedure Fill (Value : access ABI.C_Homography)
+        with Import, Convention => C, External_Name => "calib3d_test_fill_homography";
+      function Options_Layout (Field : Interfaces.Integer_32) return Interfaces.Integer_32
+        with Import, Convention => C, External_Name => "calib3d_test_homography_options_layout";
+      procedure Fill_Options (Value : access ABI.C_Homography_Options)
+        with Import, Convention => C, External_Name => "calib3d_test_fill_homography_options";
+      Value : aliased ABI.C_Homography;
+      Options : aliased ABI.C_Homography_Options;
+      type Positions is array (Natural range <>) of Natural;
+      Offsets : constant Positions := [Value.H00'Position, Value.H01'Position, Value.H02'Position,
+        Value.H10'Position, Value.H11'Position, Value.H12'Position,
+        Value.H20'Position, Value.H21'Position, Value.H22'Position];
+      Option_Offsets : constant Positions := [Options.Maximum_Iterations'Position,
+        Options.Reprojection_Threshold_Pixels'Position, Options.Confidence'Position];
+   begin
+      Assert (ABI.C_Homography'Size = Natural (Layout (0)) * System.Storage_Unit, "homography C/Ada size");
+      Assert (ABI.C_Homography'Alignment = Natural (Layout (1)), "homography C/Ada alignment");
+      for I in Offsets'Range loop
+         Assert (Offsets (I) = Natural (Layout (Interfaces.Integer_32 (I + 2))), "homography field offset");
+      end loop;
+      Fill (Value'Access);
+      Assert (Value.H00 = 1.0 and then Value.H01 = 2.0 and then Value.H02 = 3.0 and then
+              Value.H10 = 4.0 and then Value.H11 = 5.0 and then Value.H12 = 6.0 and then
+              Value.H20 = 7.0 and then Value.H21 = 8.0 and then Value.H22 = 9.0, "C-written homography interchange");
+      Assert (ABI.C_Homography_Options'Size = Natural (Options_Layout (0)) * System.Storage_Unit and then
+              ABI.C_Homography_Options'Alignment = Natural (Options_Layout (1)), "homography options C/Ada layout");
+      for I in Option_Offsets'Range loop
+         Assert (Option_Offsets (I) = Natural (Options_Layout (Interfaces.Integer_32 (I + 2))), "options field offset");
+      end loop;
+      Fill_Options (Options'Access);
+      Assert (Options.Maximum_Iterations = 2000 and then Options.Reprojection_Threshold_Pixels = 3.0 and then
+              Options.Confidence = 0.995, "C-written homography options interchange");
+      Ada.Text_IO.Put_Line ("homography layout: compiler size=" & Interfaces.Integer_32'Image (Layout (0)) &
+        " alignment=" & Interfaces.Integer_32'Image (Layout (1)) & "; all nine offsets/interchange; options layout PASS");
+   end Homography_Layout;
+
    package Caller is new AUnit.Test_Caller (Fixture);
 
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
+      Result.Add_Test (Caller.Create ("homography independent projective map/scale/infinity", Homography_Map'Access));
+      Result.Add_Test (Caller.Create ("homography mapping range/nonfinite validation", Homography_Map_Range'Access));
+      Result.Add_Test (Caller.Create ("clean robust homography final-model oracle", Homography_Clean'Access));
+      Result.Add_Test (Caller.Create ("gross-outlier homography final classification", Homography_Outliers'Access));
+      Result.Add_Test (Caller.Create ("collinear homography no-model contract", Homography_No_Model'Access));
+      Result.Add_Test (Caller.Create ("homography four-point rejection/five robust path", Homography_Counts'Access));
+      Result.Add_Test (Caller.Create ("invalid homography points/options", Homography_Invalid'Access));
+      Result.Add_Test (Caller.Create ("compiler-derived homography layout/interchange", Homography_Layout'Access));
       Result.Add_Test (Caller.Create ("projectPoints identity pinhole oracle", Projection_Identity'Access));
       Result.Add_Test (Caller.Create ("projectPoints translation oracle", Projection_Translation'Access));
       Result.Add_Test (Caller.Create ("projectPoints rotation oracle", Projection_Rotation'Access));

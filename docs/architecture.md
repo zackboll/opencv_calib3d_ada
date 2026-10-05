@@ -58,3 +58,13 @@ Rodrigues remains native. R^T maps camera bearings to world; translation enters
 point transforms and the camera-center origin, never direction transforms.
 The existing fault helper/dylib architecture is reused for 20 new stage/kind cases.
 See `camera-rays-contract.md`; no terrain/Earth model or new dependencies.
+
+Task 004 adds a separate semantic homography C record/options and opaque result,
+six private exports, and a limited controlled Ada value estimate. Noncontinuous
+Nx1 Float64 C2 inputs are snapshotted before legacy findHomography RANSAC; handles
+are never retained. Final native H is validated, then original Float64 points are
+independently classified with robust forward hypot instead of publishing the
+upstream mask. Four-point direct native behavior is excluded by a >=5 binding
+minimum. At least four final-model inliers are required before publication.
+Pure-Ada mapping reports projective infinity/overflow without clamping. This is
+planar/projective verification, not a 3-D terrain pose substitute or a new backend.

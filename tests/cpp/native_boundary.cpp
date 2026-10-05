@@ -1,6 +1,7 @@
 #include "opencv_calib3d_shim.h"
 #include "opencv_core_shim.h"
 #include "opencv_core_module_bridge.hpp"
+#include "homography_profile.hpp"
 
 #include <opencv2/core.hpp>
 #include <cmath>
@@ -281,7 +282,163 @@ void camera_geometry_boundary() {
     std::cout << "PASS: normalized zero/five-coefficient inversion, strided ROI, Rodrigues identity/Rz; raw negatives\n";
 }
 
+void homography_boundary() {
+    using HResult = std::unique_ptr<opencv_calib3d_homography_result_handle,
+                                    decltype(&opencv_calib3d_homography_result_destroy)>;
+    constexpr int n=24;
+    auto source_parent=matrix(n,2,OPENCV_CORE_DEPTH_FLOAT64,2);
+    auto destination_parent=matrix(n,2,OPENCV_CORE_DEPTH_FLOAT64,2);
+    opencv_core_mat_handle *sraw=nullptr, *draw=nullptr;
+    check(opencv_core_mat_region(source_parent.get(),0,0,1,n,&sraw)==0 &&
+          opencv_core_mat_region(destination_parent.get(),0,0,1,n,&draw)==0,
+          "real Core homography Regions");
+    Mat source(sraw,opencv_core_mat_destroy), destination(draw,opencv_core_mat_destroy);
+    check(!output(sraw).isContinuous() && !output(draw).isContinuous(), "homography Regions strided");
+    for (int i=0;i<n;++i) {
+        const double x=(i%6)*40.0-100, y=(i/6)*35.0-50;
+        const double w=.001*x-.002*y+1;
+        output(sraw).at<cv::Vec2d>(i,0)={x,y};
+        output(draw).at<cv::Vec2d>(i,0)={(1.2*x+.1*y+20)/w,(-.05*x+.9*y+10)/w};
+    }
+    const opencv_calib3d_homography_options options{2000,.1,.999};
+    auto estimate=[&](const opencv_core_mat_handle *s,const opencv_core_mat_handle *d) {
+        opencv_calib3d_homography_result_handle *raw=nullptr;
+        check(opencv_calib3d_find_homography_ransac(s,d,&options,&raw)==0 && raw,
+              "raw homography estimation");
+        return HResult(raw,opencv_calib3d_homography_result_destroy);
+    };
+    auto verify=[&](HResult &r,bool outliers) {
+        uint8_t found=0; int32_t count=0;
+        opencv_calib3d_homography h{};
+        check(opencv_calib3d_homography_result_found(r.get(),&found)==0 && found==1 &&
+              opencv_calib3d_homography_result_matrix(r.get(),&h)==0 &&
+              opencv_calib3d_homography_result_inlier_count(r.get(),&count)==0 && count>=4,
+              "raw homography accessors");
+        bool published[n]={}; int32_t previous=-1;
+        for (int i=0;i<count;++i) {
+            int32_t index=-1;
+            check(opencv_calib3d_homography_result_inlier(r.get(),i,&index)==0 &&
+                  index>previous && index<n, "homography indices valid unique ascending");
+            published[index]=true; previous=index;
+        }
+        double maximum_error=0;
+        for (int i=0;i<n;++i) {
+            const auto s=output(sraw).at<cv::Vec2d>(i,0), d=output(draw).at<cv::Vec2d>(i,0);
+            const double w=h.h20*s[0]+h.h21*s[1]+h.h22;
+            const double xp=(h.h00*s[0]+h.h01*s[1]+h.h02)/w;
+            const double yp=(h.h10*s[0]+h.h11*s[1]+h.h12)/w;
+            const double error=std::hypot(xp-d[0],yp-d[1]);
+            check(published[i]==(std::isfinite(xp) && std::isfinite(yp) && error<=.1),
+                  "every public inclusion/exclusion independently matches FINAL H Float64 threshold");
+            if (!outliers) maximum_error=std::max(maximum_error,error);
+        }
+        if (outliers) check(!published[1] && !published[6] && !published[14], "gross outliers survived");
+        else check(count==n && maximum_error<1e-3, "clean homography mapping oracle");
+        int32_t index=99;
+        check(opencv_calib3d_homography_result_inlier(r.get(),-1,&index)==1 && index==0 &&
+              opencv_calib3d_homography_result_inlier(r.get(),count,&index)==1 && index==0,
+              "homography invalid index clearing");
+        std::cout << "PASS: raw " << (outliers?"outlier":"clean") << " homography final inliers="
+                  << count << " clean maximum error=" << maximum_error << "; FINAL H threshold verified\n";
+    };
+    auto clean=estimate(sraw,draw); verify(clean,false);
+    for (int i : {1,6,14}) output(draw).at<cv::Vec2d>(i,0)+=cv::Vec2d(5000,-4000);
+    auto robust=estimate(sraw,draw); verify(robust,true);
+    auto invalid=[&](const opencv_core_mat_handle *s,const opencv_core_mat_handle *d,
+                     const opencv_calib3d_homography_options *o) {
+        auto *raw=clean.get(); // live result, not a fabricated opaque handle
+        check(opencv_calib3d_find_homography_ransac(s,d,o,&raw)==1 && raw==nullptr,
+              "invalid homography arguments/output clearing");
+    };
+    invalid(nullptr,draw,&options); invalid(sraw,nullptr,&options); invalid(sraw,draw,nullptr);
+    check(opencv_calib3d_find_homography_ransac(sraw,draw,&options,nullptr)==1,"null homography output");
+    for (int count=0;count<=4;++count) {
+        auto bad=matrix(1,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+        if (count==0) output(bad.get()).release();
+        else output(bad.get())=output(sraw).rowRange(0,count);
+        invalid(bad.get(),bad.get(),&options);
+    }
+    auto five_s=matrix(5,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    auto five_d=matrix(5,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    for (int i=0;i<5;++i) {
+        const int j[]={0,5,18,23,10};
+        output(five_s.get()).at<cv::Vec2d>(i,0)=output(sraw).at<cv::Vec2d>(j[i],0);
+        output(five_d.get()).at<cv::Vec2d>(i,0)=output(draw).at<cv::Vec2d>(j[i],0);
+    }
+    auto five=estimate(five_s.get(),five_d.get());
+    uint8_t found=0;
+    check(opencv_calib3d_homography_result_found(five.get(),&found)==0 && found==1,"five robust permitted");
+    invalid(five_s.get(),draw,&options);
+    for (int channels : {1,2,3}) {
+        auto bad=matrix(n,1,channels==2?OPENCV_CORE_DEPTH_FLOAT32:OPENCV_CORE_DEPTH_FLOAT64,channels);
+        invalid(bad.get(),draw,&options); invalid(sraw,bad.get(),&options);
+    }
+    auto shape=matrix(2,3,OPENCV_CORE_DEPTH_FLOAT64,2);
+    invalid(shape.get(),draw,&options); invalid(sraw,shape.get(),&options);
+    const int sizes[]={2,2,2}; output(shape.get())=cv::Mat(3,sizes,CV_64FC2);
+    invalid(shape.get(),draw,&options); invalid(sraw,shape.get(),&options);
+    auto bad=options;
+    for (int iterations : {0,-1}) {bad=options;bad.maximum_iterations=iterations;invalid(sraw,draw,&bad);}
+    for (double v : {0.,-1.,1e-300,std::numeric_limits<double>::max(),
+                     std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::infinity(),
+                     -std::numeric_limits<double>::infinity()}) {
+        bad=options;bad.reprojection_threshold_pixels=v;invalid(sraw,draw,&bad);
+    }
+    for (double v : {0.,-1.,1.,2.,std::numeric_limits<double>::quiet_NaN(),
+                     std::numeric_limits<double>::infinity(),-std::numeric_limits<double>::infinity()}) {
+        bad=options;bad.confidence=v;invalid(sraw,draw,&bad);
+    }
+    for (auto *handle : {sraw,draw}) for (double v : {std::numeric_limits<double>::quiet_NaN(),
+                       std::numeric_limits<double>::infinity(),-std::numeric_limits<double>::infinity()}) {
+        const auto saved=output(handle).at<cv::Vec2d>(0,0);
+        output(handle).at<cv::Vec2d>(0,0)[0]=v; invalid(sraw,draw,&options);
+        output(handle).at<cv::Vec2d>(0,0)=saved;
+    }
+    opencv_calib3d_homography h{9,9,9,9,9,9,9,9,9};
+    auto zero=[&] {return h.h00==0 && h.h01==0 && h.h02==0 && h.h10==0 && h.h11==0 &&
+                         h.h12==0 && h.h20==0 && h.h21==0 && h.h22==0;};
+    int32_t count=99,index=99; found=9;
+    check(opencv_calib3d_homography_result_found(nullptr,&found)==1 && found==0 &&
+          opencv_calib3d_homography_result_matrix(nullptr,&h)==1 && zero() &&
+          opencv_calib3d_homography_result_inlier_count(nullptr,&count)==1 && count==0 &&
+          opencv_calib3d_homography_result_inlier(nullptr,0,&index)==1 && index==0,
+          "homography null handle output clearing");
+    check(opencv_calib3d_homography_result_found(clean.get(),nullptr)==1 &&
+          opencv_calib3d_homography_result_matrix(clean.get(),nullptr)==1 &&
+          opencv_calib3d_homography_result_inlier_count(clean.get(),nullptr)==1 &&
+          opencv_calib3d_homography_result_inlier(clean.get(),0,nullptr)==1,"null homography accessor outputs");
+    auto line_s=matrix(n,1,OPENCV_CORE_DEPTH_FLOAT64,2), line_d=matrix(n,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    for (int i=0;i<n;++i) {
+        output(line_s.get()).at<cv::Vec2d>(i,0)={double(i),2.*i};
+        output(line_d.get()).at<cv::Vec2d>(i,0)={3.*i,4.*i};
+    }
+    auto absent=estimate(line_s.get(),line_d.get()); found=9;count=99;h={9,9,9,9,9,9,9,9,9};
+    check(opencv_calib3d_homography_result_found(absent.get(),&found)==0 && found==0 &&
+          opencv_calib3d_homography_result_inlier_count(absent.get(),&count)==0 && count==0 &&
+          opencv_calib3d_homography_result_matrix(absent.get(),&h)==1 && zero(),"collinear no-model contract");
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+    const int expected[]={0,1,2,3,4,4};
+    for (int stage : {17,18,19,20}) for (int kind=1;kind<=5;++kind) {
+        auto *raw=clean.get(); opencv_calib3d_test_fail(stage,kind);
+        check(opencv_calib3d_find_homography_ransac(sraw,draw,&options,&raw)==expected[kind] && !raw,
+              "homography exception/publication atomicity");
+    }
+    for (int kind=1;kind<=5;++kind) {
+        h={9,9,9,9,9,9,9,9,9};opencv_calib3d_test_fail(21,kind);
+        check(opencv_calib3d_homography_result_matrix(clean.get(),&h)==expected[kind] && zero(),
+              "homography matrix fault clearing");
+        index=99;opencv_calib3d_test_fail(22,kind);
+        check(opencv_calib3d_homography_result_inlier(clean.get(),0,&index)==expected[kind] && index==0,
+              "homography inlier fault clearing");
+    }
+    std::cout << "PASS: homography 30 fault scenarios, null output/no partial publication\n";
+#endif
+    opencv_calib3d_homography_result_destroy(nullptr);
+    std::cout << "PASS: homography real strided Core Regions, four rejected/five robust, collinear no-model, raw negatives\n";
+}
+
 void run() {
+    homography_boundary();
     camera_geometry_boundary();
     refinement_boundary();
     constexpr int N = 20;

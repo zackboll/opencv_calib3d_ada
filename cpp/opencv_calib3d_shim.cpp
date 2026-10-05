@@ -1,5 +1,6 @@
 #include "opencv_calib3d_shim.h"
 #include "pnp_profile.hpp"
+#include "homography_profile.hpp"
 #include "opencv_core_module_bridge.hpp"
 
 #include <opencv2/core.hpp>
@@ -43,6 +44,14 @@ static_assert(std::is_standard_layout<opencv_calib3d_rotation_matrix>::value,
 struct opencv_calib3d_pose_result_handle {
     bool found = false;
     opencv_calib3d_pose pose{};
+    std::vector<int32_t> inliers;
+};
+
+static_assert(std::is_standard_layout<opencv_calib3d_homography>::value,
+              "homography must have standard C layout");
+struct opencv_calib3d_homography_result_handle {
+    bool found = false;
+    opencv_calib3d_homography matrix{};
     std::vector<int32_t> inliers;
 };
 
@@ -236,6 +245,112 @@ const char *opencv_calib3d_native_backend(void) {
 #else
     return "geometry";
 #endif
+}
+
+opencv_calib3d_status opencv_calib3d_find_homography_ransac(
+    const opencv_core_mat_handle *source_points,
+    const opencv_core_mat_handle *destination_points,
+    const opencv_calib3d_homography_options *options,
+    opencv_calib3d_homography_result_handle **result) {
+    if (result != nullptr) *result = nullptr;
+    return guarded([&] {
+        require(result != nullptr && options != nullptr, "null homography options/output");
+        require(opencv_calib3d_detail::ransac_options_fit(options->maximum_iterations,
+                options->reprojection_threshold_pixels, options->confidence),
+                "invalid homography RANSAC options");
+        const cv::Mat &original_source = resolve_input(source_points);
+        const cv::Mat &original_destination = resolve_input(destination_points);
+        const int count = validate_image_points(original_source, false);
+        require(count == validate_image_points(original_destination, false),
+                "homography correspondence counts differ");
+        require(count >= 5, "robust homography requires at least five correspondences");
+        validate_finite_image_points(original_source);
+        validate_finite_image_points(original_destination);
+        const cv::Mat source = original_source.isContinuous() ? original_source : original_source.clone();
+        const cv::Mat destination = original_destination.isContinuous() ? original_destination : original_destination.clone();
+        cv::Mat native_mask;
+        checkpoint(17);
+        const cv::Mat h = cv::findHomography(source, destination, cv::RANSAC,
+            options->reprojection_threshold_pixels, native_mask,
+            options->maximum_iterations, options->confidence);
+        checkpoint(18);
+        auto value = std::make_unique<opencv_calib3d_homography_result_handle>();
+        if (!h.empty()) {
+            if (h.dims != 2 || h.rows != 3 || h.cols != 3 || h.type() != CV_64FC1)
+                throw std::runtime_error("native homography schema is invalid");
+            bool nonzero = false;
+            for (int row = 0; row < 3; ++row) for (int col = 0; col < 3; ++col) {
+                const double coefficient = h.at<double>(row, col);
+                if (!std::isfinite(coefficient))
+                    throw std::runtime_error("native homography is nonfinite");
+                nonzero = nonzero || coefficient != 0;
+            }
+            if (!nonzero) throw std::runtime_error("native homography is all zero");
+            value->matrix = {h.at<double>(0,0),h.at<double>(0,1),h.at<double>(0,2),
+                             h.at<double>(1,0),h.at<double>(1,1),h.at<double>(1,2),
+                             h.at<double>(2,0),h.at<double>(2,1),h.at<double>(2,2)};
+            checkpoint(19);
+            // Never publish native_mask: 4.x and 5.0 differ after refinement.
+            // Classify the original Float64 values in correspondence order.
+            for (int i = 0; i < count; ++i) {
+                const auto s = original_source.at<cv::Vec2d>(i,0);
+                const auto d = original_destination.at<cv::Vec2d>(i,0);
+                if (opencv_calib3d_detail::final_homography_inlier(value->matrix,
+                    s[0],s[1],d[0],d[1],options->reprojection_threshold_pixels))
+                    value->inliers.push_back(i);
+            }
+            value->found = value->inliers.size() >= 4;
+            if (!value->found) {
+                value->matrix = {};
+                value->inliers.clear();
+            }
+        }
+        checkpoint(20);
+        *result = value.release();
+    });
+}
+
+opencv_calib3d_status opencv_calib3d_homography_result_found(
+    const opencv_calib3d_homography_result_handle *result, uint8_t *found) {
+    if (found != nullptr) *found = 0;
+    return guarded([&] {
+        require(result != nullptr && found != nullptr, "null homography found argument");
+        *found = result->found ? 1U : 0U;
+    });
+}
+opencv_calib3d_status opencv_calib3d_homography_result_matrix(
+    const opencv_calib3d_homography_result_handle *result, opencv_calib3d_homography *matrix) {
+    if (matrix != nullptr) *matrix = {};
+    return guarded([&] {
+        require(result != nullptr && matrix != nullptr, "null homography matrix argument");
+        require(result->found, "matrix requested from a no-model result");
+        checkpoint(21);
+        *matrix = result->matrix;
+    });
+}
+opencv_calib3d_status opencv_calib3d_homography_result_inlier_count(
+    const opencv_calib3d_homography_result_handle *result, int32_t *count) {
+    if (count != nullptr) *count = 0;
+    return guarded([&] {
+        require(result != nullptr && count != nullptr, "null homography count argument");
+        require(result->inliers.size() <= static_cast<std::size_t>(INT32_MAX),
+                "homography count is not representable");
+        *count = static_cast<int32_t>(result->inliers.size());
+    });
+}
+opencv_calib3d_status opencv_calib3d_homography_result_inlier(
+    const opencv_calib3d_homography_result_handle *result, int32_t index, int32_t *correspondence_index) {
+    if (correspondence_index != nullptr) *correspondence_index = 0;
+    return guarded([&] {
+        require(result != nullptr && correspondence_index != nullptr, "null homography inlier argument");
+        require(index >= 0 && static_cast<std::size_t>(index) < result->inliers.size(),
+                "homography inlier index out of range");
+        checkpoint(22);
+        *correspondence_index = result->inliers[static_cast<std::size_t>(index)];
+    });
+}
+void opencv_calib3d_homography_result_destroy(opencv_calib3d_homography_result_handle *result) {
+    try { delete result; } catch (...) {}
 }
 
 opencv_calib3d_status opencv_calib3d_undistort_normalized(

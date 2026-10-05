@@ -8,6 +8,34 @@ package OpenCV.Calib3D.Internal.C_API is
    subtype Status is Interfaces.Integer_32;
    Success : constant Status := 0;
 
+   type C_Homography is record
+      H00, H01, H02, H10, H11, H12, H20, H21, H22 : Interfaces.C.double;
+   end record with Convention => C;
+   type C_Homography_Options is record
+      Maximum_Iterations : Interfaces.Integer_32;
+      Reprojection_Threshold_Pixels, Confidence : Interfaces.C.double;
+   end record with Convention => C;
+   function Find_Homography_RANSAC
+     (Source, Destination : OpenCV.Core.Module_Interop.Input_Mat_Handle;
+      Options : access constant C_Homography_Options;
+      Result : access System.Address) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_find_homography_ransac";
+   function Homography_Result_Found
+     (Handle : System.Address; Value : access Interfaces.Unsigned_8) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_homography_result_found";
+   function Homography_Result_Matrix
+     (Handle : System.Address; Value : access C_Homography) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_homography_result_matrix";
+   function Homography_Result_Inlier_Count
+     (Handle : System.Address; Count : access Interfaces.Integer_32) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_homography_result_inlier_count";
+   function Homography_Result_Inlier
+     (Handle : System.Address; Index : Interfaces.Integer_32;
+      Correspondence_Index : access Interfaces.Integer_32) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_homography_result_inlier";
+   procedure Homography_Result_Destroy (Handle : System.Address)
+     with Import, Convention => C, External_Name => "opencv_calib3d_homography_result_destroy";
+
    type C_Camera_Intrinsics is record
       Focal_X, Focal_Y, Center_X, Center_Y : Interfaces.C.double;
    end record with Convention => C;
