@@ -48,7 +48,7 @@ refinement; RANSAC accepted-subset composition; invalid refinement atomicity.
 Range coverage includes 3e200/4e200 -> 5e200, repeated Float64'Last RMS, 1e-200
 RMS, negative/NaN/infinite errors, and overflowing coordinate subtraction.
 Refinement validation covers short/mismatched counts, bad camera/distortion,
-nonfinite coordinates and initial pose. Final noiseless max tolerance is 1e-7
+nonfinite coordinates and initial pose. Final noiseless max tolerance is 1e-5
 pixels; composition allows only 1e-9 pixels RMS numerical worsening.
 
 The actual-shim raw driver adds success/zero and all-five distortion, all seven

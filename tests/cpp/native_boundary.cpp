@@ -68,7 +68,7 @@ void refinement_boundary() {
         check(opencv_calib3d_refine_pose_iterative(world.get(),image.get(),&k,&d,&initial,
               &refined,&pose) == 0 && refined == 1, "raw iterative refinement");
         check(opencv_calib3d_project_points(world.get(),&k,&d,&pose,projected.get()) == 0 &&
-              cv::norm(output(image.get()),output(projected.get()),cv::NORM_INF) < 1e-7,
+              cv::norm(output(image.get()),output(projected.get()),cv::NORM_INF) < 1e-5,
               "raw iterative refinement final pixel error");
         check(initial.rx == 0.16 && initial.ty == -0.30, "native changed initial pose");
     }

@@ -519,7 +519,9 @@ package body Calib3D_Tests is
                  and then After.Maximum_Error_Pixels < Before.Maximum_Error_Pixels,
                  "refinement did not improve reprojection");
          Assert (Center_Error (P) < Center_Before, "refined camera center not closer to truth");
-         Assert (After.Maximum_Error_Pixels < 1.0E-7, "noiseless final pixel error");
+         --  OpenCV 5's changed optimizer empirically finishes around 1.7e-6 px
+         --  on macOS; retain a small cross-version bound, not bit identity.
+         Assert (After.Maximum_Error_Pixels < 1.0E-5, "noiseless final pixel error");
       end;
    end Check_Refinement;
 
@@ -533,7 +535,7 @@ package body Calib3D_Tests is
       Refine_Pose_Iterative (World (1 .. 4), Images (1 .. 4), K, Pose => P, Refined => Refined);
       Assert (Refined and then Summarize_Reprojection
         (Reprojection_Errors (World (1 .. 4), Images (1 .. 4), K, No_Distortion, P)).
-          Maximum_Error_Pixels < 1.0E-7, "conservative four-point refinement contract");
+          Maximum_Error_Pixels < 1.0E-5, "conservative four-point refinement contract");
    end Refinement_Exact;
 
    procedure Refinement_Distorted (T : in out Fixture) is

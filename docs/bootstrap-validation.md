@@ -186,7 +186,8 @@ errors and overflowing subtraction rejection PASS.
 Center errors are Euclidean distances in the synthetic caller's world units, not
 navigation accuracy. Distortion is `(0.10,-0.04,0.003,-0.002,0.01)`; the perturbed
 pose is rvec `(0.16,-0.09,0.12)`, tvec `(0.45,-0.30,6.40)`.
-Noiseless final max requires <1e-7 pixels, empirically passing locally; the pinned
+Noiseless final max requires <1e-5 pixels, empirically established locally and
+against the changed OpenCV 5 optimizer on macOS; the pinned
 matrix must independently establish portability. RANSAC composition permits
 only 1e-9 pixels RMS worsening. No bit-identical vectors are required.
 
@@ -220,6 +221,22 @@ warnings-as-errors and validation remain unchanged. Final validation above has
 no failed assertions/unexpected errors.
 
 ### Task 002 remote gates
+
+First ordinary run `37251482069` on `9de5b155105115be2fe73afc6b3ab028201b79ec`
+passed repository-checks, Linux/OpenCV 4.6.0 and production/fault sanitizers. macOS
+OpenCV 5.0 built and passed diagnostics/composition but failed two assertions
+(19 executed, 17 passed, two failed assertions, zero unexpected errors): the
+initial 1e-7 final-pixel bound was tighter than the changed optimizer's empirical
+termination. Exact retrieved logs measured final RMS/max respectively
+`6.65377426887021e-7 / 1.39939787850841e-6` (no distortion), and
+`1.03358928468298e-6 / 1.72898985794433e-6` (all-five distortion). Center errors
+improved `0.650621748780547 -> 3.97447466080833e-8 / 6.15176508863633e-8`.
+Composition RMS/max improved `6.03028526269110e-6 / 1.01773740518414e-5` to
+`9.87012759033044e-10 / 2.39877702732745e-9`, center to `7.19085126503525e-11`.
+The normal corrective commit changes only the empirically justified final bound
+to **1e-5 pixels** in Ada/raw tests and this record. Improvement assertions,
+validation, warnings and production solver remain unchanged. No blind rerun;
+the expensive matrix was not yet dispatched.
 
 Ordinary repository-checks/Linux/macOS/linux-sanitizers and the single stable-head
 manual 4.1/4.10/5.0 compatibility matrix are **pending** at this local record.
