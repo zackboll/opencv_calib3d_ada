@@ -267,6 +267,18 @@ An isolated shell-routing check of the Darwin branch also PASS with unset and
 preexisting `DYLD_LIBRARY_PATH` and paths containing spaces; this verifies
 environment construction, not native macOS dyld execution.
 
+Corrected run `37252776615` on `e4be03484371e51ea384db7135f7ec21d89ec550`
+again passed repository-checks/Linux/linux-sanitizers. Exact completed macOS logs
+show **19/19 AUnit**, zero failed assertions/unexpected errors and both raw ABI
+variants PASS. The Calib3D/Core shim lookup is fixed; dyld next reports
+`@rpath/libgnarl-16.dylib` missing for the helper. Its inherited relative Ada
+runtime rpaths are not valid from this helper output location. A further normal
+correction extends only the same Darwin test-launch path with the selected
+compiler's `gcc -print-file-name=adalib` and compiler `lib` directories, converted
+to absolute paths. This retains all production and fault linkage; it does not
+rewrite install names or suppress errors. The compatibility matrix remains
+undispatched until ordinary CI is completely green.
+
 Ordinary repository-checks/Linux/macOS/linux-sanitizers and the single stable-head
 manual 4.1/4.10/5.0 compatibility matrix are **pending** at this local record.
 Exact final run IDs/results belong in the PR review evidence. Never infer remote

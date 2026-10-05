@@ -30,7 +30,13 @@ if [ "$(uname -s)" = Darwin ]; then
     # The fault object resolves our calls first, but the production project still
     # links its relocatable shim. Supply both runtime directories for this test
     # launch only; preserve any caller-provided search path and fail normally.
-    DYLD_LIBRARY_PATH="$root/lib:$core/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
+    # GPR's relative Ada runtime rpaths also differ for this helper output. Use
+    # the Alire-selected compiler's absolute Ada and compiler runtime directories.
+    ada_runtime=$(gcc -print-file-name=adalib)
+    [ -d "$ada_runtime" ] || { echo 'error: selected GNAT Ada runtime not found' >&2; exit 1; }
+    ada_runtime=$(CDPATH= cd -- "$ada_runtime" && pwd)
+    compiler_lib=$(CDPATH= cd -- "$(dirname "$(command -v gcc)")/../lib" && pwd)
+    DYLD_LIBRARY_PATH="$root/lib:$core/lib:$ada_runtime:$compiler_lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
         "$root/tests/bin/run_refinement_faults"
 else
     sh "$root/scripts/run_native.sh" "$root/tests/bin/run_refinement_faults"
