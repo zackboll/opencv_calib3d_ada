@@ -50,6 +50,7 @@ thread_local char error_text[1024] = "";
 #ifdef OPENCV_CALIB3D_TEST_HOOKS
 thread_local int failure_stage = 0;
 thread_local int failure_kind = 0;
+thread_local bool refinement_false = false;
 void checkpoint(int stage) {
     if (failure_stage != stage) return;
     const int kind = failure_kind;
@@ -220,6 +221,9 @@ void opencv_calib3d_test_fail(int stage, int kind) {
     failure_stage = stage;
     failure_kind = kind;
 }
+void opencv_calib3d_test_refinement_false(void) {
+    refinement_false = true;
+}
 #endif
 
 const char *opencv_calib3d_last_error(void) { return error_text; }
@@ -332,6 +336,48 @@ opencv_calib3d_status opencv_calib3d_solve_pnp_ransac(
         }
         checkpoint(7);
         *out_result = result.release();
+    });
+}
+
+opencv_calib3d_status opencv_calib3d_refine_pose_iterative(
+    const opencv_core_mat_handle *object_points,
+    const opencv_core_mat_handle *image_points,
+    const opencv_calib3d_camera_intrinsics *intrinsics,
+    const opencv_calib3d_distortion5 *distortion,
+    const opencv_calib3d_pose *initial_pose,
+    uint8_t *refined, opencv_calib3d_pose *refined_pose) {
+    if (refined != nullptr) *refined = 0;
+    if (refined_pose != nullptr) *refined_pose = {};
+    return guarded([&] {
+        require(refined != nullptr && refined_pose != nullptr, "null refinement output");
+        validate_intrinsics(intrinsics);
+        validate_distortion(distortion);
+        validate_pose(initial_pose);
+        const cv::Mat &objects = resolve_input(object_points);
+        const cv::Mat &images = resolve_input(image_points);
+        const int count = validate_object_points(objects, false);
+        require(count == validate_image_points(images, false), "point correspondence counts differ");
+        require(count >= 4, "iterative refinement binding requires at least four correspondences");
+        validate_finite_object_points(objects);
+        validate_finite_image_points(images);
+        checkpoint(10);
+        cv::Mat rvec = rotation_vector(*initial_pose);
+        cv::Mat tvec = translation_vector(*initial_pose);
+        bool solved = cv::solvePnP(objects, images, camera_matrix(*intrinsics),
+                                  distortion_vector(*distortion), rvec, tvec,
+                                  true, cv::SOLVEPNP_ITERATIVE);
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+        if (refinement_false) {
+            refinement_false = false;
+            solved = false;
+        }
+#endif
+        checkpoint(11);
+        if (!solved) return;
+        const opencv_calib3d_pose value = pose_from_mats(rvec, tvec);
+        checkpoint(12);
+        *refined_pose = value;
+        *refined = 1;
     });
 }
 

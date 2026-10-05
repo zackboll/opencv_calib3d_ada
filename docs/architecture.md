@@ -27,3 +27,22 @@ the metric Cartesian world frame; Translation is never camera position.
 Projection publishes a validated temporary matrix atomically; native result
 publication is guarded by unique ownership, and Ada copies values before destroying
 the temporary result. Test-only exception checkpoints are excluded from production.
+
+Task 002 adds one narrow C export using the existing intrinsics/distortion/pose
+records. Iterative refinement stages initial rvec/tvec in local native Mats and
+calls `solvePnP` with the extrinsic guess and fixed `SOLVEPNP_ITERATIVE`. Output
+validation and exception checkpoints precede publication. Native false publishes
+no pose; the Ada wrapper preserves its initial world-to-camera value. This is not
+a binding of `solvePnPRefineLM` (not common to the 4.1 baseline).
+
+Reprojection residuals/statistics are Ada values computed in Ada from authoritative
+`Project_Points` results. Scaled hypot and scale/ssq accumulation avoid avoidable
+overflow/underflow. RMS and maximum are pixels, not covariance/uncertainty or a
+proof of globally correct localization. The synthetic example refines local
+RANSAC inlier arrays; there is no public selection helper or Features dependency.
+
+The test-only false control and exception controls are excluded from production.
+A separate Ada executable links the actual fault-enabled shim artifact (object
+on Linux, Apple libc++-isolated test dylib on Darwin) without replacing production
+libraries, checking false and all 15 refinement stage/kind
+exception combinations through the public wrapper.

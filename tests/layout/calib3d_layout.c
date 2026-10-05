@@ -1,6 +1,11 @@
 #include "../../cpp/opencv_calib3d_shim.h"
 #include <stddef.h>
 #include <stdint.h>
+#include <math.h>
+
+double calib3d_test_nonfinite(int32_t kind) {
+    return kind == 0 ? NAN : (kind == 1 ? INFINITY : -INFINITY);
+}
 
 int32_t calib3d_test_intrinsics_layout(int32_t field) {
     const size_t values[] = {

@@ -36,5 +36,40 @@ This does not prove real allocator exhaustion or instrument all dependencies.
 See `bootstrap-validation.md` and PR Actions for cross-platform/matrix evidence.
 
 Out of scope: broad calibration, stereo, homography, essential/fundamental,
-triangulation, arbitrary SolvePnP methods, refinement, fisheye, undistortion,
+triangulation, arbitrary SolvePnP methods, RefineLM/VVS, fisheye, undistortion,
 USAC configuration, Features integration and geographic/DTED semantics.
+
+## Task 002 inventory
+
+The suite now registers **19 AUnit cases** (the original 12 plus seven):
+independent 5/0/13-pixel oracle; empty/count diagnostic contract; scaled numeric
+range/nonfinite validation; noiseless iterative refinement; all-five distorted
+refinement; RANSAC accepted-subset composition; invalid refinement atomicity.
+Range coverage includes 3e200/4e200 -> 5e200, repeated Float64'Last RMS, 1e-200
+RMS, negative/NaN/infinite errors, and overflowing coordinate subtraction.
+Refinement validation covers short/mismatched counts, bad camera/distortion,
+nonfinite coordinates and initial pose. Final noiseless max tolerance is 1e-5
+pixels; composition allows only 1e-9 pixels RMS numerical worsening.
+
+The actual-shim raw driver adds success/zero and all-five distortion, all seven
+required null pointers, wrong object/image depth/channels/Nx1 shapes, counts,
+minimum, nonfinite components/points/camera/distortion and complete cleared-output
+checks. Fault injection separately exercises status-OK false with zero outputs
+and **15** refinement exceptions (three stages times five categories).
+Production excludes every `opencv_calib3d_test_*` control.
+
+`run_refinement_faults` is a separate Ada boundary helper (not an AUnit
+registration). It checks exact finite Ada pose equality on false and all fifteen
+injected exception paths. The fault artifact is linked ahead of production
+libraries using a test-only GPR project: object on Linux, libc++-isolated test
+dylib on Darwin. Production libraries are never replaced. This
+helper runs serially in Linux/macOS ordinary tests and all pinned matrix targets.
+Raw production/fault driver variants run both uninstrumented and with Linux
+ASan+UBSan, leak detection enabled, no suppressions, actual shim instrumented.
+A synthetic false result is only possible in the fault variant; the production
+variant tests the genuine native success/error paths, not a claimed native false
+fixture that the reviewed iterative implementations do not portably provide.
+
+Python remains 16 tests; C/C++ standalone helpers remain two (header and profile),
+plus the existing compiler-derived layout/interchange helper. See Task 002 in
+`bootstrap-validation.md` for actual execution evidence; inventory is not a pass.

@@ -11,6 +11,7 @@
 
 #ifdef OPENCV_CALIB3D_TEST_HOOKS
 extern "C" void opencv_calib3d_test_fail(int stage, int kind);
+extern "C" void opencv_calib3d_test_refinement_false(void);
 #endif
 
 namespace {
@@ -45,7 +46,109 @@ void fill_world(opencv_core_mat_handle *handle) {
     }
 }
 
+bool zero_pose(const opencv_calib3d_pose &p) {
+    return p.rx == 0 && p.ry == 0 && p.rz == 0 && p.tx == 0 && p.ty == 0 && p.tz == 0;
+}
+
+void refinement_boundary() {
+    auto world = matrix(20,1,OPENCV_CORE_DEPTH_FLOAT64,3);
+    auto image = matrix(20,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    auto projected = matrix(20,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    fill_world(world.get());
+    const opencv_calib3d_camera_intrinsics k{800,820,320,240};
+    const opencv_calib3d_distortion5 none{};
+    const opencv_calib3d_distortion5 distorted{0.1,-0.04,0.003,-0.002,0.01};
+    const opencv_calib3d_pose truth{0.10,-0.05,0.08,0.20,-0.10,6.00};
+    const opencv_calib3d_pose initial{0.16,-0.09,0.12,0.45,-0.30,6.40};
+    uint8_t refined = 9;
+    opencv_calib3d_pose pose{9,9,9,9,9,9};
+    for (const auto &d : {none,distorted}) {
+        check(opencv_calib3d_project_points(world.get(),&k,&d,&truth,image.get()) == 0,
+              "refinement truth projection");
+        check(opencv_calib3d_refine_pose_iterative(world.get(),image.get(),&k,&d,&initial,
+              &refined,&pose) == 0 && refined == 1, "raw iterative refinement");
+        check(opencv_calib3d_project_points(world.get(),&k,&d,&pose,projected.get()) == 0 &&
+              cv::norm(output(image.get()),output(projected.get()),cv::NORM_INF) < 1e-5,
+              "raw iterative refinement final pixel error");
+        check(initial.rx == 0.16 && initial.ty == -0.30, "native changed initial pose");
+    }
+    auto invalid = [&](const opencv_core_mat_handle *o, const opencv_core_mat_handle *i,
+                       const opencv_calib3d_camera_intrinsics *intrinsics,
+                       const opencv_calib3d_distortion5 *d, const opencv_calib3d_pose *p,
+                       bool flag = true, bool out_pose = true) {
+        refined = 9; pose = {9,9,9,9,9,9};
+        check(opencv_calib3d_refine_pose_iterative(o,i,intrinsics,d,p,
+              flag ? &refined : nullptr,out_pose ? &pose : nullptr) ==
+              OPENCV_CALIB3D_ERROR_INVALID_ARGUMENT, "invalid refinement accepted");
+        check((!flag || refined == 0) && (!out_pose || zero_pose(pose)),
+              "refinement failure outputs not cleared");
+    };
+    invalid(nullptr,image.get(),&k,&none,&initial);
+    invalid(world.get(),nullptr,&k,&none,&initial);
+    invalid(world.get(),image.get(),nullptr,&none,&initial);
+    invalid(world.get(),image.get(),&k,nullptr,&initial);
+    invalid(world.get(),image.get(),&k,&none,nullptr);
+    invalid(world.get(),image.get(),&k,&none,&initial,false,true);
+    invalid(world.get(),image.get(),&k,&none,&initial,true,false);
+    for (auto schema : {CV_32FC3,CV_64FC2}) {
+        auto bad = matrix(20,1,CV_MAT_DEPTH(schema),CV_MAT_CN(schema));
+        invalid(bad.get(),image.get(),&k,&none,&initial);
+    }
+    auto bad_object_shape = matrix(1,20,OPENCV_CORE_DEPTH_FLOAT64,3);
+    invalid(bad_object_shape.get(),image.get(),&k,&none,&initial);
+    for (auto schema : {CV_32FC2,CV_64FC3}) {
+        auto bad = matrix(20,1,CV_MAT_DEPTH(schema),CV_MAT_CN(schema));
+        invalid(world.get(),bad.get(),&k,&none,&initial);
+    }
+    auto bad_image_shape = matrix(1,20,OPENCV_CORE_DEPTH_FLOAT64,2);
+    auto mismatch = matrix(19,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    auto short_world = matrix(3,1,OPENCV_CORE_DEPTH_FLOAT64,3);
+    auto short_image = matrix(3,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    invalid(world.get(),bad_image_shape.get(),&k,&none,&initial);
+    invalid(world.get(),mismatch.get(),&k,&none,&initial);
+    invalid(short_world.get(),short_image.get(),&k,&none,&initial);
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    for (int component=0; component<6; ++component) {
+        auto bad = initial;
+        switch (component) {
+        case 0: bad.rx=nan; break; case 1: bad.ry=nan; break; case 2: bad.rz=nan; break;
+        case 3: bad.tx=nan; break; case 4: bad.ty=nan; break; default: bad.tz=nan;
+        }
+        invalid(world.get(),image.get(),&k,&none,&bad);
+    }
+    auto bad_k = k; bad_k.focal_x = 0;
+    auto bad_d = none; bad_d.k3 = nan;
+    invalid(world.get(),image.get(),&bad_k,&none,&initial);
+    invalid(world.get(),image.get(),&k,&bad_d,&initial);
+    const cv::Vec3d saved_object = output(world.get()).at<cv::Vec3d>(0,0);
+    output(world.get()).at<cv::Vec3d>(0,0)[0] = nan;
+    invalid(world.get(),image.get(),&k,&none,&initial);
+    output(world.get()).at<cv::Vec3d>(0,0) = saved_object;
+    const cv::Vec2d saved_image = output(image.get()).at<cv::Vec2d>(0,0);
+    output(image.get()).at<cv::Vec2d>(0,0)[1] = nan;
+    invalid(world.get(),image.get(),&k,&none,&initial);
+    output(image.get()).at<cv::Vec2d>(0,0) = saved_image;
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+    opencv_calib3d_test_refinement_false();
+    refined=9; pose={9,9,9,9,9,9};
+    check(opencv_calib3d_refine_pose_iterative(world.get(),image.get(),&k,&distorted,&initial,
+          &refined,&pose) == 0 && refined == 0 && zero_pose(pose),
+          "native refinement false result publication");
+    const int expected[] = {0,1,2,3,4,4};
+    for (int stage : {10,11,12}) for (int kind=1; kind<=5; ++kind) {
+        refined=9; pose={9,9,9,9,9,9};
+        opencv_calib3d_test_fail(stage,kind);
+        check(opencv_calib3d_refine_pose_iterative(world.get(),image.get(),&k,&distorted,&initial,
+              &refined,&pose) == expected[kind] && refined == 0 && zero_pose(pose),
+              "refinement exception/publication atomicity");
+    }
+    std::cout << "PASS: refinement false-result and 15 exception checkpoints\n";
+#endif
+    std::cout << "PASS: iterative refinement/distortion/schema/output initialization raw ABI\n";
+}
+
 void run() {
+    refinement_boundary();
     constexpr int N = 20;
     auto world = matrix(N, 1, OPENCV_CORE_DEPTH_FLOAT64, 3);
     auto image = matrix(N, 1, OPENCV_CORE_DEPTH_FLOAT64, 2);

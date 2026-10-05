@@ -48,10 +48,11 @@ for variant in production fault-injection; do
         "$core_shim" $(pkg-config --libs "$package") \
         -o "obj/sanitizers/$variant$suffix"
     if [ "$variant" = production ]; then
-        if nm "obj/sanitizers/$variant$suffix" | grep -q opencv_calib3d_test_fail; then
+        if nm "obj/sanitizers/$variant$suffix" | grep -q opencv_calib3d_test_; then
             echo 'error: fault-injection API leaked into production build' >&2; exit 1
         fi
     fi
     ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
     UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 "obj/sanitizers/$variant$suffix"
+    echo "PASS: $variant${suffix:- ASan+UBSan} actual-shim boundary"
 done

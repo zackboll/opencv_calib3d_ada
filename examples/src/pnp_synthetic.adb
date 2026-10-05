@@ -1,12 +1,10 @@
 with Ada.Text_IO;
-with Ada.Numerics.Generic_Elementary_Functions;
 with OpenCV.Calib3D;
 
 procedure PnP_Synthetic is
    use Ada.Text_IO;
    use OpenCV.Calib3D;
    use type OpenCV.Float64_Value;
-   package Math is new Ada.Numerics.Generic_Elementary_Functions (OpenCV.Float64_Value);
 
    Intrinsics : constant Camera_Intrinsics :=
      (Focal_X => 800.0, Focal_Y => 820.0, Center_X => 320.0, Center_Y => 240.0);
@@ -55,28 +53,38 @@ begin
       Put_Line ("inliers:" & Natural'Image (Inlier_Count (Estimate)));
       if Found (Estimate) then
          declare
-            P : constant World_To_Camera_Pose := Pose (Estimate);
-            Reprojected : constant Image_Point_Array :=
-              Project_Points (Points, Intrinsics, No_Distortion, P);
-            Max_Error : OpenCV.Float64_Value := 0.0;
-            Sum_Squared : OpenCV.Float64_Value := 0.0;
+            Accepted : constant Inlier_Index_Array := Inliers (Estimate);
+            Objects : Object_Point_Array (1 .. Accepted'Length);
+            Images : Image_Point_Array (1 .. Accepted'Length);
+            P : World_To_Camera_Pose := Pose (Estimate);
+            Refined : Boolean;
          begin
-            Put_Vector ("rvec", P.Rotation);
-            Put_Vector ("tvec", P.Translation);
-            Put_Vector ("camera center", Camera_Center (P));
-            for I of Inliers (Estimate) loop
-               declare
-                  DX : constant OpenCV.Float64_Value := Reprojected (I) (0) - Pixels (I) (0);
-                  DY : constant OpenCV.Float64_Value := Reprojected (I) (1) - Pixels (I) (1);
-                  Squared : constant OpenCV.Float64_Value := DX * DX + DY * DY;
-               begin
-                  Sum_Squared := Sum_Squared + Squared;
-                  Max_Error := OpenCV.Float64_Value'Max (Max_Error, Math.Sqrt (Squared));
-               end;
+            for I in Accepted'Range loop
+               Objects (I) := Points (Accepted (I));
+               Images (I) := Pixels (Accepted (I));
             end loop;
-            Put_Line ("inlier reprojection RMS pixels:" & OpenCV.Float64_Value'Image
-              (Math.Sqrt (Sum_Squared / OpenCV.Float64_Value (Inlier_Count (Estimate)))));
-            Put_Line ("inlier reprojection max pixels:" & OpenCV.Float64_Value'Image (Max_Error));
+            declare
+               Before : constant Reprojection_Summary := Summarize_Reprojection
+                 (Reprojection_Errors (Objects, Images, Intrinsics, No_Distortion, P));
+            begin
+               Put_Line ("RANSAC inlier count:" & Natural'Image (Before.Count));
+               Put_Line ("RANSAC RMS pixels:" & OpenCV.Float64_Value'Image (Before.RMS_Error_Pixels));
+               Put_Line ("RANSAC max error pixels:" & OpenCV.Float64_Value'Image (Before.Maximum_Error_Pixels));
+            end;
+            Refine_Pose_Iterative (Objects, Images, Intrinsics, Pose => P, Refined => Refined);
+            declare
+               After : constant Reprojection_Summary := Summarize_Reprojection
+                 (Reprojection_Errors (Objects, Images, Intrinsics, No_Distortion, P));
+            begin
+               Put_Line ("refinement succeeded:" & Boolean'Image (Refined));
+               Put_Line ("refined RMS pixels:" & OpenCV.Float64_Value'Image (After.RMS_Error_Pixels));
+               Put_Line ("refined max error pixels:" & OpenCV.Float64_Value'Image (After.Maximum_Error_Pixels));
+            end;
+            Put_Vector ("refined rotation vector", P.Rotation);
+            Put_Vector ("refined translation vector", P.Translation);
+            Put_Vector ("refined camera center", Camera_Center (P));
+            Put_Line ("X_camera = R * X_world + t; Translation is t, NOT camera position.");
+            Put_Line ("C_world = -R^T * t; low pixel error is not navigation accuracy.");
          end;
       end if;
    end;

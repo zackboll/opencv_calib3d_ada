@@ -55,6 +55,17 @@ package OpenCV.Calib3D.Internal.C_API is
       Result                     : access System.Address) return Status
      with Import, Convention => C, External_Name => "opencv_calib3d_solve_pnp_ransac";
 
+   function Refine_Pose_Iterative
+     (Object_Points : OpenCV.Core.Module_Interop.Input_Mat_Handle;
+      Image_Points  : OpenCV.Core.Module_Interop.Input_Mat_Handle;
+      Intrinsics    : access constant C_Camera_Intrinsics;
+      Distortion    : access constant C_Distortion5;
+      Initial_Pose  : access constant C_Pose;
+      Refined       : access Interfaces.Unsigned_8;
+      Refined_Pose  : access C_Pose) return Status
+     with Import, Convention => C,
+       External_Name => "opencv_calib3d_refine_pose_iterative";
+
    function Result_Found
      (Handle : System.Address; Value : access Interfaces.Unsigned_8) return Status
      with Import, Convention => C, External_Name => "opencv_calib3d_pose_result_found";
