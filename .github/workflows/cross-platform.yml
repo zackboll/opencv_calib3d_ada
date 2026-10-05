@@ -98,3 +98,7 @@ jobs:
           grep -E 'libopencv_core_shim' /tmp/calib3d-linkage.txt
           grep -E 'libc\+\+' /tmp/calib3d-linkage.txt
           if grep -E 'libstdc\+\+' /tmp/calib3d-linkage.txt; then exit 1; fi
+      - name: Build and run synthetic pose example
+        run: |
+          alr -n -C examples build
+          alr -n -C examples exec -- sh ../scripts/run_native.sh bin/pnp_synthetic

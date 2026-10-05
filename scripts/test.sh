@@ -5,6 +5,6 @@ cd "$root"
 alr -n build
 alr -n -C tests build
 alr -n -C tests exec -- sh ../scripts/run_native.sh bin/run_tests
-if [ "$(uname -s)" = Linux ]; then
-    alr -n exec -- sh scripts/run_sanitizers.sh native
-fi
+case "$(uname -s)" in
+    Linux|Darwin) alr -n exec -- sh scripts/run_sanitizers.sh native ;;
+esac

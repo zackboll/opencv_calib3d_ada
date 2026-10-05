@@ -37,10 +37,9 @@ def _event_names(text: str) -> set[str]:
 
 
 def _push_is_main_only(text: str) -> bool:
-    block = "\n".join(_section(text, "on"))
-    return re.search(r"(?m)^  push:\s*$", block) is not None and \
-        re.search(r"(?m)^    branches:\s*(?:\[main\]|$)", block) is not None and \
-        "tags:" not in block and "paths:" not in block
+    lines = [line.strip() for line in _section(text, "push")
+             if line.strip() and not line.lstrip().startswith("#")]
+    return lines in (["branches: [main]"], ["branches:", "- main"])
 
 
 def _jobs(text: str) -> dict[str, str]:

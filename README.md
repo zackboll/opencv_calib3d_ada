@@ -4,11 +4,12 @@ Handwritten thick Ada binding for the narrow camera-pose portion of OpenCV neede
 for 3-D-to-2-D pose estimation. Repository: `opencv_calib3d_ada`; Alire crate:
 `opencv_calib3d`; public package: `OpenCV.Calib3D`.
 
-**Version 0.1.0-dev. This ZIP is a bootstrap, not a qualified release.**
-The source, tests, CI topology, raw-boundary harness and sanitizer driver are
-included, but this creation environment does not contain GNAT/Alire/OpenCV, so no
-native Ada build or AUnit pass is claimed here. Start with
-[`docs/tasks/001-validate-bootstrap.md`](docs/tasks/001-validate-bootstrap.md).
+**Version 0.1.0-dev; review baseline, not a release.**
+The generated bootstrap originally had static checks only. Task 001 has now run
+local native qualification on OpenCV **4.10.0 / calib3d**: production/tests/example
+builds, 12/12 AUnit cases, raw ABI, C/Ada layouts and both actual-shim ASan/UBSan
+variants pass. Cross-platform and pinned-matrix evidence is recorded separately
+in [`docs/bootstrap-validation.md`](docs/bootstrap-validation.md) and the PR.
 
 ## Native backend split
 
@@ -64,8 +65,8 @@ sudo apt-get update
 sudo apt-get install -y build-essential pkg-config libopencv-dev
 ```
 
-The bootstrap depends on `opencv_core ~0.4.0` and pins Core to current reviewed
-main commit `4da9d35ea21e1b2efe96296243ea668b488c6326` in the root, tests and
+The binding depends on `opencv_core ~0.4.0` and retains bootstrap Core
+commit `4da9d35ea21e1b2efe96296243ea668b488c6326` in the root, tests and
 examples Alire roots. Core is fetched; it is not bundled or copied.
 
 ## Ownership architecture
@@ -103,7 +104,7 @@ accuracy claims.
 PR CI is Linux, macOS, repository checks and Linux ASan/UBSan. Windows/MSYS2 is
 in a separate **push-to-main-only** workflow because it is intentionally too slow
 for the review loop. A manual matrix source-builds OpenCV 4.1.0, 4.10.0 and 5.0.0.
-The presence of those workflows is not evidence that this bootstrap passed them.
+The presence of those workflows alone is not evidence that they passed.
 
 ## Deliberate exclusions
 
@@ -115,17 +116,6 @@ Features, optical flow, or estimator/fusion policy.
 The caller defines the world frame. A later navigation layer may use a local
 metric terrain frame derived from DTED/geospatial data, but this crate does not
 assign geographic meaning to `(X,Y,Z)`.
-
-## Repository initialization
-
-The ZIP contains source files only; it has no `.git` directory or credentials.
-After reviewing it:
-
-```sh
-git init -b main
-git add .
-git commit -m "Bootstrap OpenCV Calib3D Ada binding"
-```
 
 ## License
 
