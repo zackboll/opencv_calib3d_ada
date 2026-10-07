@@ -2,6 +2,7 @@
 #include "opencv_core_shim.h"
 #include "opencv_core_module_bridge.hpp"
 #include "homography_profile.hpp"
+#include "fundamental_profile.hpp"
 
 #include <opencv2/core.hpp>
 #include <cmath>
@@ -437,7 +438,175 @@ void homography_boundary() {
     std::cout << "PASS: homography real strided Core Regions, four rejected/five robust, collinear no-model, raw negatives\n";
 }
 
+void fundamental_boundary() {
+    using FResult = std::unique_ptr<opencv_calib3d_fundamental_result_handle,
+                                    decltype(&opencv_calib3d_fundamental_result_destroy)>;
+    constexpr int n=32;
+    auto source_parent=matrix(n,2,OPENCV_CORE_DEPTH_FLOAT64,2);
+    auto destination_parent=matrix(n,2,OPENCV_CORE_DEPTH_FLOAT64,2);
+    opencv_core_mat_handle *sraw=nullptr, *draw=nullptr;
+    check(opencv_core_mat_region(source_parent.get(),0,0,1,n,&sraw)==0 &&
+          opencv_core_mat_region(destination_parent.get(),0,0,1,n,&draw)==0,
+          "real Core fundamental Regions");
+    Mat source(sraw,opencv_core_mat_destroy), destination(draw,opencv_core_mat_destroy);
+    check(!output(sraw).isContinuous() && !output(draw).isContinuous(), "fundamental Regions strided");
+    for (int i=0;i<n;++i) {
+        const double x=((i*7)%17-8)*.24, y=((i*11)%19-9)*.19;
+        const double z=4.+((i*13)%23)*.17;
+        output(sraw).at<cv::Vec2d>(i,0)={800*x/z+320,820*y/z+240};
+        output(draw).at<cv::Vec2d>(i,0)={800*(x-.75)/z+320,820*y/z+240};
+    }
+    const opencv_calib3d_fundamental_options options{.1,.999};
+    auto estimate=[&](const opencv_core_mat_handle *s,const opencv_core_mat_handle *d) {
+        opencv_calib3d_fundamental_result_handle *raw=nullptr;
+        check(opencv_calib3d_find_fundamental_ransac(s,d,&options,&raw)==0 && raw,
+              "raw fundamental estimation");
+        return FResult(raw,opencv_calib3d_fundamental_result_destroy);
+    };
+    auto verify=[&](FResult &r,bool outliers) {
+        uint8_t found=0; int32_t count=0;
+        opencv_calib3d_fundamental h{};
+        check(opencv_calib3d_fundamental_result_found(r.get(),&found)==0 && found==1 &&
+              opencv_calib3d_fundamental_result_matrix(r.get(),&h)==0 &&
+              opencv_calib3d_fundamental_result_inlier_count(r.get(),&count)==0 && count>=7,
+              "raw fundamental accessors");
+        bool published[n]={}; int32_t previous=-1;
+        for (int i=0;i<count;++i) {
+            int32_t index=-1;
+            check(opencv_calib3d_fundamental_result_inlier(r.get(),i,&index)==0 &&
+                  index>previous && index<n, "fundamental indices valid unique ascending");
+            published[index]=true; previous=index;
+        }
+        double maximum_error=0;
+        for (int i=0;i<n;++i) {
+            const auto s=output(sraw).at<cv::Vec2d>(i,0), d=output(draw).at<cv::Vec2d>(i,0);
+            // Independent scalar oracle for this bounded fixture.
+            const double a2=h.f00*s[0]+h.f01*s[1]+h.f02;
+            const double b2=h.f10*s[0]+h.f11*s[1]+h.f12;
+            const double c2=h.f20*s[0]+h.f21*s[1]+h.f22;
+            const double a1=h.f00*d[0]+h.f10*d[1]+h.f20;
+            const double b1=h.f01*d[0]+h.f11*d[1]+h.f21;
+            const double c1=h.f02*d[0]+h.f12*d[1]+h.f22;
+            const double error=std::max(std::abs(a1*s[0]+b1*s[1]+c1)/std::hypot(a1,b1),
+                                       std::abs(a2*d[0]+b2*d[1]+c2)/std::hypot(a2,b2));
+            check(published[i]==(std::isfinite(error) && error<=.1),
+                  "every inclusion/exclusion independently matches FINAL F Float64 threshold");
+            if (!outliers) maximum_error=std::max(maximum_error,error);
+        }
+        if (outliers) check(!published[1] && !published[6] && !published[14], "gross outliers survived");
+        else check(count>=n-1 && maximum_error<.1, "clean fundamental mapping oracle");
+        int32_t index=99;
+        check(opencv_calib3d_fundamental_result_inlier(r.get(),-1,&index)==1 && index==0 &&
+              opencv_calib3d_fundamental_result_inlier(r.get(),count,&index)==1 && index==0,
+              "fundamental invalid index clearing");
+        std::cout << "PASS: raw " << (outliers?"outlier":"clean") << " fundamental final inliers="
+                  << count << " clean maximum error=" << maximum_error << "; FINAL F threshold verified\n";
+    };
+    auto clean=estimate(sraw,draw); verify(clean,false);
+    for (int i : {1,6,14}) output(draw).at<cv::Vec2d>(i,0)+=cv::Vec2d(50,500);
+    auto robust=estimate(sraw,draw); verify(robust,true);
+    auto invalid=[&](const opencv_core_mat_handle *s,const opencv_core_mat_handle *d,
+                     const opencv_calib3d_fundamental_options *o) {
+        auto *raw=clean.get(); // live result, not a fabricated opaque handle
+        check(opencv_calib3d_find_fundamental_ransac(s,d,o,&raw)==1 && raw==nullptr,
+              "invalid fundamental arguments/output clearing");
+    };
+    invalid(nullptr,draw,&options); invalid(sraw,nullptr,&options); invalid(sraw,draw,nullptr);
+    check(opencv_calib3d_find_fundamental_ransac(sraw,draw,&options,nullptr)==1,"null fundamental output");
+    for (int count=0;count<=14;++count) {
+        auto bad=matrix(1,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+        if (count==0) output(bad.get()).release();
+        else output(bad.get())=output(sraw).rowRange(0,count);
+        invalid(bad.get(),bad.get(),&options);
+    }
+    auto fifteen_s=matrix(15,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    auto fifteen_d=matrix(15,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    output(sraw).rowRange(0,15).copyTo(output(fifteen_s.get()));
+    output(draw).rowRange(0,15).copyTo(output(fifteen_d.get()));
+    auto fifteen=estimate(fifteen_s.get(),fifteen_d.get());
+    uint8_t found=0;
+    check(opencv_calib3d_fundamental_result_found(fifteen.get(),&found)==0,
+          "fifteen native RANSAC permitted");
+    invalid(fifteen_s.get(),draw,&options);
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+    auto fourteen=matrix(14,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    opencv_calib3d_test_fail(23,3);
+    invalid(fourteen.get(),fourteen.get(),&options);
+    auto *pending=clean.get();
+    check(opencv_calib3d_find_fundamental_ransac(fifteen_s.get(),fifteen_d.get(),&options,&pending)==3 && !pending,
+          "14 preflight preserved checkpoint; 15 consumed native-RANSAC checkpoint");
+    std::cout << "PASS: raw 14 before native entry / 15 true-RANSAC checkpoint consumed\n";
+#endif
+    for (int channels : {1,2,3}) {
+        auto bad=matrix(n,1,channels==2?OPENCV_CORE_DEPTH_FLOAT32:OPENCV_CORE_DEPTH_FLOAT64,channels);
+        invalid(bad.get(),draw,&options); invalid(sraw,bad.get(),&options);
+    }
+    auto shape=matrix(2,3,OPENCV_CORE_DEPTH_FLOAT64,2);
+    invalid(shape.get(),draw,&options); invalid(sraw,shape.get(),&options);
+    const int sizes[]={2,2,2}; output(shape.get())=cv::Mat(3,sizes,CV_64FC2);
+    invalid(shape.get(),draw,&options); invalid(sraw,shape.get(),&options);
+    auto bad=options;
+    for (double v : {0.,-1.,1e-30,1e20,1e-300,std::numeric_limits<double>::max(),
+                     std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::infinity(),
+                     -std::numeric_limits<double>::infinity()}) {
+        bad=options;bad.epipolar_threshold_pixels=v;invalid(sraw,draw,&bad);
+    }
+    for (double v : {0.,-1.,1.,2.,std::nextafter(DBL_EPSILON,0.),
+                     std::nextafter(1-DBL_EPSILON,1.),std::numeric_limits<double>::quiet_NaN(),
+                     std::numeric_limits<double>::infinity(),-std::numeric_limits<double>::infinity()}) {
+        bad=options;bad.confidence=v;invalid(sraw,draw,&bad);
+    }
+    for (auto *handle : {sraw,draw}) for (double v : {std::numeric_limits<double>::quiet_NaN(),
+                       std::numeric_limits<double>::infinity(),-std::numeric_limits<double>::infinity()}) {
+        const auto saved=output(handle).at<cv::Vec2d>(0,0);
+        output(handle).at<cv::Vec2d>(0,0)[0]=v; invalid(sraw,draw,&options);
+        output(handle).at<cv::Vec2d>(0,0)=saved;
+    }
+    opencv_calib3d_fundamental h{9,9,9,9,9,9,9,9,9};
+    auto zero=[&] {return h.f00==0 && h.f01==0 && h.f02==0 && h.f10==0 && h.f11==0 &&
+                         h.f12==0 && h.f20==0 && h.f21==0 && h.f22==0;};
+    int32_t count=99,index=99; found=9;
+    check(opencv_calib3d_fundamental_result_found(nullptr,&found)==1 && found==0 &&
+          opencv_calib3d_fundamental_result_matrix(nullptr,&h)==1 && zero() &&
+          opencv_calib3d_fundamental_result_inlier_count(nullptr,&count)==1 && count==0 &&
+          opencv_calib3d_fundamental_result_inlier(nullptr,0,&index)==1 && index==0,
+          "fundamental null handle output clearing");
+    check(opencv_calib3d_fundamental_result_found(clean.get(),nullptr)==1 &&
+          opencv_calib3d_fundamental_result_matrix(clean.get(),nullptr)==1 &&
+          opencv_calib3d_fundamental_result_inlier_count(clean.get(),nullptr)==1 &&
+          opencv_calib3d_fundamental_result_inlier(clean.get(),0,nullptr)==1,"null fundamental accessor outputs");
+    auto line_s=matrix(n,1,OPENCV_CORE_DEPTH_FLOAT64,2), line_d=matrix(n,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    for (int i=0;i<n;++i) {
+        output(line_s.get()).at<cv::Vec2d>(i,0)={double(i),2.*i};
+        output(line_d.get()).at<cv::Vec2d>(i,0)={3.*i,4.*i};
+    }
+    auto absent=estimate(line_s.get(),line_d.get()); found=9;count=99;h={9,9,9,9,9,9,9,9,9};
+    check(opencv_calib3d_fundamental_result_found(absent.get(),&found)==0 && found==0 &&
+          opencv_calib3d_fundamental_result_inlier_count(absent.get(),&count)==0 && count==0 &&
+          opencv_calib3d_fundamental_result_matrix(absent.get(),&h)==1 && zero(),"collinear no-model contract");
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+    const int expected[]={0,1,2,3,4,4};
+    for (int stage : {23,24,25,26}) for (int kind=1;kind<=5;++kind) {
+        auto *raw=clean.get(); opencv_calib3d_test_fail(stage,kind);
+        check(opencv_calib3d_find_fundamental_ransac(sraw,draw,&options,&raw)==expected[kind] && !raw,
+              "fundamental exception/publication atomicity");
+    }
+    for (int kind=1;kind<=5;++kind) {
+        h={9,9,9,9,9,9,9,9,9};opencv_calib3d_test_fail(27,kind);
+        check(opencv_calib3d_fundamental_result_matrix(clean.get(),&h)==expected[kind] && zero(),
+              "fundamental matrix fault clearing");
+        index=99;opencv_calib3d_test_fail(28,kind);
+        check(opencv_calib3d_fundamental_result_inlier(clean.get(),0,&index)==expected[kind] && index==0,
+              "fundamental inlier fault clearing");
+    }
+    std::cout << "PASS: fundamental 30 fault scenarios, null output/no partial publication\n";
+#endif
+    opencv_calib3d_fundamental_result_destroy(nullptr);
+    std::cout << "PASS: fundamental real strided Core Regions, 14 rejected/15 true RANSAC, collinear no-model, raw negatives\n";
+}
+
 void run() {
+    fundamental_boundary();
     homography_boundary();
     camera_geometry_boundary();
     refinement_boundary();

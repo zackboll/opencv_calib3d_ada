@@ -1342,11 +1342,338 @@ package body Calib3D_Tests is
         " alignment=" & Interfaces.Integer_32'Image (Layout (1)) & "; all nine offsets/interchange; options layout PASS");
    end Homography_Layout;
 
+   procedure Fundamental_Layout (T : in out Fixture) is
+      pragma Unreferenced (T);
+      function Layout (Field : Interfaces.Integer_32) return Interfaces.Integer_32
+        with Import, Convention => C, External_Name => "calib3d_test_fundamental_layout";
+      procedure Fill (Value : access ABI.C_Fundamental)
+        with Import, Convention => C, External_Name => "calib3d_test_fill_fundamental";
+      function Options_Layout (Field : Interfaces.Integer_32) return Interfaces.Integer_32
+        with Import, Convention => C, External_Name => "calib3d_test_fundamental_options_layout";
+      procedure Fill_Options (Value : access ABI.C_Fundamental_Options)
+        with Import, Convention => C, External_Name => "calib3d_test_fill_fundamental_options";
+      Value : aliased ABI.C_Fundamental;
+      Options : aliased ABI.C_Fundamental_Options;
+      type Positions is array (Natural range <>) of Natural;
+      Offsets : constant Positions := [Value.F00'Position, Value.F01'Position, Value.F02'Position,
+        Value.F10'Position, Value.F11'Position, Value.F12'Position,
+        Value.F20'Position, Value.F21'Position, Value.F22'Position];
+      Option_Offsets : constant Positions :=
+        [Options.Epipolar_Threshold_Pixels'Position, Options.Confidence'Position];
+   begin
+      Assert (ABI.C_Fundamental'Size = Natural (Layout (0)) * System.Storage_Unit, "fundamental C/Ada size");
+      Assert (ABI.C_Fundamental'Alignment = Natural (Layout (1)), "fundamental C/Ada alignment");
+      for I in Offsets'Range loop
+         Assert (Offsets (I) = Natural (Layout (Interfaces.Integer_32 (I + 2))), "fundamental field offset");
+      end loop;
+      Fill (Value'Access);
+      Assert (Value.F00 = 1.0 and then Value.F01 = 2.0 and then Value.F02 = 3.0 and then
+              Value.F10 = 4.0 and then Value.F11 = 5.0 and then Value.F12 = 6.0 and then
+              Value.F20 = 7.0 and then Value.F21 = 8.0 and then Value.F22 = 9.0, "C-written fundamental interchange");
+      Assert (ABI.C_Fundamental_Options'Size = Natural (Options_Layout (0)) * System.Storage_Unit and then
+              ABI.C_Fundamental_Options'Alignment = Natural (Options_Layout (1)), "fundamental options C/Ada layout");
+      for I in Option_Offsets'Range loop
+         Assert (Option_Offsets (I) = Natural (Options_Layout (Interfaces.Integer_32 (I + 2))), "options field offset");
+      end loop;
+      Fill_Options (Options'Access);
+      Assert (Options.Epipolar_Threshold_Pixels = 3.0 and then
+              Options.Confidence = 0.99, "C-written fundamental options interchange");
+      Ada.Text_IO.Put_Line ("fundamental layout: compiler size=" & Interfaces.Integer_32'Image (Layout (0)) &
+        " alignment=" & Interfaces.Integer_32'Image (Layout (1)) & "; all nine offsets/interchange; options layout PASS");
+   end Fundamental_Layout;
+
+   F_Policy : constant Fundamental_RANSAC_Options := (0.1, 0.999);
+   F_Known : constant Fundamental_Matrix :=
+     [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]];
+   function Stereo_Points (Second : Boolean) return Image_Point_Array is
+   begin
+      return Points : Image_Point_Array (1 .. 32) do
+         for I in Points'Range loop
+            declare
+               J : constant Natural := I - 1;
+               X : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((J * 7) mod 17 - 8) * 0.24;
+               Y : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((J * 11) mod 19 - 9) * 0.19;
+               Z : constant OpenCV.Float64_Value := 4.0 + OpenCV.Float64_Value ((J * 13) mod 23) * 0.17;
+            begin
+               Points (I) := [800.0 * (X - (if Second then 0.75 else 0.0)) / Z + 320.0,
+                              820.0 * Y / Z + 240.0];
+            end;
+         end loop;
+      end return;
+   end Stereo_Points;
+
+   procedure Fundamental_Oracle (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F : Fundamental_Matrix;
+   begin
+      for Scale of Reprojection_Error_Array'[1.0, -7.0, 1.0E6] loop
+         F := F_Known;
+         for V of F loop
+            V := V * Scale;
+         end loop;
+         declare
+            Zero : constant Epipolar_Error_Result := Maximum_Epipolar_Error (F, [100.0, 50.0], [80.0, 50.0]);
+            Three : constant Epipolar_Error_Result := Maximum_Epipolar_Error (F, [100.0, 50.0], [80.0, 53.0]);
+         begin
+            Assert (Zero.Defined and then Zero.Maximum_Error_Pixels = 0.0, "independent zero-pixel oracle");
+            Assert (Three.Defined and then Near (Three.Maximum_Error_Pixels, 3.0), "independent three-pixel/scale oracle");
+         end;
+      end loop;
+      --  Only one of the two normals is zero, then both zero.
+      F := [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 0.0]];
+      Assert (not Maximum_Epipolar_Error (F, [1.0, 2.0], [3.0, 4.0]).Defined, "zero first line normal");
+      F := [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, -1.0, 0.0]];
+      Assert (not Maximum_Epipolar_Error (F, [1.0, 2.0], [3.0, 4.0]).Defined, "zero second line normal");
+      Assert (not Maximum_Epipolar_Error ([others => [others => 0.0]], [1.0, 2.0], [3.0, 4.0]).Defined,
+              "zero matrix undefined");
+      Ada.Text_IO.Put_Line ("known-F independent 0/3 pixel oracle; F/-7F/1e6F scale invariance; zero normals PASS");
+   end Fundamental_Oracle;
+
+   procedure Fundamental_Range (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      F : Fundamental_Matrix := F_Known;
+      E : Epipolar_Error_Result;
+   begin
+      for V of F loop
+         V := V * 1.0E200;
+      end loop;
+      E := Maximum_Epipolar_Error (F, [100.0, 50.0], [80.0, 53.0]);
+      Assert (E.Defined and then Near (E.Maximum_Error_Pixels, 3.0), "scaled hypot avoids naive squaring overflow");
+      F (0, 0) := OpenCV.Float64_Value'Last;
+      Assert (not Maximum_Epipolar_Error (F, [2.0, 50.0], [80.0, 53.0]).Defined, "product overflow undefined");
+      F := F_Known; F (1, 2) := 1.0E-300; F (2, 1) := -1.0E-300;
+      E := Maximum_Epipolar_Error (F, [100.0, 50.0], [80.0, 53.0]);
+      Assert (E.Defined and then Near (E.Maximum_Error_Pixels, 3.0), "tiny normal is not epsilon-rejected");
+      F := [[1.0E200, 1.0E200, 0.0], [0.0, 0.0, 1.0E200], [0.0, 0.0, 0.0]];
+      E := Maximum_Epipolar_Error (F, [0.0, 0.0], [1.0, 1.0]);
+      Assert (E.Defined and then Near (E.Maximum_Error_Pixels, 1.0), "two large components use scaled hypot");
+      F := [[OpenCV.Float64_Value'Last, OpenCV.Float64_Value'Last, 0.0],
+            [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]];
+      Assert (not Maximum_Epipolar_Error (F, [1.0, 1.0], [0.0, 0.0]).Defined, "line sum overflow undefined");
+      Assert (not Maximum_Epipolar_Error (F, [0.0, 0.0], [1.0, 0.0]).Defined, "norm overflow undefined");
+      Assert (not Maximum_Epipolar_Error (F_Known, [0.0, -OpenCV.Float64_Value'Last],
+                         [0.0, OpenCV.Float64_Value'Last]).Defined, "numerator overflow undefined");
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         for Row in 0 .. 2 loop
+            for Col in 0 .. 2 loop
+               F := F_Known; F (Row, Col) := OpenCV.Float64_Value (Nonfinite (Kind));
+               begin
+                  E := Maximum_Epipolar_Error (F, [100.0, 50.0], [80.0, 53.0]);
+                  Assert (False, "nonfinite F accepted");
+               exception
+                  when OpenCV.OpenCV_Error => null;
+               end;
+            end loop;
+         end loop;
+         for Which in 1 .. 2 loop
+            for Component in 0 .. 1 loop
+               declare
+                  P1, P2 : Image_Point := [100.0, 50.0];
+               begin
+                  if Which = 1 then
+                     P1 (Component) := OpenCV.Float64_Value (Nonfinite (Kind));
+                  else
+                     P2 (Component) := OpenCV.Float64_Value (Nonfinite (Kind));
+                  end if;
+                  begin
+                     E := Maximum_Epipolar_Error (F_Known, P1, P2);
+                     Assert (False, "nonfinite epipolar point accepted");
+                  exception
+                     when OpenCV.OpenCV_Error => null;
+                  end;
+               end;
+            end loop;
+         end loop;
+      end loop;
+   end Fundamental_Range;
+
+   procedure Check_Fundamental_Final
+     (Estimate : Fundamental_Estimate; First, Second : Image_Point_Array;
+      Maximum : out OpenCV.Float64_Value)
+   is
+      Indices : constant Inlier_Index_Array := Inliers (Estimate);
+      F : constant Fundamental_Matrix := Fundamental (Estimate);
+   begin
+      Maximum := 0.0;
+      Assert (Found (Estimate) and then Inlier_Count (Estimate) >= 7, "minimum final support");
+      for I in Indices'Range loop
+         Assert (Indices (I) in 1 .. First'Length and then Inlier (Estimate, I) = Indices (I), "valid position");
+         if I > 1 then
+            Assert (Indices (I) > Indices (I - 1), "unique ascending positions");
+         end if;
+      end loop;
+      for I in 1 .. First'Length loop
+         declare
+            P1 : constant Image_Point := First (First'First + I - 1);
+            P2 : constant Image_Point := Second (Second'First + I - 1);
+            E : constant Epipolar_Error_Result := Maximum_Epipolar_Error (F, P1, P2);
+            --  Independent bounded scalar formula, separate from the API.
+            A2 : constant OpenCV.Float64_Value := F (0, 0)*P1 (0)+F (0, 1)*P1 (1)+F (0, 2);
+            B2 : constant OpenCV.Float64_Value := F (1, 0)*P1 (0)+F (1, 1)*P1 (1)+F (1, 2);
+            C2 : constant OpenCV.Float64_Value := F (2, 0)*P1 (0)+F (2, 1)*P1 (1)+F (2, 2);
+            A1 : constant OpenCV.Float64_Value := F (0, 0)*P2 (0)+F (1, 0)*P2 (1)+F (2, 0);
+            B1 : constant OpenCV.Float64_Value := F (0, 1)*P2 (0)+F (1, 1)*P2 (1)+F (2, 1);
+            C1 : constant OpenCV.Float64_Value := F (0, 2)*P2 (0)+F (1, 2)*P2 (1)+F (2, 2);
+            Independent : constant OpenCV.Float64_Value := OpenCV.Float64_Value'Max
+              (abs (A1*P1 (0)+B1*P1 (1)+C1)/Math.Sqrt (A1*A1+B1*B1),
+               abs (A2*P2 (0)+B2*P2 (1)+C2)/Math.Sqrt (A2*A2+B2*B2));
+         begin
+            Assert (E.Defined and then Near (Independent, E.Maximum_Error_Pixels), "independent metric matches");
+            Assert (Contains (Indices, I) = (E.Defined and then E.Maximum_Error_Pixels <= F_Policy.Epipolar_Threshold_Pixels),
+                    "every included/excluded pair matches final F Float64 threshold");
+            if Contains (Indices, I) then
+               Maximum := OpenCV.Float64_Value'Max (Maximum, E.Maximum_Error_Pixels);
+            end if;
+         end;
+      end loop;
+      begin
+         declare
+            I : constant Positive := Inlier (Estimate, Inlier_Count (Estimate) + 1);
+            pragma Unreferenced (I);
+         begin
+            Assert (False, "out-of-range public index accepted");
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+   end Check_Fundamental_Final;
+
+   procedure Fundamental_Clean (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Image_Point_Array (11 .. 42) := Stereo_Points (False);
+      Second : constant Image_Point_Array (51 .. 82) := Stereo_Points (True);
+      Estimate : constant Fundamental_Estimate := Estimate_Fundamental_RANSAC (First, Second, F_Policy);
+      Maximum : OpenCV.Float64_Value;
+   begin
+      Check_Fundamental_Final (Estimate, First, Second, Maximum);
+      Assert (Inlier_Count (Estimate) >= 31, "clean stereo nearly all accepted");
+      Ada.Text_IO.Put_Line ("clean fundamental: final support=" & Natural'Image (Inlier_Count (Estimate)) &
+        "; maximum final-model epipolar error=" & OpenCV.Float64_Value'Image (Maximum));
+   end Fundamental_Clean;
+
+   procedure Fundamental_Outliers (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Image_Point_Array := Stereo_Points (False);
+      Second : Image_Point_Array := Stereo_Points (True);
+      Maximum : OpenCV.Float64_Value;
+   begin
+      for I in Second'Range loop
+         if I = 2 or else I = 7 or else I = 15 then
+            Second (I) := [Second (I) (0) + 50.0, Second (I) (1) + 500.0];
+         end if;
+      end loop;
+      declare
+         Estimate : constant Fundamental_Estimate := Estimate_Fundamental_RANSAC (First, Second, F_Policy);
+      begin
+         Check_Fundamental_Final (Estimate, First, Second, Maximum);
+         Assert (not Contains (Inliers (Estimate), 2) and then not Contains (Inliers (Estimate), 7) and then
+                 not Contains (Inliers (Estimate), 15), "gross vertical outliers rejected");
+         Ada.Text_IO.Put_Line ("outlier fundamental: final support=" & Natural'Image (Inlier_Count (Estimate)) &
+           "; 2/7/15 rejected; final Float64 inclusion/exclusion PASS");
+      end;
+   end Fundamental_Outliers;
+
+   procedure Reject_Fundamental
+     (First, Second : Image_Point_Array; Options : Fundamental_RANSAC_Options := F_Policy) is
+   begin
+      declare
+         Estimate : constant Fundamental_Estimate := Estimate_Fundamental_RANSAC (First, Second, Options);
+         pragma Unreferenced (Estimate);
+      begin
+         Assert (False, "invalid fundamental arguments accepted");
+      end;
+   exception
+      when OpenCV.OpenCV_Error => null;
+   end Reject_Fundamental;
+
+   procedure Fundamental_Minimum (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Image_Point_Array := Stereo_Points (False);
+      Second : constant Image_Point_Array := Stereo_Points (True);
+   begin
+      for N in 0 .. 14 loop
+         Reject_Fundamental (First (1 .. N), Second (1 .. N));
+      end loop;
+      declare
+         Estimate : constant Fundamental_Estimate := Estimate_Fundamental_RANSAC
+           (First (1 .. 15), Second (1 .. 15), F_Policy);
+      begin
+         Assert (Found (Estimate), "15 correspondences allowed true RANSAC");
+      end;
+      Ada.Text_IO.Put_Line ("fundamental 0..14 rejected / 15 native true-RANSAC permitted PASS");
+   end Fundamental_Minimum;
+
+   procedure Fundamental_No_Model (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First, Second : Image_Point_Array (1 .. 32);
+   begin
+      for I in First'Range loop
+         First (I) := [OpenCV.Float64_Value (I), OpenCV.Float64_Value (2 * I)];
+         Second (I) := [OpenCV.Float64_Value (3 * I), OpenCV.Float64_Value (4 * I)];
+      end loop;
+      declare
+         Estimate : constant Fundamental_Estimate := Estimate_Fundamental_RANSAC (First, Second, F_Policy);
+         Indices : constant Inlier_Index_Array := Inliers (Estimate);
+      begin
+         Assert (not Found (Estimate) and then Inlier_Count (Estimate) = 0 and then
+                 Indices'First = 1 and then Indices'Last = 0, "real collinear no-model semantics");
+         begin
+            declare
+               F : constant Fundamental_Matrix := Fundamental (Estimate);
+               pragma Unreferenced (F);
+            begin
+               Assert (False, "no-model matrix accessible");
+            end;
+         exception
+            when OpenCV.OpenCV_Error => null;
+         end;
+      end;
+      Ada.Text_IO.Put_Line ("fundamental collinear: native success, Found=False, empty 1..0, inaccessible matrix PASS");
+   end Fundamental_No_Model;
+
+   procedure Fundamental_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      First : Image_Point_Array := Stereo_Points (False);
+      Second : Image_Point_Array := Stereo_Points (True);
+      Bad : Fundamental_RANSAC_Options;
+      Epsilon : constant OpenCV.Float64_Value := 2.0**(-52);
+   begin
+      Reject_Fundamental (First, Second (1 .. 31));
+      for V of Reprojection_Error_Array'[0.0, -1.0, 1.0E-30, 1.0E20, 1.0E-300, OpenCV.Float64_Value'Last] loop
+         Bad := F_Policy; Bad.Epipolar_Threshold_Pixels := V;
+         Reject_Fundamental (First, Second, Bad);
+      end loop;
+      for V of Reprojection_Error_Array'[0.0, -1.0, 1.0, 2.0, Epsilon / 2.0, 1.0 - Epsilon / 2.0] loop
+         Bad := F_Policy; Bad.Confidence := V;
+         Reject_Fundamental (First, Second, Bad);
+      end loop;
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         Bad := F_Policy; Bad.Confidence := OpenCV.Float64_Value (Nonfinite (Kind));
+         Reject_Fundamental (First, Second, Bad);
+         Bad := F_Policy; Bad.Epipolar_Threshold_Pixels := OpenCV.Float64_Value (Nonfinite (Kind));
+         Reject_Fundamental (First, Second, Bad);
+         First (1) (0) := OpenCV.Float64_Value (Nonfinite (Kind));
+         Reject_Fundamental (First, Second); First := Stereo_Points (False);
+         Second (1) (1) := OpenCV.Float64_Value (Nonfinite (Kind));
+         Reject_Fundamental (First, Second); Second := Stereo_Points (True);
+      end loop;
+   end Fundamental_Invalid;
+
    package Caller is new AUnit.Test_Caller (Fixture);
 
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
+      Result.Add_Test (Caller.Create ("compiler-derived fundamental/options layouts", Fundamental_Layout'Access));
+      Result.Add_Test (Caller.Create ("independent known-F epipolar/scale oracle", Fundamental_Oracle'Access));
+      Result.Add_Test (Caller.Create ("epipolar error finite range/invalid inputs", Fundamental_Range'Access));
+      Result.Add_Test (Caller.Create ("clean noncoplanar stereo fundamental RANSAC", Fundamental_Clean'Access));
+      Result.Add_Test (Caller.Create ("gross vertical outlier final-F classification", Fundamental_Outliers'Access));
+      Result.Add_Test (Caller.Create ("fundamental 14 rejection/15 true RANSAC", Fundamental_Minimum'Access));
+      Result.Add_Test (Caller.Create ("fundamental real collinear no-model", Fundamental_No_Model'Access));
+      Result.Add_Test (Caller.Create ("fundamental invalid points/options", Fundamental_Invalid'Access));
       Result.Add_Test (Caller.Create ("homography independent projective map/scale/infinity", Homography_Map'Access));
       Result.Add_Test (Caller.Create ("homography mapping range/nonfinite validation", Homography_Map_Range'Access));
       Result.Add_Test (Caller.Create ("clean robust homography final-model oracle", Homography_Clean'Access));

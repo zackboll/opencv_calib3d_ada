@@ -56,8 +56,20 @@ def main() -> None:
 
     tests = (ROOT / "tests/src/calib3d_tests.adb").read_text()
     registrations = re.findall(r"Result\.Add_Test\s*\(Caller\.Create", tests)
-    check(len(registrations) == 40, "update documented AUnit inventory when changing tests")
-    check(len(declared) == 20, "update private ABI inventory when changing exports")
+    check(len(registrations) == 48, "update documented AUnit inventory when changing tests")
+    check(len(declared) == 27, "update private ABI inventory when changing exports")
+    check("count >= 15" in cpp and "cv::findFundamentalMat(first, second, cv::FM_RANSAC" in cpp,
+          "fundamental must prevent the hidden 8..14 LMeDS fallback")
+    check("final_fundamental_inlier(value->matrix" in cpp and "value->inliers.size() >= 7" in cpp,
+          "fundamental requires final-F Float64 classification and seven final inliers")
+    fundamental = (ROOT / "cpp/fundamental_profile.hpp").read_text()
+    check("threshold * threshold" in fundamental and "static_cast<float>(squared)" in fundamental,
+          "native comparison squares before converting to Float32")
+    check("confidence < DBL_EPSILON" in fundamental and "confidence > 1 - DBL_EPSILON" in fundamental,
+          "fundamental confidence must prevent native substitution")
+    helpers = {p.name for p in (ROOT / "tests/cpp").glob("*test.*")}
+    check(helpers == {"header_test.c", "profile_test.cpp", "homography_profile_test.cpp",
+                      "fundamental_profile_test.cpp"}, "update helper inventory")
     check("final_homography_inlier(value->matrix" in cpp and "native_mask.copyTo" not in cpp,
           "homography must independently classify final H")
     check("count >= 5" in cpp and "cv::findHomography(source, destination, cv::RANSAC" in cpp,

@@ -49,6 +49,12 @@
           "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/ptsetreg.cpp",
           "sha256": "4e99b2b4aaa39555734ef70e0135d623db3c514d11457a6bfe3754fc500a899d",
           "git_blob_sha1": "275112b7e98ae520354375e9bb96bccaebb22621"
+        },
+        {
+          "path": "modules/calib3d/src/precomp.hpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/precomp.hpp",
+          "sha256": "4a4eabd56fa4deec0d7d140e2db6fdcddd5dbd7b191abe73b68c05d3c9a6606e",
+          "git_blob_sha1": "f2cb7123c07a332ee34b360123a19d35905acd67"
         }
       ]
     },
@@ -100,6 +106,12 @@
           "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/ptsetreg.cpp",
           "sha256": "3fe16f2f50869e4f0184133128cf96844782a5f7a049b96e116886d83e6631ef",
           "git_blob_sha1": "c0132a68329e1c320842e3ce8980f6250dca68dc"
+        },
+        {
+          "path": "modules/calib3d/src/precomp.hpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/precomp.hpp",
+          "sha256": "61b0bb8425349438fd695206c8d4970516ed5f4609b3fd2d6e16257e591b8b54",
+          "git_blob_sha1": "8f598d6709e105c94ccd6b57edf42a040cc1b3dc"
         }
       ]
     },
@@ -151,6 +163,12 @@
           "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/ptsetreg.cpp",
           "sha256": "096c3203b3fcfa5a535efdd25c58b4797e8f13ecc979d004397975396b4abfe6",
           "git_blob_sha1": "e8667f9524e54a92b9e9e955753b4e11c496cae5"
+        },
+        {
+          "path": "modules/geometry/src/precomp.hpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/precomp.hpp",
+          "sha256": "4fd59899e543fa54f432e44551d9e180fbdf88a8abc06774dfec3e257e27b7c0",
+          "git_blob_sha1": "1242cd0efd34f54b10098d2a59b50ebcb8295029"
         }
       ]
     }
@@ -189,5 +207,20 @@
     "public_inliers": "independent final-H forward Euclidean Float64 classification in destination pixels, <= threshold",
     "mask_difference": "4.1/4.10 retain pre-refinement mask; 5.0 recomputes after refinement",
     "verification": "immutable public headers SHA-256/blob reverified; fundam.cpp and ptsetreg.cpp SHA-256/Git blob hashes added"
+  },
+  "task_005_review": {
+    "verification": "immutable public headers/fundam.cpp/ptsetreg.cpp SHA-256 and Git blob hashes reverified; precomp.hpp factory defaults downloaded and hashed",
+    "native_call": "findFundamentalMat(first,second,cv::FM_RANSAC,threshold,confidence,native_mask)",
+    "minimum_correspondences": 15,
+    "seven_points": "direct seven-point solver",
+    "eight_to_fourteen_points": "FM_RANSAC request silently selects LMeDS",
+    "minimum_native_subset": 7,
+    "minimum_final_support": 7,
+    "maximum_iterations": 1000,
+    "native_precision": "input observations converted to Float32 before legacy estimator",
+    "threshold_profile": "finite positive float(double(threshold*threshold)); reject zero/infinity rounding",
+    "confidence_profile": "DBL_EPSILON <= confidence <= 1-DBL_EPSILON; strict native substitution comparisons",
+    "public_inliers": "original Float64 observations, final F, defined maximum of both point-to-epipolar-line distances <= threshold",
+    "matrix_policy": "3x3 CV_64FC1 finite nonzero common scale, no coefficient/sign/rank threshold"
   }
 }

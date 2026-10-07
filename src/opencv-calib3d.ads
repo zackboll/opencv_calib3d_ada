@@ -15,6 +15,49 @@ package OpenCV.Calib3D is
    type Object_Point_Array is array (Positive range <>) of Object_Point;
    type Inlier_Index_Array is array (Positive range <>) of Positive;
 
+   --  p2^T * F * p1 = 0, p=(x,y,1). Arbitrary nonzero common scale;
+   --  neither F(2,2)=1 nor a sign convention is promised. F alone does not
+   --  recover metric scale, camera position, or 3-D terrain location.
+   type Fundamental_Matrix is
+     array (Natural range 0 .. 2, Natural range 0 .. 2) of OpenCV.Float64_Value;
+   type Epipolar_Error_Result (Defined : Boolean := False) is record
+      case Defined is
+         when True => Maximum_Error_Pixels : OpenCV.Float64_Value;
+         when False => null;
+      end case;
+   end record;
+   --  max(abs(p1^T F^T p2)/hypot((F^T p2).xy),
+   --      abs(p2^T F p1)/hypot((F p1).xy)), NOT Sampson distance.
+   --  Nonfinite inputs raise OpenCV_Error. Zero line normals or nonfinite
+   --  intermediates/distances return Defined=False; no epsilon or clamping.
+   function Maximum_Epipolar_Error
+     (Matrix : Fundamental_Matrix; First_Point, Second_Point : Image_Point)
+      return Epipolar_Error_Result;
+   type Fundamental_RANSAC_Options is record
+      Epipolar_Threshold_Pixels : OpenCV.Float64_Value := 3.0;
+      Confidence               : OpenCV.Float64_Value := 0.99;
+   end record;
+   type Fundamental_Estimate is limited private;
+   --  Equal counts >=15 fitting INT32: 8..14 would silently run LMeDS.
+   --  Common legacy native RANSAC ceiling is fixed at 1000 iterations.
+   --  Native estimation converts coordinates to Float32 internally.
+   --  Public inliers use FINAL F and ORIGINAL Float64 observations, defined
+   --  Maximum_Epipolar_Error <= threshold. Found requires >=7 final inliers.
+   --  Threshold: finite positive, float(double(threshold*threshold)) finite
+   --  positive. Confidence: DBL_EPSILON <= c <= 1-DBL_EPSILON (inclusive),
+   --  not merely (0,1): avoid silent native substitution with 0.99.
+   function Estimate_Fundamental_RANSAC
+     (First_Points, Second_Points : Image_Point_Array;
+      Options : Fundamental_RANSAC_Options := (others => <>))
+      return Fundamental_Estimate;
+   function Found (Estimate : Fundamental_Estimate) return Boolean;
+   --  Raises OpenCV_Error when Found=False; no-model inliers are 1 .. 0.
+   function Fundamental (Estimate : Fundamental_Estimate) return Fundamental_Matrix;
+   function Inlier_Count (Estimate : Fundamental_Estimate) return Natural;
+   function Inlier (Estimate : Fundamental_Estimate; Index : Positive) return Positive;
+   --  One-based correspondence positions, valid/unique/strictly ascending.
+   function Inliers (Estimate : Fundamental_Estimate) return Inlier_Index_Array;
+
    --  [x',y',1]^T ~ H * [x,y,1]^T. H has arbitrary nonzero common scale;
    --  h22=1 is NOT an invariant. A single H models planes/projective image
    --  registration, not general 3-D terrain pose (use PnP for 3-D points).
@@ -203,6 +246,12 @@ package OpenCV.Calib3D is
 
 private
    type Inlier_Buffer is access Inlier_Index_Array;
+   type Fundamental_Estimate is new Ada.Finalization.Limited_Controlled with record
+      Has_Model : Boolean := False;
+      Value     : Fundamental_Matrix := [others => [others => 0.0]];
+      Data      : Inlier_Buffer := null;
+   end record;
+   overriding procedure Finalize (Self : in out Fundamental_Estimate);
    type Homography_Estimate is new Ada.Finalization.Limited_Controlled with record
       Has_Model : Boolean := False;
       Value     : Homography_Matrix := [others => [others => 0.0]];

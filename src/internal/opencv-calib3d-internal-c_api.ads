@@ -36,6 +36,38 @@ package OpenCV.Calib3D.Internal.C_API is
    procedure Homography_Result_Destroy (Handle : System.Address)
      with Import, Convention => C, External_Name => "opencv_calib3d_homography_result_destroy";
 
+   type C_Fundamental is record
+      F00, F01, F02, F10, F11, F12, F20, F21, F22 : Interfaces.C.double;
+   end record with Convention => C;
+   type C_Fundamental_Options is record
+      Epipolar_Threshold_Pixels, Confidence : Interfaces.C.double;
+   end record with Convention => C;
+   function Find_Fundamental_RANSAC
+     (First, Second : OpenCV.Core.Module_Interop.Input_Mat_Handle;
+      Options : access constant C_Fundamental_Options;
+      Result : access System.Address) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_find_fundamental_ransac";
+   function Fundamental_Result_Found
+     (Handle : System.Address; Value : access Interfaces.Unsigned_8) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_fundamental_result_found";
+   function Fundamental_Result_Matrix
+     (Handle : System.Address; Value : access C_Fundamental) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_fundamental_result_matrix";
+   function Fundamental_Result_Inlier_Count
+     (Handle : System.Address; Count : access Interfaces.Integer_32) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_fundamental_result_inlier_count";
+   function Fundamental_Result_Inlier
+     (Handle : System.Address; Index : Interfaces.Integer_32;
+      Correspondence_Index : access Interfaces.Integer_32) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_fundamental_result_inlier";
+   procedure Fundamental_Result_Destroy (Handle : System.Address)
+     with Import, Convention => C, External_Name => "opencv_calib3d_fundamental_result_destroy";
+
+   function Validate_Fundamental_Options
+     (Options : access constant C_Fundamental_Options) return Status
+     with Import, Convention => C,
+       External_Name => "opencv_calib3d_validate_fundamental_options";
+
    type C_Camera_Intrinsics is record
       Focal_X, Focal_Y, Center_X, Center_Y : Interfaces.C.double;
    end record with Convention => C;

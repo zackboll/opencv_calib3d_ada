@@ -9,3 +9,8 @@
    world frame.
 6. Integrate Features correspondences at an application/navigation layer rather
    than creating a hard dependency from Calib3D to Features.
+
+
+Task 005: robust fundamental-matrix epipolar verification only (see its contract).
+Task 006: Essential matrix and relative camera pose; not part of Task 005.
+Triangulation remains a later separate task.

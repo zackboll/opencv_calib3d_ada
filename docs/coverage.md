@@ -35,7 +35,7 @@ halt-on-error and no suppressions; production excludes test-hook symbols.
 This does not prove real allocator exhaustion or instrument all dependencies.
 See `bootstrap-validation.md` and PR Actions for cross-platform/matrix evidence.
 
-Out of scope: broad calibration, stereo, essential/fundamental,
+Out of scope: broad calibration, stereo, essential,
 triangulation, arbitrary SolvePnP methods, RefineLM/VVS, fisheye, image undistortion/remap,
 USAC configuration, Features integration and geographic/DTED semantics.
 
@@ -120,3 +120,20 @@ and scale. A source-structure regression ensures native masks cannot be substitu
 silently. The separate `homography_synthetic` example is run in ordinary
 Linux/macOS and manual pinned CI. See `homography-validation.md` for **executed**
 counts/results; inventory is not a pass claim.
+
+
+## Task 005 inventory
+
+Current suite: **48 AUnit registrations**, adding eight fundamental cases:
+known-F 0/3-pixel/scale/undefined oracle; large/tiny finite arithmetic and invalid
+inputs; noncoplanar direct stereo clean estimation; gross vertical outliers and
+final Float64 inclusion/exclusion; 14 rejection/15 true RANSAC; real collinear
+no-model; invalid points/numeric profiles; distinct fundamental/options complete
+compiler-derived layout and interchange. There are **27** private C exports,
+including a shared native options-profile preflight helper, and **four** standalone
+C/C++ helpers. Stage IDs 23..28 add 30 raw and 30 Ada fault scenarios while
+preserving the existing macOS isolated runtime. Actual-shim production/fault raw
+and ASan+UBSan cover both strided Core inputs, schemas/options, 14/15, clean/outlier,
+no-model, access/destruction and cleanup. Linux/macOS and the manual pinned matrix
+run all three examples. See `fundamental-validation.md` for executed results;
+this inventory is not a pass claim.

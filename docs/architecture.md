@@ -68,3 +68,14 @@ upstream mask. Four-point direct native behavior is excluded by a >=5 binding
 minimum. At least four final-model inliers are required before publication.
 Pure-Ada mapping reports projective infinity/overflow without clamping. This is
 planar/projective verification, not a 3-D terrain pose substitute or a new backend.
+
+
+Task 005 adds distinct fundamental/options C records, six opaque-result exports
+and one shared options-profile validation export. The fixed common legacy RANSAC
+call uses no maximum-iteration argument (native ceiling 1000) and requires >=15
+in both layers to avoid hidden LMeDS fallback. Native estimation rounds to
+Float32; final-F classification uses original Float64 observations, maximum of
+two point-to-line errors and no upstream mask. Pure-Ada public diagnostics use
+scaled hypot and undefined geometry rather than epsilon/clamping. At least seven
+final-model inliers are required. Ada independently calculates its final public
+classification. Ownership/exception and macOS fault isolation remain unchanged.

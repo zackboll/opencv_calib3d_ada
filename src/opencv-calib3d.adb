@@ -76,6 +76,108 @@ package body OpenCV.Calib3D is
       return Estimate.Data.all;
    end Inliers;
 
+   overriding procedure Finalize (Self : in out Fundamental_Estimate) is
+   begin
+      if Self.Data /= null then
+         Free (Self.Data);
+      end if;
+      Self.Has_Model := False;
+      Self.Value := [others => [others => 0.0]];
+   end Finalize;
+
+   function Found (Estimate : Fundamental_Estimate) return Boolean is (Estimate.Has_Model);
+   function Fundamental (Estimate : Fundamental_Estimate) return Fundamental_Matrix is
+   begin
+      if not Estimate.Has_Model then
+         raise OpenCV.OpenCV_Error with "Fundamental requested from an unsuccessful estimate";
+      end if;
+      return Estimate.Value;
+   end Fundamental;
+   function Inlier_Count (Estimate : Fundamental_Estimate) return Natural is
+     (if Estimate.Data = null then 0 else Estimate.Data.all'Length);
+   function Inlier (Estimate : Fundamental_Estimate; Index : Positive) return Positive is
+   begin
+      if Estimate.Data = null or else Index not in Estimate.Data.all'Range then
+         raise OpenCV.OpenCV_Error with "Fundamental inlier index out of range";
+      end if;
+      return Estimate.Data (Index);
+   end Inlier;
+   function Inliers (Estimate : Fundamental_Estimate) return Inlier_Index_Array is
+   begin
+      if Estimate.Data = null then
+         return [1 .. 0 => <>];
+      end if;
+      return Estimate.Data.all;
+   end Inliers;
+
+   function Maximum_Epipolar_Error
+     (Matrix : Fundamental_Matrix; First_Point, Second_Point : Image_Point)
+      return Epipolar_Error_Result
+   is
+      subtype Scalar is OpenCV.Float64_Value;
+      type Line is array (Natural range 0 .. 2) of Scalar;
+      L1, L2 : Line;
+      N1, N2, D1, D2 : Scalar;
+      function Sum3 (A, X, B, Y, C : Scalar) return Scalar is
+         AX : constant Scalar := A * X;
+         BY : constant Scalar := B * Y;
+         Sum : constant Scalar := AX + BY;
+         Value : constant Scalar := Sum + C;
+      begin
+         if not Is_Finite (AX) or else not Is_Finite (BY) or else
+           not Is_Finite (Sum) or else not Is_Finite (Value)
+         then
+            raise Constraint_Error;
+         end if;
+         return Value;
+      end Sum3;
+      function Hypot (A, B : Scalar) return Scalar is
+         Scale : constant Scalar := Scalar'Max (abs A, abs B);
+      begin
+         if Scale = 0.0 then
+            return 0.0;
+         end if;
+         return Scale * Math.Sqrt ((A / Scale)**2 + (B / Scale)**2);
+      end Hypot;
+   begin
+      for Value of Matrix loop
+         if not Is_Finite (Value) then
+            raise OpenCV.OpenCV_Error with "Fundamental entries must be finite";
+         end if;
+      end loop;
+      for Value of First_Point loop
+         if not Is_Finite (Value) then
+            raise OpenCV.OpenCV_Error with "First epipolar point must be finite";
+         end if;
+      end loop;
+      for Value of Second_Point loop
+         if not Is_Finite (Value) then
+            raise OpenCV.OpenCV_Error with "Second epipolar point must be finite";
+         end if;
+      end loop;
+      for I in 0 .. 2 loop
+         L2 (I) := Sum3 (Matrix (I, 0), First_Point (0),
+                        Matrix (I, 1), First_Point (1), Matrix (I, 2));
+         L1 (I) := Sum3 (Matrix (0, I), Second_Point (0),
+                        Matrix (1, I), Second_Point (1), Matrix (2, I));
+      end loop;
+      N1 := Hypot (L1 (0), L1 (1));
+      N2 := Hypot (L2 (0), L2 (1));
+      if not Is_Finite (N1) or else not Is_Finite (N2) or else
+        N1 = 0.0 or else N2 = 0.0
+      then
+         return (Defined => False);
+      end if;
+      D1 := abs Sum3 (L1 (0), First_Point (0), L1 (1), First_Point (1), L1 (2)) / N1;
+      D2 := abs Sum3 (L2 (0), Second_Point (0), L2 (1), Second_Point (1), L2 (2)) / N2;
+      if not Is_Finite (D1) or else not Is_Finite (D2) then
+         return (Defined => False);
+      end if;
+      return (Defined => True, Maximum_Error_Pixels => Scalar'Max (D1, D2));
+   exception
+      when Constraint_Error => return (Defined => False);
+   end Maximum_Epipolar_Error;
+
    function Map_With_Homography
      (Matrix : Homography_Matrix; Point : Image_Point) return Homography_Point_Result
    is
@@ -797,6 +899,124 @@ package body OpenCV.Calib3D is
          Estimate.Has_Model := True;
       end return;
    end Estimate_Homography_RANSAC;
+
+   function Estimate_Fundamental_RANSAC
+     (First_Points, Second_Points : Image_Point_Array;
+      Options : Fundamental_RANSAC_Options := (others => <>))
+      return Fundamental_Estimate
+   is
+      type Result_Guard is new Ada.Finalization.Limited_Controlled with record
+         Handle : aliased System.Address := System.Null_Address;
+      end record;
+      overriding procedure Finalize (Self : in out Result_Guard);
+      overriding procedure Finalize (Self : in out Result_Guard) is
+      begin
+         C.Fundamental_Result_Destroy (Self.Handle);
+         Self.Handle := System.Null_Address;
+      end Finalize;
+      Guard : Result_Guard;
+      First, Second : OpenCV.Core.Mat;
+      Native_Options : aliased C.C_Fundamental_Options;
+      Native_Found : aliased Interfaces.Unsigned_8 := 0;
+      Native_Count : aliased Interfaces.Integer_32 := 0;
+      Matrix : aliased C.C_Fundamental := (others => 0.0);
+      Code : C.Status := C.Success;
+      procedure First_Callback (First_Handle : Bridge.Input_Mat_Handle) is
+         procedure Second_Callback (Second_Handle : Bridge.Input_Mat_Handle) is
+         begin
+            Code := C.Find_Fundamental_RANSAC
+              (First_Handle, Second_Handle, Native_Options'Access, Guard.Handle'Access);
+         end Second_Callback;
+      begin
+         Bridge.With_Input_Handle (Second, Second_Callback'Access);
+      end First_Callback;
+   begin
+      Native_Options := (Interfaces.C.double (Options.Epipolar_Threshold_Pixels),
+                         Interfaces.C.double (Options.Confidence));
+      C.Check (C.Validate_Fundamental_Options (Native_Options'Access), "Fundamental.Options");
+      Validate (First_Points);
+      Validate (Second_Points);
+      if First_Points'Length /= Second_Points'Length or else
+        First_Points'Length < 15 or else
+        First_Points'Length > Interfaces.Integer_32'Last
+      then
+         raise OpenCV.OpenCV_Error with "Robust fundamental requires equal counts >=15 fitting INT32";
+      end if;
+      First := Image_Matrix (First_Points);
+      Second := Image_Matrix (Second_Points);
+      Bridge.With_Input_Handle (First, First_Callback'Access);
+      C.Check (Code, "Calib3D.Estimate_Fundamental_RANSAC");
+      if Guard.Handle = System.Null_Address then
+         raise OpenCV.OpenCV_Error with "Native fundamental did not publish a result";
+      end if;
+      C.Check (C.Fundamental_Result_Found (Guard.Handle, Native_Found'Access), "Fundamental.Found");
+      if Native_Found = 0 then
+         return Estimate : Fundamental_Estimate do
+            null;
+         end return;
+      end if;
+      C.Check (C.Fundamental_Result_Matrix (Guard.Handle, Matrix'Access), "Fundamental.Matrix");
+      C.Check (C.Fundamental_Result_Inlier_Count (Guard.Handle, Native_Count'Access), "Fundamental.Count");
+      if Native_Count < 7 or else Native_Count > Interfaces.Integer_32 (First_Points'Length) then
+         raise OpenCV.OpenCV_Error with "Invalid native fundamental inlier count";
+      end if;
+      return Estimate : Fundamental_Estimate do
+         Estimate.Value :=
+           [[OpenCV.Float64_Value (Matrix.F00), OpenCV.Float64_Value (Matrix.F01), OpenCV.Float64_Value (Matrix.F02)],
+            [OpenCV.Float64_Value (Matrix.F10), OpenCV.Float64_Value (Matrix.F11), OpenCV.Float64_Value (Matrix.F12)],
+            [OpenCV.Float64_Value (Matrix.F20), OpenCV.Float64_Value (Matrix.F21), OpenCV.Float64_Value (Matrix.F22)]];
+         for Coefficient of Estimate.Value loop
+            if not Is_Finite (Coefficient) then
+               raise OpenCV.OpenCV_Error with "Native fundamental is nonfinite";
+            end if;
+         end loop;
+         Estimate.Data := new Inlier_Index_Array (1 .. Natural (Native_Count));
+         for I in Estimate.Data.all'Range loop
+            declare
+               Native_Index : aliased Interfaces.Integer_32 := 0;
+            begin
+               C.Check (C.Fundamental_Result_Inlier
+                 (Guard.Handle, Interfaces.Integer_32 (I - 1), Native_Index'Access), "Fundamental.Inlier");
+               if Native_Index < 0 or else Native_Index >= Interfaces.Integer_32 (First_Points'Length) then
+                  raise OpenCV.OpenCV_Error with "Invalid native fundamental correspondence index";
+               end if;
+               Estimate.Data (I) := Positive (Native_Index + 1);
+               if I > 1 and then Estimate.Data (I) <= Estimate.Data (I - 1) then
+                  raise OpenCV.OpenCV_Error with "Fundamental inliers are not strictly ascending";
+               end if;
+            end;
+         end loop;
+         --  The public classification is calculated in Ada with the caller's
+         --  original coordinates; the raw ABI independently offers the same
+         --  metric. Do not make native Float32 mask rounding public policy.
+         declare
+            Indices : Inlier_Index_Array (1 .. First_Points'Length);
+            Count : Natural := 0;
+         begin
+            for I in 1 .. First_Points'Length loop
+               declare
+                  Error : constant Epipolar_Error_Result := Maximum_Epipolar_Error
+                    (Estimate.Value, First_Points (First_Points'First + I - 1),
+                     Second_Points (Second_Points'First + I - 1));
+               begin
+                  if Error.Defined and then
+                    Error.Maximum_Error_Pixels <= Options.Epipolar_Threshold_Pixels
+                  then
+                     Count := Count + 1;
+                     Indices (Count) := I;
+                  end if;
+               end;
+            end loop;
+            Free (Estimate.Data);
+            if Count >= 7 then
+               Estimate.Data := new Inlier_Index_Array'(Indices (1 .. Count));
+               Estimate.Has_Model := True;
+            else
+               Estimate.Value := [others => [others => 0.0]];
+            end if;
+         end;
+      end return;
+   end Estimate_Fundamental_RANSAC;
 
    function Solve_PnP_RANSAC
      (Object_Points : Object_Point_Array;
