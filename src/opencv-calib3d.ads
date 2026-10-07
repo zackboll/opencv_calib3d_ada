@@ -15,6 +15,50 @@ package OpenCV.Calib3D is
    type Object_Point_Array is array (Positive range <>) of Object_Point;
    type Inlier_Index_Array is array (Positive range <>) of Positive;
 
+   --  [x',y',1]^T ~ H * [x,y,1]^T. H has arbitrary nonzero common scale;
+   --  h22=1 is NOT an invariant. A single H models planes/projective image
+   --  registration, not general 3-D terrain pose (use PnP for 3-D points).
+   type Homography_Matrix is
+     array (Natural range 0 .. 2, Natural range 0 .. 2) of OpenCV.Float64_Value;
+   type Homography_Point_Result (Finite : Boolean := False) is record
+      case Finite is
+         when True => Point : Image_Point;
+         when False => null;
+      end case;
+   end record;
+   --  w=h20*x+h21*y+h22; x'=(h00*x+h01*y+h02)/w, similarly y'.
+   --  Nonfinite inputs raise OpenCV_Error. Zero w or nonfinite arithmetic
+   --  returns Finite=False; no epsilon rejection or coordinate clamping.
+   function Map_With_Homography
+     (Matrix : Homography_Matrix; Point : Image_Point)
+      return Homography_Point_Result;
+
+   type Homography_RANSAC_Options is record
+      Maximum_Iterations            : Positive := 2_000;
+      Reprojection_Threshold_Pixels : OpenCV.Float64_Value := 3.0;
+      Confidence                    : OpenCV.Float64_Value := 0.995;
+   end record;
+   type Homography_Estimate is limited private;
+   --  Equal counts >=5 deliberately exclude OpenCV's n=4 direct solve, which
+   --  bypasses robust consensus. Native estimation converts points to Float32.
+   --  Public inliers are independently classified with FINAL H and ORIGINAL
+   --  Float64 points: finite forward mapping and hypot error <= threshold in
+   --  destination-image pixels. Native masks are not the public contract.
+   --  Found requires >=4 final inliers; otherwise Inliers is empty (1 .. 0).
+   --  Options: iterations <=INT32_MAX, finite positive Float32-representable
+   --  threshold, finite confidence strictly between zero and one.
+   function Estimate_Homography_RANSAC
+     (Source_Points, Destination_Points : Image_Point_Array;
+      Options : Homography_RANSAC_Options := (others => <>))
+      return Homography_Estimate;
+   function Found (Estimate : Homography_Estimate) return Boolean;
+   --  Raises OpenCV_Error when Found=False.
+   function Homography (Estimate : Homography_Estimate) return Homography_Matrix;
+   function Inlier_Count (Estimate : Homography_Estimate) return Natural;
+   function Inlier (Estimate : Homography_Estimate; Index : Positive) return Positive;
+   --  One-based correspondence positions, valid/unique/strictly ascending.
+   function Inliers (Estimate : Homography_Estimate) return Inlier_Index_Array;
+
    --  Dimensionless normalized pinhole coordinates, NOT pixels: (x,y)
    --  corresponds to the camera-frame projective direction (x,y,1).
    type Normalized_Image_Point is new OpenCV.Core.Float64_Vec2.Vector;
@@ -159,6 +203,12 @@ package OpenCV.Calib3D is
 
 private
    type Inlier_Buffer is access Inlier_Index_Array;
+   type Homography_Estimate is new Ada.Finalization.Limited_Controlled with record
+      Has_Model : Boolean := False;
+      Value     : Homography_Matrix := [others => [others => 0.0]];
+      Data      : Inlier_Buffer := null;
+   end record;
+   overriding procedure Finalize (Self : in out Homography_Estimate);
    type Pose_Estimate is new Ada.Finalization.Limited_Controlled with record
       Has_Pose : Boolean := False;
       Value    : World_To_Camera_Pose :=

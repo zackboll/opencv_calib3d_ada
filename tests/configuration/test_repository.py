@@ -72,6 +72,30 @@ class RepositoryTests(unittest.TestCase):
             self.assertIn(equation, text)
         self.assertIn("dimensionless", text)
 
+    def test_homography_final_classifier_is_independent_of_native_mask(self):
+        text = (ROOT / "cpp/opencv_calib3d_shim.cpp").read_text()
+        start = text.index("opencv_calib3d_status opencv_calib3d_find_homography_ransac(")
+        end = text.index("opencv_calib3d_status opencv_calib3d_homography_result_found(", start)
+        estimator = text[start:end]
+        self.assertEqual(estimator.count("cv::findHomography("), 1)
+        self.assertIn("cv::findHomography(source, destination, cv::RANSAC", estimator)
+        self.assertIn("count >= 5", estimator)
+        self.assertIn("original_source.at<cv::Vec2d>(i,0)", estimator)
+        self.assertIn("original_destination.at<cv::Vec2d>(i,0)", estimator)
+        self.assertIn("final_homography_inlier(value->matrix", estimator)
+        self.assertIn("value->inliers.size() >= 4", estimator)
+        self.assertNotRegex(estimator, r"native_mask\s*\.\s*(at|ptr|copyTo)")
+        helper = (ROOT / "cpp/homography_profile.hpp").read_text()
+        self.assertIn("std::hypot(xp - dx, yp - dy)", helper)
+        self.assertIn("error <= threshold", helper)
+
+    def test_homography_contract_records_precision_minimum_and_mask_difference(self):
+        contract = (ROOT / "docs/homography-contract.md").read_text()
+        for required in ("n=4 findHomography path bypasses RANSAC", "Float32 internally",
+                         "original caller Float64", "destination-image", "h22 = 1",
+                         "not a general 3-D", "4.1/4.10", "5.0", "upstream mask"):
+            self.assertIn(required, contract)
+
     def test_topology_rejects_extra_windows_branch(self):
         cross = (ROOT / ".github/workflows/cross-platform.yml").read_text()
         windows = (ROOT / ".github/workflows/windows-post-merge.yml").read_text()

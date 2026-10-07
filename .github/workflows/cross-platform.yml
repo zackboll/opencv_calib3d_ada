@@ -48,6 +48,7 @@ jobs:
         run: |
           alr -n -C examples build
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/pnp_synthetic
+          alr -n -C examples exec -- sh ../scripts/run_native.sh bin/homography_synthetic
   linux-sanitizers:
     runs-on: ubuntu-24.04
     steps:
@@ -102,3 +103,4 @@ jobs:
         run: |
           alr -n -C examples build
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/pnp_synthetic
+          alr -n -C examples exec -- sh ../scripts/run_native.sh bin/homography_synthetic

@@ -10,3 +10,6 @@ mkdir -p obj/profile-tests
     tests/cpp/profile_test.cpp -o obj/profile-tests/profile_test
 obj/profile-tests/header_test
 obj/profile-tests/profile_test
+"$cxx" -std=c++17 -Wall -Wextra -Wpedantic -Werror -Icpp \
+    tests/cpp/homography_profile_test.cpp -o obj/profile-tests/homography_profile_test
+obj/profile-tests/homography_profile_test

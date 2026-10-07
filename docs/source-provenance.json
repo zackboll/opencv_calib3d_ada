@@ -37,6 +37,18 @@
           "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/solvepnp.cpp",
           "sha256": "b4824ed50e82952c08ce957c12e7914c93fef2ecd41d3725472b903b0e77e229",
           "git_blob_sha1": "0f76e8c4528b400458dfeab739c9e26d81205ce1"
+        },
+        {
+          "path": "modules/calib3d/src/fundam.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/fundam.cpp",
+          "sha256": "087afa2b699be76bf2cd8c82bf8f5033956640bc9bb8b677b9b184118d1a3f2b",
+          "git_blob_sha1": "1cb6527305cd7263090f0f6dbbca874ee1e0db82"
+        },
+        {
+          "path": "modules/calib3d/src/ptsetreg.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/ptsetreg.cpp",
+          "sha256": "4e99b2b4aaa39555734ef70e0135d623db3c514d11457a6bfe3754fc500a899d",
+          "git_blob_sha1": "275112b7e98ae520354375e9bb96bccaebb22621"
         }
       ]
     },
@@ -76,6 +88,18 @@
           "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/solvepnp.cpp",
           "sha256": "e448aff150f29631c27d8fb7ededf66507abff97960c4175aaa7f106ae67861c",
           "git_blob_sha1": "771abff483b5884eef3682cdaa842c1cc210fc13"
+        },
+        {
+          "path": "modules/calib3d/src/fundam.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/fundam.cpp",
+          "sha256": "10f8c9f3a1084c031b0551f79214f209b45d4f6dd7a5ede0998e49a525f18ff1",
+          "git_blob_sha1": "75d34565951611bf2061489d9237043a7f92626a"
+        },
+        {
+          "path": "modules/calib3d/src/ptsetreg.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/ptsetreg.cpp",
+          "sha256": "3fe16f2f50869e4f0184133128cf96844782a5f7a049b96e116886d83e6631ef",
+          "git_blob_sha1": "c0132a68329e1c320842e3ce8980f6250dca68dc"
         }
       ]
     },
@@ -115,6 +139,18 @@
           "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/solvepnp.cpp",
           "sha256": "536fdf3c00192302f3e91a9c0744e91b0156bca2784c75bd7cb6505d5813c8e5",
           "git_blob_sha1": "4251927ceb8aae5f9354105b645f3f630cb8839b"
+        },
+        {
+          "path": "modules/geometry/src/fundam.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/fundam.cpp",
+          "sha256": "1cc8b1e05c71aeb562e7f6180ab17a423da256b09de6a9b4ac06b1fbe8d59fa5",
+          "git_blob_sha1": "3aba71247a2024154ced8e787113dff1f8f3cbbe"
+        },
+        {
+          "path": "modules/geometry/src/ptsetreg.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/ptsetreg.cpp",
+          "sha256": "096c3203b3fcfa5a535efdd25c58b4797e8f13ecc979d004397975396b4abfe6",
+          "git_blob_sha1": "e8667f9524e54a92b9e9e955753b4e11c496cae5"
         }
       ]
     }
@@ -144,5 +180,14 @@
       "provided-guess parameter initialization, optimizer and projection residual paths",
       "Float64 projectPoints output used by Ada diagnostics"
     ]
+  },
+  "task_004_review": {
+    "native_call": "findHomography(source,destination,cv::RANSAC,threshold,native_mask,maximum_iterations,confidence)",
+    "minimum_correspondences": 5,
+    "minimum_final_support": 4,
+    "native_precision": "legacy RANSAC inputs converted to Float32",
+    "public_inliers": "independent final-H forward Euclidean Float64 classification in destination pixels, <= threshold",
+    "mask_difference": "4.1/4.10 retain pre-refinement mask; 5.0 recomputes after refinement",
+    "verification": "immutable public headers SHA-256/blob reverified; fundam.cpp and ptsetreg.cpp SHA-256/Git blob hashes added"
   }
 }

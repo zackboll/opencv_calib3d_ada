@@ -1,7 +1,7 @@
 # OpenCV Calib3D for Ada
 
-Handwritten thick Ada binding for the narrow camera-pose portion of OpenCV needed
-for 3-D-to-2-D pose estimation. Repository: `opencv_calib3d_ada`; Alire crate:
+Handwritten thick Ada binding for camera pose and robust planar/projective
+2-D correspondence verification. Repository: `opencv_calib3d_ada`; Alire crate:
 `opencv_calib3d`; public package: `OpenCV.Calib3D`.
 
 **Version 0.1.0-dev; review baseline, not a release.**
@@ -17,6 +17,19 @@ public false/exception atomicity, production/fault ASan+UBSan, and the extended
 example. Remote review gates are tracked separately; no new release is claimed.
 
 ## Native backend split
+
+Task 004 adds `Homography_Matrix`, safe pure-Ada `Map_With_Homography`, and owned
+`Homography_Estimate` from fixed legacy `Estimate_Homography_RANSAC`.
+**Equal counts >=5** avoid OpenCV's four-point RANSAC bypass. Public inliers are
+independently reclassified against **final H with original Float64 points**, not
+the upstream mask (whose refinement semantics differ between 4.x and 5.0).
+The threshold is forward Euclidean error in destination-image pixels.
+
+**A single homography models planes/projective image registration, not general
+3-D terrain pose.** Use PnP for actual 3-D world points. See the
+[homography contract](docs/homography-contract.md),
+[immutable source review](docs/homography-source-review.md), and
+[executed validation](docs/homography-validation.md).
 
 Task 003 adds the geometric bridge:
 
@@ -87,6 +100,7 @@ alr -n build
 alr test
 alr -n -C examples build
 alr -n -C examples exec -- sh ../scripts/run_native.sh bin/pnp_synthetic
+alr -n -C examples exec -- sh ../scripts/run_native.sh bin/homography_synthetic
 ```
 
 On Debian/Ubuntu:
@@ -134,6 +148,11 @@ geometric rays only; no DTED/geodetic interpretation or intersection is performe
 Synthetic thresholds and errors are demonstration fixtures, not navigation
 accuracy claims.
 
+The separate file-free `examples/src/homography_synthetic.adb` demonstrates
+planar/projective verification: 24 generated correspondences, three gross
+outliers, final-model support, scale-ambiguous H, and sample mapping error. It
+does not estimate camera pose or terrain localization and adds no dependencies.
+
 ## CI policy
 
 PR CI is Linux, macOS, repository checks and Linux ASan/UBSan. Windows/MSYS2 is
@@ -144,7 +163,7 @@ The presence of those workflows alone is not evidence that they passed.
 ## Deliberate exclusions
 
 This first slice does not bind camera calibration, chessboards, stereo,
-homography, essential/fundamental matrices, triangulation, USAC configuration,
+essential/fundamental matrices, triangulation, affine estimators, image warping, USAC configuration,
 `solvePnPRefineLM`/VVS, P3P/AP3P/IPPE/SQPNP selection, fisheye, image undistortion/remap, DTED,
 Features, optical flow, or estimator/fusion policy.
 

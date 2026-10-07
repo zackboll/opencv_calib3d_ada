@@ -6,7 +6,7 @@ maintainers = ["Zack Boll <zackboll@gmail.com>"]
 maintainers-logins = ["zackboll"]
 licenses = "Apache-2.0"
 project-files = ["opencv_calib3d_examples.gpr"]
-executables = ["pnp_synthetic"]
+executables = ["pnp_synthetic", "homography_synthetic"]
 
 [[depends-on]]
 opencv_calib3d = "*"

@@ -78,4 +78,57 @@ begin
       end loop;
    end loop;
    Ada.Text_IO.Put_Line ("PASS: Ada camera geometry 20 exception translation scenarios");
+   declare
+      Source : constant Image_Point_Array :=
+        [[0.0, 0.0], [100.0, 0.0], [0.0, 100.0], [100.0, 100.0],
+         [40.0, 30.0], [70.0, 90.0]];
+      Destination : Image_Point_Array (Source'Range);
+   begin
+      for I in Source'Range loop
+         Destination (I) := [Source (I) (0) + 20.0, Source (I) (1) - 10.0];
+      end loop;
+      --  An armed checkpoint remains pending after Ada rejects four, proving
+      --  rejection precedes native entry; a valid five-point call consumes it.
+      Fail (17, 3);
+      begin
+         declare
+            Estimate : constant Homography_Estimate := Estimate_Homography_RANSAC
+              (Source (1 .. 4), Destination (1 .. 4));
+            pragma Unreferenced (Estimate);
+         begin
+            raise Program_Error with "four points reached robust estimator";
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+      begin
+         declare
+            Estimate : constant Homography_Estimate := Estimate_Homography_RANSAC
+              (Source (1 .. 5), Destination (1 .. 5));
+            pragma Unreferenced (Estimate);
+         begin
+            raise Program_Error with "five did not consume pending native checkpoint";
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+      for Stage in Interfaces.C.int range 17 .. 22 loop
+         for Kind in Interfaces.C.int range 1 .. 5 loop
+            Fail (Stage, Kind);
+            begin
+               declare
+                  Estimate : constant Homography_Estimate := Estimate_Homography_RANSAC
+                    (Source, Destination, (2_000, 0.1, 0.999));
+                  pragma Unreferenced (Estimate);
+               begin
+                  raise Program_Error with "homography injection did not raise OpenCV_Error";
+               end;
+            exception
+               when OpenCV.OpenCV_Error => null;
+            end;
+         end loop;
+      end loop;
+   end;
+   Ada.Text_IO.Put_Line ("PASS: Ada homography 30 exception translation/cleanup scenarios");
+   Ada.Text_IO.Put_Line ("PASS: four-point Ada rejection before native entry; five reaches native checkpoint");
 end Run_Refinement_Faults;

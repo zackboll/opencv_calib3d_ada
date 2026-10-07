@@ -35,7 +35,7 @@ halt-on-error and no suppressions; production excludes test-hook symbols.
 This does not prove real allocator exhaustion or instrument all dependencies.
 See `bootstrap-validation.md` and PR Actions for cross-platform/matrix evidence.
 
-Out of scope: broad calibration, stereo, homography, essential/fundamental,
+Out of scope: broad calibration, stereo, essential/fundamental,
 triangulation, arbitrary SolvePnP methods, RefineLM/VVS, fisheye, image undistortion/remap,
 USAC configuration, Features integration and geographic/DTED semantics.
 
@@ -96,3 +96,27 @@ and in production/fault ASan+UBSan. The reused Ada fault helper adds 20 wrapper
 exception translations while retaining the 15 refinement scenarios and false case.
 Current executed results and cross-version tolerance evidence are recorded in
 `bootstrap-validation.md`, not inferred from this inventory.
+
+## Task 004 inventory
+
+Current inventory: **40 AUnit registrations**, original 32 plus eight homography
+cases: independent mapping/negative-scale/point-at-infinity; tiny-denominator,
+overflow and all-field nonfinite validation; 24-point clean model; deterministic
+gross outliers; real collinear no-model state; 0..4 rejection and five robust
+path; nonfinite/mismatched inputs and invalid numeric options; semantically
+distinct homography and options C/Ada compiler layout/interchange.
+
+The raw actual-shim driver uses **real Core Region factories for both strided
+inputs**, tests all schemas/nulls/options, clean/outlier final-model classification
+in both directions, accessor clearing, destruction and collinear no-model. Six
+checkpoints times five fault categories add **30 raw fault scenarios** and **30
+public Ada translation/cleanup scenarios** to the existing helper, including the
+qualified libc++ isolation on macOS. Production/fault versions run raw and
+ASan+UBSan, with actual shim instrumentation, leak detection and no suppressions.
+
+A standalone third C/C++ helper tests the independent classifier's exact 3-4-5
+boundary, robust 3e200/4e200 hypot, overflow, tiny denominator, projective infinity
+and scale. A source-structure regression ensures native masks cannot be substituted
+silently. The separate `homography_synthetic` example is run in ordinary
+Linux/macOS and manual pinned CI. See `homography-validation.md` for **executed**
+counts/results; inventory is not a pass claim.

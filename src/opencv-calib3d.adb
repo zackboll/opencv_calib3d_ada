@@ -42,6 +42,73 @@ package body OpenCV.Calib3D is
       Value >= -OpenCV.Float64_Value'Last and then
       Value <= OpenCV.Float64_Value'Last);
 
+   overriding procedure Finalize (Self : in out Homography_Estimate) is
+   begin
+      if Self.Data /= null then
+         Free (Self.Data);
+      end if;
+      Self.Has_Model := False;
+      Self.Value := [others => [others => 0.0]];
+   end Finalize;
+
+   function Found (Estimate : Homography_Estimate) return Boolean is (Estimate.Has_Model);
+   function Homography (Estimate : Homography_Estimate) return Homography_Matrix is
+   begin
+      if not Estimate.Has_Model then
+         raise OpenCV.OpenCV_Error with "Homography requested from an unsuccessful estimate";
+      end if;
+      return Estimate.Value;
+   end Homography;
+   function Inlier_Count (Estimate : Homography_Estimate) return Natural is
+     (if Estimate.Data = null then 0 else Estimate.Data.all'Length);
+   function Inlier (Estimate : Homography_Estimate; Index : Positive) return Positive is
+   begin
+      if Estimate.Data = null or else Index not in Estimate.Data.all'Range then
+         raise OpenCV.OpenCV_Error with "Homography inlier index out of range";
+      end if;
+      return Estimate.Data (Index);
+   end Inlier;
+   function Inliers (Estimate : Homography_Estimate) return Inlier_Index_Array is
+   begin
+      if Estimate.Data = null then
+         return [1 .. 0 => <>];
+      end if;
+      return Estimate.Data.all;
+   end Inliers;
+
+   function Map_With_Homography
+     (Matrix : Homography_Matrix; Point : Image_Point) return Homography_Point_Result
+   is
+      NX, NY, W : OpenCV.Float64_Value;
+      Value : Image_Point;
+   begin
+      for Coefficient of Matrix loop
+         if not Is_Finite (Coefficient) then
+            raise OpenCV.OpenCV_Error with "Homography entries must be finite";
+         end if;
+      end loop;
+      for Component of Point loop
+         if not Is_Finite (Component) then
+            raise OpenCV.OpenCV_Error with "Homography point must be finite";
+         end if;
+      end loop;
+      NX := Matrix (0, 0) * Point (0) + Matrix (0, 1) * Point (1) + Matrix (0, 2);
+      NY := Matrix (1, 0) * Point (0) + Matrix (1, 1) * Point (1) + Matrix (1, 2);
+      W := Matrix (2, 0) * Point (0) + Matrix (2, 1) * Point (1) + Matrix (2, 2);
+      if not Is_Finite (NX) or else not Is_Finite (NY) or else
+        not Is_Finite (W) or else W = 0.0
+      then
+         return (Finite => False);
+      end if;
+      Value := [NX / W, NY / W];
+      if not Is_Finite (Value (0)) or else not Is_Finite (Value (1)) then
+         return (Finite => False);
+      end if;
+      return (Finite => True, Point => Value);
+   exception
+      when Constraint_Error => return (Finite => False);
+   end Map_With_Homography;
+
    procedure Validate (Value : Camera_Intrinsics) is
    begin
       if not (Is_Finite (Value.Focal_X) and then Is_Finite (Value.Focal_Y)
@@ -637,6 +704,99 @@ package body OpenCV.Calib3D is
          Refined := True;
       end;
    end Refine_Pose_Iterative;
+
+   function Estimate_Homography_RANSAC
+     (Source_Points, Destination_Points : Image_Point_Array;
+      Options : Homography_RANSAC_Options := (others => <>))
+      return Homography_Estimate
+   is
+      type Result_Guard is new Ada.Finalization.Limited_Controlled with record
+         Handle : aliased System.Address := System.Null_Address;
+      end record;
+      overriding procedure Finalize (Self : in out Result_Guard);
+      overriding procedure Finalize (Self : in out Result_Guard) is
+      begin
+         C.Homography_Result_Destroy (Self.Handle);
+         Self.Handle := System.Null_Address;
+      end Finalize;
+      Guard : Result_Guard;
+      Source, Destination : OpenCV.Core.Mat;
+      Native_Options : aliased C.C_Homography_Options;
+      Native_Found : aliased Interfaces.Unsigned_8 := 0;
+      Native_Count : aliased Interfaces.Integer_32 := 0;
+      Matrix : aliased C.C_Homography := (others => 0.0);
+      Code : C.Status := C.Success;
+      procedure Source_Callback (Source_Handle : Bridge.Input_Mat_Handle) is
+         procedure Destination_Callback (Destination_Handle : Bridge.Input_Mat_Handle) is
+         begin
+            Code := C.Find_Homography_RANSAC
+              (Source_Handle, Destination_Handle, Native_Options'Access, Guard.Handle'Access);
+         end Destination_Callback;
+      begin
+         Bridge.With_Input_Handle (Destination, Destination_Callback'Access);
+      end Source_Callback;
+   begin
+      --  Share the qualified numeric policy, not PnP's estimator or minimum.
+      Validate (RANSAC_Options'(Options.Maximum_Iterations,
+                Options.Reprojection_Threshold_Pixels, Options.Confidence));
+      Validate (Source_Points);
+      Validate (Destination_Points);
+      if Source_Points'Length /= Destination_Points'Length or else
+        Source_Points'Length < 5 or else
+        Source_Points'Length > Interfaces.Integer_32'Last
+      then
+         raise OpenCV.OpenCV_Error with "Robust homography requires equal counts >=5 fitting INT32";
+      end if;
+      Source := Image_Matrix (Source_Points);
+      Destination := Image_Matrix (Destination_Points);
+      Native_Options := (Interfaces.Integer_32 (Options.Maximum_Iterations),
+                         Interfaces.C.double (Options.Reprojection_Threshold_Pixels),
+                         Interfaces.C.double (Options.Confidence));
+      Bridge.With_Input_Handle (Source, Source_Callback'Access);
+      C.Check (Code, "Calib3D.Estimate_Homography_RANSAC");
+      if Guard.Handle = System.Null_Address then
+         raise OpenCV.OpenCV_Error with "Native homography did not publish a result";
+      end if;
+      C.Check (C.Homography_Result_Found (Guard.Handle, Native_Found'Access), "Homography.Found");
+      if Native_Found = 0 then
+         return Estimate : Homography_Estimate do
+            null;
+         end return;
+      end if;
+      C.Check (C.Homography_Result_Matrix (Guard.Handle, Matrix'Access), "Homography.Matrix");
+      C.Check (C.Homography_Result_Inlier_Count (Guard.Handle, Native_Count'Access), "Homography.Count");
+      if Native_Count < 4 or else Native_Count > Interfaces.Integer_32 (Source_Points'Length) then
+         raise OpenCV.OpenCV_Error with "Invalid native homography inlier count";
+      end if;
+      return Estimate : Homography_Estimate do
+         Estimate.Value :=
+           [[OpenCV.Float64_Value (Matrix.H00), OpenCV.Float64_Value (Matrix.H01), OpenCV.Float64_Value (Matrix.H02)],
+            [OpenCV.Float64_Value (Matrix.H10), OpenCV.Float64_Value (Matrix.H11), OpenCV.Float64_Value (Matrix.H12)],
+            [OpenCV.Float64_Value (Matrix.H20), OpenCV.Float64_Value (Matrix.H21), OpenCV.Float64_Value (Matrix.H22)]];
+         for Coefficient of Estimate.Value loop
+            if not Is_Finite (Coefficient) then
+               raise OpenCV.OpenCV_Error with "Native homography is nonfinite";
+            end if;
+         end loop;
+         Estimate.Data := new Inlier_Index_Array (1 .. Natural (Native_Count));
+         for I in Estimate.Data.all'Range loop
+            declare
+               Native_Index : aliased Interfaces.Integer_32 := 0;
+            begin
+               C.Check (C.Homography_Result_Inlier
+                 (Guard.Handle, Interfaces.Integer_32 (I - 1), Native_Index'Access), "Homography.Inlier");
+               if Native_Index < 0 or else Native_Index >= Interfaces.Integer_32 (Source_Points'Length) then
+                  raise OpenCV.OpenCV_Error with "Invalid native homography correspondence index";
+               end if;
+               Estimate.Data (I) := Positive (Native_Index + 1);
+               if I > 1 and then Estimate.Data (I) <= Estimate.Data (I - 1) then
+                  raise OpenCV.OpenCV_Error with "Homography inliers are not strictly ascending";
+               end if;
+            end;
+         end loop;
+         Estimate.Has_Model := True;
+      end return;
+   end Estimate_Homography_RANSAC;
 
    function Solve_PnP_RANSAC
      (Object_Points : Object_Point_Array;
