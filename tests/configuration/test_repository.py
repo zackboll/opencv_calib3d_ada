@@ -124,8 +124,41 @@ class RepositoryTests(unittest.TestCase):
         self.assertIn("error <= threshold", helper)
         for workflow in ("cross-platform.yml", "opencv-compatibility.yml"):
             text = (ROOT / ".github/workflows" / workflow).read_text()
-            for example in ("pnp_synthetic", "homography_synthetic", "fundamental_synthetic"):
+            for example in ("pnp_synthetic", "homography_synthetic", "fundamental_synthetic", "essential_synthetic"):
                 self.assertIn("bin/" + example, text)
+
+    def test_essential_fixed_normalized_pipeline(self):
+        text = (ROOT / "cpp/opencv_calib3d_shim.cpp").read_text()
+        start = text.index("opencv_calib3d_status opencv_calib3d_find_essential_ransac(")
+        end = text.index("opencv_calib3d_status opencv_calib3d_essential_result_found(", start)
+        estimator = text[start:end]
+        for required in ("count >= 6", "first_input.clone()", "second_input.clone()",
+                         "cv::Mat::eye(3,3,CV_64F)", "cv::findEssentialMat(first,second,identity,cv::RANSAC",
+                         "final_essential_inlier(value->matrix", "value->inliers.size() >= 5",
+                         "std::numeric_limits<double>::max(),mask,cv::noArray()",
+                         "value->pose_inliers.size() >= 5"):
+            self.assertIn(required, estimator)
+        self.assertNotRegex(estimator, r"native_mask\s*\.\s*(at|ptr|copyTo)")
+        self.assertNotIn("maxIters", estimator)
+        self.assertNotIn("LMEDS", estimator)
+        self.assertIn("#if CV_VERSION_MAJOR >= 5", estimator)
+        self.assertIn("options->normalized_epipolar_threshold,1000,native_mask);", estimator)
+        self.assertIn("options->normalized_epipolar_threshold,native_mask);", estimator)
+        self.assertEqual(estimator.count("cv::findEssentialMat("), 2)
+        helper = (ROOT / "cpp/essential_profile.hpp").read_text()
+        self.assertIn("confidence <= 0 || confidence >= 1", helper)
+        self.assertIn("threshold * threshold", helper)
+        self.assertIn("std::hypot(std::hypot(ax,ay),std::hypot(bx,by))", helper)
+
+    def test_essential_normalized_only_public_contract(self):
+        text = (ROOT / "src/opencv-calib3d.ads").read_text()
+        start = text.index("function Estimate_Essential_RANSAC")
+        end = text.index("function Found", start)
+        self.assertIn("Normalized_Image_Point_Array", text[start:end])
+        self.assertNotIn("Camera_Intrinsics", text[start:end])
+        self.assertNotIn("Distortion", text[start:end])
+        self.assertIn("X_second = R * X_first + lambda * t_hat", text)
+        self.assertIn("normalize(-R^T*t_hat)", text)
 
     def test_topology_rejects_extra_windows_branch(self):
         cross = (ROOT / ".github/workflows/cross-platform.yml").read_text()

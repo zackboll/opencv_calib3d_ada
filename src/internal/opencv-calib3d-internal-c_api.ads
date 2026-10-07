@@ -8,6 +8,54 @@ package OpenCV.Calib3D.Internal.C_API is
    subtype Status is Interfaces.Integer_32;
    Success : constant Status := 0;
 
+   type C_Essential is record
+      E00, E01, E02, E10, E11, E12, E20, E21, E22 : Interfaces.C.double;
+   end record with Convention => C;
+   type C_Relative_Pose is record
+      R00, R01, R02, R10, R11, R12, R20, R21, R22, TX, TY, TZ : Interfaces.C.double;
+   end record with Convention => C;
+   type C_Essential_Options is record
+      Normalized_Epipolar_Threshold, Confidence : Interfaces.C.double;
+   end record with Convention => C;
+   function Validate_Essential_Options (Options : access constant C_Essential_Options) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_validate_essential_options";
+   function Normalized_Sampson_Error
+     (Matrix : access constant C_Essential; X1, Y1, X2, Y2 : Interfaces.C.double;
+      Defined : access Interfaces.Unsigned_8; Error : access Interfaces.C.double) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_normalized_sampson_error";
+   function Find_Essential_RANSAC
+     (First, Second : OpenCV.Core.Module_Interop.Input_Mat_Handle;
+      Options : access constant C_Essential_Options; Result : access System.Address) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_find_essential_ransac";
+   function Essential_Result_Found
+     (Handle : System.Address; Value : access Interfaces.Unsigned_8) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_essential_result_found";
+   function Essential_Result_Matrix
+     (Handle : System.Address; Value : access C_Essential) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_essential_result_matrix";
+   function Essential_Result_Inlier_Count
+     (Handle : System.Address; Count : access Interfaces.Integer_32) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_essential_result_inlier_count";
+   function Essential_Result_Inlier
+     (Handle : System.Address; Index : Interfaces.Integer_32;
+      Correspondence_Index : access Interfaces.Integer_32) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_essential_result_inlier";
+   function Essential_Result_Pose_Found
+     (Handle : System.Address; Value : access Interfaces.Unsigned_8) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_essential_result_pose_found";
+   function Essential_Result_Pose
+     (Handle : System.Address; Value : access C_Relative_Pose) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_essential_result_pose";
+   function Essential_Result_Pose_Inlier_Count
+     (Handle : System.Address; Count : access Interfaces.Integer_32) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_essential_result_pose_inlier_count";
+   function Essential_Result_Pose_Inlier
+     (Handle : System.Address; Index : Interfaces.Integer_32;
+      Correspondence_Index : access Interfaces.Integer_32) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_essential_result_pose_inlier";
+   procedure Essential_Result_Destroy (Handle : System.Address)
+     with Import, Convention => C, External_Name => "opencv_calib3d_essential_result_destroy";
+
    type C_Homography is record
       H00, H01, H02, H10, H11, H12, H20, H21, H22 : Interfaces.C.double;
    end record with Convention => C;

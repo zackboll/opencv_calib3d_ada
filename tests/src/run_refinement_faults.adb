@@ -1,4 +1,5 @@
 with Ada.Text_IO;
+with Ada.Numerics.Generic_Elementary_Functions;
 with Interfaces.C;
 with OpenCV.Calib3D;
 
@@ -192,4 +193,121 @@ begin
    end;
    Ada.Text_IO.Put_Line ("PASS: Ada fundamental 30 exception translation/cleanup scenarios");
    Ada.Text_IO.Put_Line ("PASS: 14-point Ada rejection preserves checkpoint; 15 true RANSAC consumes it");
+   declare
+      package Math is new Ada.Numerics.Generic_Elementary_Functions (OpenCV.Float64_Value);
+      procedure No_E with Import, Convention => C, External_Name => "opencv_calib3d_test_essential_no_model";
+      procedure No_Pose with Import, Convention => C, External_Name => "opencv_calib3d_test_essential_no_pose";
+      First, Second : Normalized_Image_Point_Array (1 .. 40);
+      Options : constant Essential_RANSAC_Options := (1.0E-6, 0.999);
+   begin
+      for I in First'Range loop
+         declare
+            J : constant Integer := I - 1;
+            X : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((J * 7) mod 17 - 8) * 0.24;
+            Y : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((J * 11) mod 19 - 9) * 0.19;
+            Z : constant OpenCV.Float64_Value := 4.0 + OpenCV.Float64_Value ((J * 13) mod 23) * 0.17;
+            X2 : constant OpenCV.Float64_Value := Math.Cos (0.08) * X + Math.Sin (0.08) * Z - 0.75;
+            Z2 : constant OpenCV.Float64_Value := -Math.Sin (0.08) * X + Math.Cos (0.08) * Z + 0.12;
+         begin
+            First (I) := [X / Z, Y / Z];
+            Second (I) := [X2 / Z2, (Y + 0.08) / Z2];
+         end;
+      end loop;
+      Fail (29, 3);
+      begin
+         declare
+            E : constant Essential_Estimate := Estimate_Essential_RANSAC (First (1 .. 5), Second (1 .. 5), Options);
+            pragma Unreferenced (E);
+         begin
+            raise Program_Error with "five Essential pairs reached native entry";
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+      begin
+         declare
+            E : constant Essential_Estimate := Estimate_Essential_RANSAC (First (1 .. 6), Second (1 .. 6), Options);
+            pragma Unreferenced (E);
+         begin
+            raise Program_Error with "six did not consume Essential checkpoint";
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+      declare
+         E : constant Essential_Estimate := Estimate_Essential_RANSAC (First, Second, Options);
+      begin
+         Check (Found (E) and then Pose_Recovered (E), "Essential checkpoint remained armed after six");
+      end;
+      No_E;
+      declare
+         E : constant Essential_Estimate := Estimate_Essential_RANSAC (First, Second, Options);
+         EI : constant Inlier_Index_Array := Inliers (E);
+         PI : constant Inlier_Index_Array := Pose_Inliers (E);
+      begin
+         Check (not Found (E) and then not Pose_Recovered (E) and then Inlier_Count (E) = 0 and then
+           Pose_Inlier_Count (E) = 0 and then EI'First = 1 and then EI'Last = 0 and then PI'First = 1 and then PI'Last = 0,
+           "Ada no-E semantics after real native call");
+         begin
+            declare
+               Matrix : constant Essential_Matrix := Essential (E);
+               pragma Unreferenced (Matrix);
+            begin
+               raise Program_Error with "no-E matrix accessible";
+            end;
+         exception
+            when OpenCV.OpenCV_Error => null;
+         end;
+         begin
+            declare
+               Pose : constant Relative_Camera_Pose := Recovered_Pose (E);
+               pragma Unreferenced (Pose);
+            begin
+               raise Program_Error with "no-E pose accessible";
+            end;
+         exception
+            when OpenCV.OpenCV_Error => null;
+         end;
+      end;
+      No_Pose;
+      declare
+         E : constant Essential_Estimate := Estimate_Essential_RANSAC (First, Second, Options);
+         Matrix : constant Essential_Matrix := Essential (E);
+         EI : constant Inlier_Index_Array := Inliers (E);
+         PI : constant Inlier_Index_Array := Pose_Inliers (E);
+         pragma Unreferenced (Matrix);
+      begin
+         Check (Found (E) and then EI'Length >= 5 and then Inlier_Count (E) = EI'Length and then
+           not Pose_Recovered (E) and then Pose_Inlier_Count (E) = 0 and then PI'First = 1 and then PI'Last = 0,
+           "Ada Essential retained after real recoverPose with support suppression");
+         begin
+            declare
+               Pose : constant Relative_Camera_Pose := Recovered_Pose (E);
+               pragma Unreferenced (Pose);
+            begin
+               raise Program_Error with "suppressed pose accessible";
+            end;
+         exception
+            when OpenCV.OpenCV_Error => null;
+         end;
+      end;
+      for Stage in Interfaces.C.int range 29 .. 36 loop
+         for Kind in Interfaces.C.int range 1 .. 5 loop
+            Fail (Stage, Kind);
+            begin
+               declare
+                  E : constant Essential_Estimate := Estimate_Essential_RANSAC (First, Second, Options);
+                  pragma Unreferenced (E);
+               begin
+                  raise Program_Error with "Essential injection did not raise OpenCV_Error";
+               end;
+            exception
+               when OpenCV.OpenCV_Error => null;
+            end;
+         end loop;
+      end loop;
+   end;
+   Ada.Text_IO.Put_Line ("PASS: Ada Essential 40 exception translation/cleanup scenarios");
+   Ada.Text_IO.Put_Line ("PASS: five Ada rejection preserves armed checkpoint; six consumes; later valid call succeeds");
+   Ada.Text_IO.Put_Line ("PASS: Ada no-E and E-found/no-pose semantics after real native calls (test-only controls)");
 end Run_Refinement_Faults;

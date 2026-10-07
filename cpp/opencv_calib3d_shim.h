@@ -20,6 +20,54 @@ typedef struct opencv_calib3d_pose_result_handle opencv_calib3d_pose_result_hand
 typedef struct opencv_calib3d_homography_result_handle opencv_calib3d_homography_result_handle;
 typedef struct opencv_calib3d_fundamental_result_handle opencv_calib3d_fundamental_result_handle;
 typedef int32_t opencv_calib3d_status;
+typedef struct opencv_calib3d_essential_result_handle opencv_calib3d_essential_result_handle;
+
+typedef struct opencv_calib3d_essential {
+    double e00, e01, e02;
+    double e10, e11, e12;
+    double e20, e21, e22;
+} opencv_calib3d_essential;
+
+/* R first->second and unit translation TERM direction; not metric position. */
+typedef struct opencv_calib3d_relative_pose {
+    double r00, r01, r02;
+    double r10, r11, r12;
+    double r20, r21, r22;
+    double tx, ty, tz;
+} opencv_calib3d_relative_pose;
+
+typedef struct opencv_calib3d_essential_options {
+    double normalized_epipolar_threshold;
+    double confidence;
+} opencv_calib3d_essential_options;
+
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_validate_essential_options(
+    const opencv_calib3d_essential_options *options);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_normalized_sampson_error(
+    const opencv_calib3d_essential *matrix, double x1, double y1, double x2, double y2,
+    uint8_t *defined, double *error);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_find_essential_ransac(
+    const opencv_core_mat_handle *first, const opencv_core_mat_handle *second,
+    const opencv_calib3d_essential_options *options,
+    opencv_calib3d_essential_result_handle **result);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_essential_result_found(
+    const opencv_calib3d_essential_result_handle *result, uint8_t *found);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_essential_result_matrix(
+    const opencv_calib3d_essential_result_handle *result, opencv_calib3d_essential *matrix);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_essential_result_inlier_count(
+    const opencv_calib3d_essential_result_handle *result, int32_t *count);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_essential_result_inlier(
+    const opencv_calib3d_essential_result_handle *result, int32_t index, int32_t *correspondence_index);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_essential_result_pose_found(
+    const opencv_calib3d_essential_result_handle *result, uint8_t *found);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_essential_result_pose(
+    const opencv_calib3d_essential_result_handle *result, opencv_calib3d_relative_pose *pose);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_essential_result_pose_inlier_count(
+    const opencv_calib3d_essential_result_handle *result, int32_t *count);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_essential_result_pose_inlier(
+    const opencv_calib3d_essential_result_handle *result, int32_t index, int32_t *correspondence_index);
+OPENCV_CALIB3D_API void opencv_calib3d_essential_result_destroy(
+    opencv_calib3d_essential_result_handle *result);
 
 enum {
     OPENCV_CALIB3D_OK = 0,

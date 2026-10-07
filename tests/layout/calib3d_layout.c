@@ -116,3 +116,44 @@ int32_t calib3d_test_fundamental_options_layout(int32_t field) {
 void calib3d_test_fill_fundamental_options(opencv_calib3d_fundamental_options *v) {
     *v = (opencv_calib3d_fundamental_options){3.0,0.99};
 }
+
+int32_t calib3d_test_essential_layout(int32_t field) {
+    const size_t values[] = {
+        sizeof(opencv_calib3d_essential), _Alignof(opencv_calib3d_essential),
+        offsetof(opencv_calib3d_essential,e00), offsetof(opencv_calib3d_essential,e01),
+        offsetof(opencv_calib3d_essential,e02), offsetof(opencv_calib3d_essential,e10),
+        offsetof(opencv_calib3d_essential,e11), offsetof(opencv_calib3d_essential,e12),
+        offsetof(opencv_calib3d_essential,e20), offsetof(opencv_calib3d_essential,e21),
+        offsetof(opencv_calib3d_essential,e22)
+    };
+    return field >= 0 && field < 11 ? (int32_t)values[field] : -1;
+}
+void calib3d_test_fill_essential(opencv_calib3d_essential *v) {
+    *v = (opencv_calib3d_essential){1,2,3,4,5,6,7,8,9};
+}
+int32_t calib3d_test_relative_pose_layout(int32_t field) {
+    const size_t values[] = {
+        sizeof(opencv_calib3d_relative_pose), _Alignof(opencv_calib3d_relative_pose),
+        offsetof(opencv_calib3d_relative_pose,r00), offsetof(opencv_calib3d_relative_pose,r01),
+        offsetof(opencv_calib3d_relative_pose,r02), offsetof(opencv_calib3d_relative_pose,r10),
+        offsetof(opencv_calib3d_relative_pose,r11), offsetof(opencv_calib3d_relative_pose,r12),
+        offsetof(opencv_calib3d_relative_pose,r20), offsetof(opencv_calib3d_relative_pose,r21),
+        offsetof(opencv_calib3d_relative_pose,r22), offsetof(opencv_calib3d_relative_pose,tx),
+        offsetof(opencv_calib3d_relative_pose,ty), offsetof(opencv_calib3d_relative_pose,tz)
+    };
+    return field >= 0 && field < 14 ? (int32_t)values[field] : -1;
+}
+void calib3d_test_fill_relative_pose(opencv_calib3d_relative_pose *v) {
+    *v = (opencv_calib3d_relative_pose){1,2,3,4,5,6,7,8,9,10,11,12};
+}
+int32_t calib3d_test_essential_options_layout(int32_t field) {
+    const size_t values[] = {
+        sizeof(opencv_calib3d_essential_options), _Alignof(opencv_calib3d_essential_options),
+        offsetof(opencv_calib3d_essential_options,normalized_epipolar_threshold),
+        offsetof(opencv_calib3d_essential_options,confidence)
+    };
+    return field >= 0 && field < 4 ? (int32_t)values[field] : -1;
+}
+void calib3d_test_fill_essential_options(opencv_calib3d_essential_options *v) {
+    *v = (opencv_calib3d_essential_options){0.001,0.999};
+}

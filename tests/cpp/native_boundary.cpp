@@ -3,8 +3,10 @@
 #include "opencv_core_module_bridge.hpp"
 #include "homography_profile.hpp"
 #include "fundamental_profile.hpp"
+#include "essential_profile.hpp"
 
 #include <opencv2/core.hpp>
+#include <opencv2/core/version.hpp>
 #include <cmath>
 #include <iostream>
 #include <memory>
@@ -14,6 +16,8 @@
 #ifdef OPENCV_CALIB3D_TEST_HOOKS
 extern "C" void opencv_calib3d_test_fail(int stage, int kind);
 extern "C" void opencv_calib3d_test_refinement_false(void);
+extern "C" void opencv_calib3d_test_essential_no_model(void);
+extern "C" void opencv_calib3d_test_essential_no_pose(void);
 #endif
 
 namespace {
@@ -605,7 +609,233 @@ void fundamental_boundary() {
     std::cout << "PASS: fundamental real strided Core Regions, 14 rejected/15 true RANSAC, collinear no-model, raw negatives\n";
 }
 
+void essential_boundary() {
+#if CV_VERSION_MAJOR >= 5
+    std::cout << "Essential compiled profile: " << CV_VERSION <<
+        " / geometry; required maxIters overload with fixed literal 1000\n";
+#else
+    std::cout << "Essential compiled profile: " << CV_VERSION <<
+        " / calib3d; legacy no-maxIters overload, native ceiling 1000\n";
+#endif
+    using EResult=std::unique_ptr<opencv_calib3d_essential_result_handle,
+        decltype(&opencv_calib3d_essential_result_destroy)>;
+    constexpr int n=40;
+    auto first_parent=matrix(n,2,OPENCV_CORE_DEPTH_FLOAT64,2);
+    auto second_parent=matrix(n,2,OPENCV_CORE_DEPTH_FLOAT64,2);
+    opencv_core_mat_handle *fraw=nullptr,*sraw=nullptr;
+    check(opencv_core_mat_region(first_parent.get(),0,0,1,n,&fraw)==0 &&
+          opencv_core_mat_region(second_parent.get(),0,0,1,n,&sraw)==0,"Essential Core Regions");
+    Mat first(fraw,opencv_core_mat_destroy),second(sraw,opencv_core_mat_destroy);
+    check(!output(fraw).isContinuous() && !output(sraw).isContinuous(),"both Essential arrays strided");
+    const double c=std::cos(.08),s=std::sin(.08);
+    const cv::Matx33d truth(c,0,s,0,1,0,-s,0,c);
+    const cv::Vec3d t(-.75,.08,.12),unit=t/cv::norm(t);
+    const cv::Matx33d cross(0,-unit[2],unit[1],unit[2],0,-unit[0],-unit[1],unit[0],0);
+    const cv::Matx33d known=cross*truth;
+    const opencv_calib3d_essential oracle{known(0,0),known(0,1),known(0,2),known(1,0),known(1,1),
+        known(1,2),known(2,0),known(2,1),known(2,2)};
+    for (int i=0;i<n;++i) {
+        const cv::Vec3d x(((i*7)%17-8)*.24,((i*11)%19-9)*.19,4.+((i*13)%23)*.17);
+        const cv::Vec3d q=truth*x+t;
+        check(x[2]>0 && q[2]>0,"positive fixture depths");
+        output(fraw).at<cv::Vec2d>(i,0)={x[0]/x[2],x[1]/x[2]};
+        output(sraw).at<cv::Vec2d>(i,0)={q[0]/q[2],q[1]/q[2]};
+        double error=99;
+        check(opencv_calib3d_detail::normalized_sampson_error(oracle,x[0]/x[2],x[1]/x[2],
+            q[0]/q[2],q[1]/q[2],error) && error<1e-15,"independent raw known E oracle");
+    }
+    const opencv_calib3d_essential_options options{1e-6,.999};
+    auto estimate=[&](const opencv_core_mat_handle *a,const opencv_core_mat_handle *b) {
+        opencv_calib3d_essential_result_handle *raw=nullptr;
+        check(opencv_calib3d_find_essential_ransac(a,b,&options,&raw)==0 && raw,
+              "raw Essential estimate");
+        return EResult(raw,opencv_calib3d_essential_result_destroy);
+    };
+    auto validate=[&](const EResult &result) {
+        uint8_t found=0,pose_found=0;
+        int32_t count=0,pose_count=0,index=0;
+        opencv_calib3d_essential e{};
+        opencv_calib3d_relative_pose p{};
+        check(opencv_calib3d_essential_result_found(result.get(),&found)==0 && found &&
+            opencv_calib3d_essential_result_pose_found(result.get(),&pose_found)==0 && pose_found &&
+            opencv_calib3d_essential_result_matrix(result.get(),&e)==0 &&
+            opencv_calib3d_essential_result_pose(result.get(),&p)==0 &&
+            opencv_calib3d_essential_result_inlier_count(result.get(),&count)==0 && count>=5 &&
+            opencv_calib3d_essential_result_pose_inlier_count(result.get(),&pose_count)==0 && pose_count>=5,
+            "raw Essential/pose support and accessors");
+        std::vector<int32_t> ei,pi;
+        double maximum=0;
+        for (int i=0;i<count;++i) {
+            check(opencv_calib3d_essential_result_inlier(result.get(),i,&index)==0 &&
+                index>=0 && index<n && (ei.empty() || index>ei.back()),"Essential indices ordered/valid");
+            ei.push_back(index);
+        }
+        for (int i=0;i<pose_count;++i) {
+            check(opencv_calib3d_essential_result_pose_inlier(result.get(),i,&index)==0 &&
+                std::binary_search(ei.begin(),ei.end(),index) && (pi.empty() || index>pi.back()),"pose subset/order");
+            pi.push_back(index);
+        }
+        for (int i=0;i<n;++i) {
+            const auto a=output(fraw).at<cv::Vec2d>(i,0),b=output(sraw).at<cv::Vec2d>(i,0);
+            double error=0;
+            const bool accepted=opencv_calib3d_detail::normalized_sampson_error(e,a[0],a[1],b[0],b[1],error) &&
+                error<=options.normalized_epipolar_threshold;
+            check(accepted==std::binary_search(ei.begin(),ei.end(),i),"raw final-E Float64 classification");
+            if (accepted) maximum=std::max(maximum,error);
+        }
+        const cv::Matx33d r(p.r00,p.r01,p.r02,p.r10,p.r11,p.r12,p.r20,p.r21,p.r22);
+        const cv::Vec3d direction(p.tx,p.ty,p.tz);
+        const cv::Matx33d delta=r*truth.t();
+        const double angle=std::acos(std::clamp((cv::trace(delta)-1)/2,-1.,1.));
+        check(angle<1e-5 && direction.dot(unit)>1-1e-8 && std::abs(cv::norm(direction)-1)<1e-12 &&
+            cv::norm(cv::Mat(r.t()*r-cv::Matx33d::eye()),cv::NORM_INF)<1e-12 &&
+            std::abs(cv::determinant(r)-1)<1e-12 && cv::norm(-r.t()*direction+truth.t()*unit)<1e-5,
+            "raw rotation/sign/unit/camera-center frame oracle");
+        std::cout << "Essential raw support=" << count << " pose support=" << pose_count <<
+            " max Sampson=" << maximum << " rotation angle=" << angle << " signed t dot=" << direction.dot(unit) << '\n';
+        return ei;
+    };
+    auto clean=estimate(fraw,sraw); validate(clean);
+    auto invalid=[&](const opencv_core_mat_handle *a,const opencv_core_mat_handle *b,
+                     const opencv_calib3d_essential_options *o) {
+        auto *raw=clean.get(); // Real live result used only as an output sentinel.
+        check(opencv_calib3d_find_essential_ransac(a,b,o,&raw)==1 && !raw,"Essential preflight/result clearing");
+    };
+    invalid(nullptr,sraw,&options); invalid(fraw,nullptr,&options); invalid(fraw,sraw,nullptr);
+    check(opencv_calib3d_find_essential_ransac(fraw,sraw,&options,nullptr)==1,"null Essential result output");
+    check(opencv_calib3d_validate_essential_options(nullptr)==1,"null Essential options validation");
+    for (int count=0;count<=5;++count) {
+        auto a=matrix(count,1,OPENCV_CORE_DEPTH_FLOAT64,2),b=matrix(count,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+        invalid(a.get(),b.get(),&options);
+    }
+    auto mismatch=matrix(n-1,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    invalid(fraw,mismatch.get(),&options);
+    for (const auto &schema : {cv::Vec3i(n,1,CV_32FC2),cv::Vec3i(n,1,CV_64FC1),
+                               cv::Vec3i(n,1,CV_64FC3),cv::Vec3i(1,n,CV_64FC2)}) {
+        auto bad=matrix(schema[0],schema[1],CV_MAT_DEPTH(schema[2]),CV_MAT_CN(schema[2]));
+        invalid(bad.get(),sraw,&options); invalid(fraw,bad.get(),&options);
+    }
+    auto nd=matrix(n,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    const int sizes[]={2,3,7}; output(nd.get())=cv::Mat(3,sizes,CV_64FC2,cv::Scalar(0,0));
+    invalid(nd.get(),sraw,&options); invalid(fraw,nd.get(),&options);
+    const double nan=std::numeric_limits<double>::quiet_NaN(),inf=std::numeric_limits<double>::infinity();
+    for (double v : {nan,inf,-inf}) {
+        for (auto *handle : {fraw,sraw}) for (int axis=0;axis<2;++axis) {
+            const auto saved=output(handle).at<cv::Vec2d>(0,0);
+            output(handle).at<cv::Vec2d>(0,0)[axis]=v;
+            invalid(fraw,sraw,&options); output(handle).at<cv::Vec2d>(0,0)=saved;
+        }
+    }
+    for (double v : {0.,-1.,nan,inf,-inf,1e-30,1e20,1e300}) {
+        auto bad=options;bad.normalized_epipolar_threshold=v;invalid(fraw,sraw,&bad);
+    }
+    for (double v : {0.,-1.,1.,2.,nan,inf,-inf}) {
+        auto bad=options;bad.confidence=v;invalid(fraw,sraw,&bad);
+    }
+    opencv_calib3d_essential e{};
+    opencv_calib3d_relative_pose p{};
+    auto dirty_e=[&] {e={9,9,9,9,9,9,9,9,9};};
+    auto dirty_p=[&] {p={9,9,9,9,9,9,9,9,9,9,9,9};};
+    auto zero_e=[&] {return e.e00==0 && e.e01==0 && e.e02==0 && e.e10==0 && e.e11==0 &&
+        e.e12==0 && e.e20==0 && e.e21==0 && e.e22==0;};
+    auto zero_p=[&] {return p.r00==0 && p.r01==0 && p.r02==0 && p.r10==0 && p.r11==0 &&
+        p.r12==0 && p.r20==0 && p.r21==0 && p.r22==0 && p.tx==0 && p.ty==0 && p.tz==0;};
+    uint8_t found=9;int32_t count=99,index=99;
+    dirty_e(); dirty_p();
+    check(opencv_calib3d_essential_result_found(nullptr,&found)==1 && found==0 &&
+        opencv_calib3d_essential_result_matrix(nullptr,&e)==1 && zero_e() &&
+        opencv_calib3d_essential_result_inlier_count(nullptr,&count)==1 && count==0 &&
+        opencv_calib3d_essential_result_inlier(nullptr,0,&index)==1 && index==0,"null E accessors clearing");
+    found=9;count=99;index=99;
+    check(opencv_calib3d_essential_result_pose_found(nullptr,&found)==1 && found==0 &&
+        opencv_calib3d_essential_result_pose(nullptr,&p)==1 && zero_p() &&
+        opencv_calib3d_essential_result_pose_inlier_count(nullptr,&count)==1 && count==0 &&
+        opencv_calib3d_essential_result_pose_inlier(nullptr,0,&index)==1 && index==0,"null pose accessors clearing");
+    check(opencv_calib3d_essential_result_found(clean.get(),nullptr)==1 &&
+        opencv_calib3d_essential_result_matrix(clean.get(),nullptr)==1 &&
+        opencv_calib3d_essential_result_inlier_count(clean.get(),nullptr)==1 &&
+        opencv_calib3d_essential_result_inlier(clean.get(),0,nullptr)==1 &&
+        opencv_calib3d_essential_result_pose_found(clean.get(),nullptr)==1 &&
+        opencv_calib3d_essential_result_pose(clean.get(),nullptr)==1 &&
+        opencv_calib3d_essential_result_pose_inlier_count(clean.get(),nullptr)==1 &&
+        opencv_calib3d_essential_result_pose_inlier(clean.get(),0,nullptr)==1,"null Essential/pose outputs");
+    opencv_calib3d_essential_result_inlier_count(clean.get(),&count);
+    for (int bad : {-1,count}) {
+        index=99;check(opencv_calib3d_essential_result_inlier(clean.get(),bad,&index)==1 && index==0,"bad E index clearing");
+    }
+    opencv_calib3d_essential_result_pose_inlier_count(clean.get(),&count);
+    for (int bad : {-1,count}) {
+        index=99;check(opencv_calib3d_essential_result_pose_inlier(clean.get(),bad,&index)==1 && index==0,"bad pose index clearing");
+    }
+    double error=99;found=9;
+    check(opencv_calib3d_normalized_sampson_error(nullptr,0,0,0,0,&found,&error)==1 && found==0 && error==0,
+        "null Sampson matrix clearing");
+    check(opencv_calib3d_normalized_sampson_error(&oracle,0,0,0,0,nullptr,&error)==1 &&
+        opencv_calib3d_normalized_sampson_error(&oracle,0,0,0,0,&found,nullptr)==1,"null Sampson outputs");
+    error=99;found=9;
+    check(opencv_calib3d_normalized_sampson_error(&oracle,nan,0,0,0,&found,&error)==1 && found==0 && error==0,
+        "nonfinite raw Sampson clearing");
+    for (int i : {1,6,14}) output(sraw).at<cv::Vec2d>(i,0)+=cv::Vec2d(2,-1.5);
+    auto robust=estimate(fraw,sraw);const auto ei=validate(robust);
+    for (int i : {1,6,14}) check(!std::binary_search(ei.begin(),ei.end(),i),"raw Essential 2/7/15 absent");
+    for (int i : {1,6,14}) output(sraw).at<cv::Vec2d>(i,0)-=cv::Vec2d(2,-1.5);
+    auto five_a=matrix(5,1,OPENCV_CORE_DEPTH_FLOAT64,2),five_b=matrix(5,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    auto six_a=matrix(6,1,OPENCV_CORE_DEPTH_FLOAT64,2),six_b=matrix(6,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    output(fraw).rowRange(0,6).copyTo(output(six_a.get()));
+    output(sraw).rowRange(0,6).copyTo(output(six_b.get()));
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+    opencv_calib3d_test_fail(29,3);
+    invalid(five_a.get(),five_b.get(),&options);
+    auto *raw=clean.get();
+    check(opencv_calib3d_find_essential_ransac(six_a.get(),six_b.get(),&options,&raw)==3 && !raw,
+        "five preserves armed checkpoint / six consumes pre-native checkpoint");
+#endif
+    auto six=estimate(six_a.get(),six_b.get());
+    check(opencv_calib3d_essential_result_found(six.get(),&found)==0 && found,"six real native call after checkpoint");
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+    opencv_calib3d_test_essential_no_model();
+    auto absent=estimate(fraw,sraw);dirty_e();dirty_p();found=9;count=99;
+    check(opencv_calib3d_essential_result_found(absent.get(),&found)==0 && !found &&
+        opencv_calib3d_essential_result_matrix(absent.get(),&e)==1 && zero_e() &&
+        opencv_calib3d_essential_result_inlier_count(absent.get(),&count)==0 && count==0 &&
+        opencv_calib3d_essential_result_pose_found(absent.get(),&found)==0 && !found &&
+        opencv_calib3d_essential_result_pose(absent.get(),&p)==1 && zero_p() &&
+        opencv_calib3d_essential_result_pose_inlier_count(absent.get(),&count)==0 && count==0,"forced no-E after real native call");
+    index=99;check(opencv_calib3d_essential_result_inlier(absent.get(),0,&index)==1 && index==0,"no-E index clearing");
+    opencv_calib3d_test_essential_no_pose();
+    auto ambiguous=estimate(fraw,sraw);dirty_p();found=9;count=99;
+    check(opencv_calib3d_essential_result_found(ambiguous.get(),&found)==0 && found &&
+        opencv_calib3d_essential_result_matrix(ambiguous.get(),&e)==0 &&
+        opencv_calib3d_essential_result_inlier_count(ambiguous.get(),&count)==0 && count>=5 &&
+        opencv_calib3d_essential_result_pose_found(ambiguous.get(),&found)==0 && !found &&
+        opencv_calib3d_essential_result_pose(ambiguous.get(),&p)==1 && zero_p() &&
+        opencv_calib3d_essential_result_pose_inlier_count(ambiguous.get(),&count)==0 && count==0,
+        "E retained when pose support suppressed after real recoverPose");
+    index=99;check(opencv_calib3d_essential_result_pose_inlier(ambiguous.get(),0,&index)==1 && index==0,"no-pose index clearing");
+    const int expected[]={0,1,2,3,4,4};
+    for (int stage=29;stage<=32;++stage) for (int kind=1;kind<=5;++kind) {
+        auto *raw=clean.get();opencv_calib3d_test_fail(stage,kind);
+        check(opencv_calib3d_find_essential_ransac(fraw,sraw,&options,&raw)==expected[kind] && !raw,
+            "Essential construction exception atomicity");
+    }
+    for (int kind=1;kind<=5;++kind) {
+        dirty_e();opencv_calib3d_test_fail(33,kind);
+        check(opencv_calib3d_essential_result_matrix(clean.get(),&e)==expected[kind] && zero_e(),"E fault clearing");
+        index=99;opencv_calib3d_test_fail(34,kind);
+        check(opencv_calib3d_essential_result_inlier(clean.get(),0,&index)==expected[kind] && index==0,"E index fault clearing");
+        dirty_p();opencv_calib3d_test_fail(35,kind);
+        check(opencv_calib3d_essential_result_pose(clean.get(),&p)==expected[kind] && zero_p(),"pose fault clearing");
+        index=99;opencv_calib3d_test_fail(36,kind);
+        check(opencv_calib3d_essential_result_pose_inlier(clean.get(),0,&index)==expected[kind] && index==0,"pose index fault clearing");
+    }
+    std::cout << "PASS: Essential 40 fault scenarios, armed 5/6, forced no-E / E-found-no-pose after real native calls\n";
+#endif
+    opencv_calib3d_essential_result_destroy(nullptr);
+    std::cout << "PASS: Essential clean/outliers, both strided Core Regions, 0..5 rejection/6 RANSAC, raw schema/options/accessors\n";
+}
+
 void run() {
+    essential_boundary();
     fundamental_boundary();
     homography_boundary();
     camera_geometry_boundary();

@@ -55,6 +55,12 @@
           "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/precomp.hpp",
           "sha256": "4a4eabd56fa4deec0d7d140e2db6fdcddd5dbd7b191abe73b68c05d3c9a6606e",
           "git_blob_sha1": "f2cb7123c07a332ee34b360123a19d35905acd67"
+        },
+        {
+          "path": "modules/calib3d/src/five-point.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/five-point.cpp",
+          "sha256": "30e57492b26bd082446dea1396dc7bce5752b59dd7f44d4017cf548caf40f30c",
+          "git_blob_sha1": "0cefe8df4c9cc4fc8d1588342862975dfa89fc36"
         }
       ]
     },
@@ -112,6 +118,12 @@
           "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/precomp.hpp",
           "sha256": "61b0bb8425349438fd695206c8d4970516ed5f4609b3fd2d6e16257e591b8b54",
           "git_blob_sha1": "8f598d6709e105c94ccd6b57edf42a040cc1b3dc"
+        },
+        {
+          "path": "modules/calib3d/src/five-point.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/five-point.cpp",
+          "sha256": "7c2ed215ee7a4d1ad6fa950f9d67e185587c41b1051ca61d4a6871f6a0f8c7bb",
+          "git_blob_sha1": "9fda9f73f1635ec15275eaab31c754ce8aa25178"
         }
       ]
     },
@@ -169,6 +181,12 @@
           "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/precomp.hpp",
           "sha256": "4fd59899e543fa54f432e44551d9e180fbdf88a8abc06774dfec3e257e27b7c0",
           "git_blob_sha1": "1242cd0efd34f54b10098d2a59b50ebcb8295029"
+        },
+        {
+          "path": "modules/geometry/src/five-point.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/five-point.cpp",
+          "sha256": "9b0ae89ad250ce9675c88630477475c36b589ba62fea598502183051d035f305",
+          "git_blob_sha1": "1c22eb22827b0eb65e3de2787af8a5c95a4e5eac"
         }
       ]
     }
@@ -222,5 +240,23 @@
     "confidence_profile": "DBL_EPSILON <= confidence <= 1-DBL_EPSILON; strict native substitution comparisons",
     "public_inliers": "original Float64 observations, final F, defined maximum of both point-to-epipolar-line distances <= threshold",
     "matrix_policy": "3x3 CV_64FC1 finite nonzero common scale, no coefficient/sign/rank threshold"
+  },
+  "task_006_review": {
+    "verification": "immutable headers/ptsetreg.cpp/precomp.hpp SHA-256/Git blobs reverified; five-point.cpp hashes added",
+    "native_call_4x": "findEssentialMat(first,second,identity,RANSAC,confidence,normalized_threshold,native_mask)",
+    "native_call_5x": "findEssentialMat(first,second,identity,RANSAC,confidence,normalized_threshold,1000,native_mask)",
+    "overload_evolution": "4.1 legacy only; 4.10 legacy plus maxIters; 5.0 removes legacy camera-matrix and focal/pp overloads; compile-time 5.0 fixed literal 1000 approved by user",
+    "minimum_correspondences": 6,
+    "native_model_points": 5,
+    "five_points": "direct runKernel and all-ones mask; no subset consensus",
+    "six_or_more": "RANSAC getSubset sampling",
+    "maximum_iterations": 1000,
+    "native_precision": "Float64 observations and five-point algebra; CV_32F callback squared errors and float(double(threshold*threshold)) mask comparison",
+    "confidence_profile": "finite strictly (0,1), no epsilon substitution",
+    "final_classification": "original Float64 normalized observations, final E, defined normalized Sampson sqrt error <= threshold; >=5 support",
+    "recover_pose": "identity K; CV_8U mask exactly final-E support; explicit DBL_MAX distance threshold; no triangulated output",
+    "pose_support_minimum": 5,
+    "relative_frame": "X_second = R X_first + lambda*t_hat; unknown positive lambda; center direction normalize(-R^T*t_hat)",
+    "matrix_policy": "3x3 CV_64FC1 finite nonzero; arbitrary scale/sign; no singular-value rejection threshold"
   }
 }

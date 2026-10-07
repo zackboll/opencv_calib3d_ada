@@ -26,8 +26,25 @@ final inliers are required. Threshold squared-Float32 representability and the
 inclusive native DBL_EPSILON confidence interval prevent silent policy changes.
 F alone does not recover metric scale, camera position, or 3-D terrain location.
 See [contract](docs/fundamental-contract.md), [immutable source review](docs/fundamental-source-review.md),
-and [executed qualification](docs/fundamental-validation.md). Essential/relative
-pose is reserved for Task 006.
+and [executed qualification](docs/fundamental-validation.md).
+
+Task 006 adds normalized-only `Essential_Matrix`, `Normalized_Sampson_Error`,
+`Essential_Estimate` from `Estimate_Essential_RANSAC`, automatic relative pose
+recovery, separate Essential/pose inlier lists, and
+`Second_Camera_Center_Direction_In_First`. **Do NOT pass raw distorted pixels:**
+use `Undistort_To_Normalized` separately for each camera first. Equal counts
+**>=6** ensure actual five-point subset consensus; fixed native ceiling **1000**.
+Observations/five-point algebra are Float64, native error-mask comparison is
+Float32; public final-E inliers use original Float64 normalized Sampson error.
+Both Essential and cheirality-qualified pose require five supporting pairs.
+Recovery uses exactly final-E support and an explicit effectively-unbounded
+finite depth threshold, not the native default 50 baseline units.
+**Metric baseline magnitude is unknown. Translation_Direction is not camera
+position.** The relative convention is `X_second = R * X_first + lambda*t_hat`;
+camera-center motion direction in first coordinates is `normalize(-R^T*t_hat)`.
+See [contract](docs/essential-contract.md),
+[immutable source review](docs/essential-source-review.md), and
+[qualification evidence](docs/essential-validation.md).
 
 ## Native backend split
 
@@ -115,6 +132,7 @@ alr -n -C examples build
 alr -n -C examples exec -- sh ../scripts/run_native.sh bin/pnp_synthetic
 alr -n -C examples exec -- sh ../scripts/run_native.sh bin/homography_synthetic
 alr -n -C examples exec -- sh ../scripts/run_native.sh bin/fundamental_synthetic
+alr -n -C examples exec -- sh ../scripts/run_native.sh bin/essential_synthetic
 ```
 
 On Debian/Ubuntu:
@@ -167,6 +185,13 @@ planar/projective verification: 24 generated correspondences, three gross
 outliers, final-model support, scale-ambiguous H, and sample mapping error. It
 does not estimate camera pose or terrain localization and adds no dependencies.
 
+The fourth file-free `essential_synthetic` example directly constructs normalized
+two-view observations from noncoplanar 3-D points, nonidentity R and translation,
+without a projection binding. It injects outliers 2/7/15 and prints final E,
+relative rotation, signed unit translation-term direction, second-camera-center
+direction, support and geometric diagnostics. No files, GUI or hardware. This
+is calibrated two-view relative geometry, **not metric navigation position**.
+
 ## CI policy
 
 PR CI is Linux, macOS, repository checks and Linux ASan/UBSan. Windows/MSYS2 is
@@ -177,7 +202,7 @@ The presence of those workflows alone is not evidence that they passed.
 ## Deliberate exclusions
 
 This first slice does not bind camera calibration, chessboards, stereo,
-essential matrices, triangulation, affine estimators, image warping, USAC configuration,
+public triangulation/decomposition, affine estimators, image warping, USAC configuration,
 `solvePnPRefineLM`/VVS, P3P/AP3P/IPPE/SQPNP selection, fisheye, image undistortion/remap, DTED,
 Features, optical flow, or estimator/fusion policy.
 
