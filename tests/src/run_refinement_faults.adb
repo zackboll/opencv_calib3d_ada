@@ -131,4 +131,65 @@ begin
    end;
    Ada.Text_IO.Put_Line ("PASS: Ada homography 30 exception translation/cleanup scenarios");
    Ada.Text_IO.Put_Line ("PASS: four-point Ada rejection before native entry; five reaches native checkpoint");
+   declare
+      First, Second : Image_Point_Array (1 .. 32);
+   begin
+      for I in First'Range loop
+         declare
+            J : constant Natural := I - 1;
+            X : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((J*7) mod 17 - 8)*0.24;
+            Y : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((J*11) mod 19 - 9)*0.19;
+            Z : constant OpenCV.Float64_Value := 4.0 + OpenCV.Float64_Value ((J*13) mod 23)*0.17;
+         begin
+            First (I) := [800.0*X/Z+320.0, 820.0*Y/Z+240.0];
+            Second (I) := [800.0*(X-0.75)/Z+320.0, 820.0*Y/Z+240.0];
+         end;
+      end loop;
+      Fail (23, 3);
+      begin
+         declare
+            E : constant Fundamental_Estimate := Estimate_Fundamental_RANSAC
+              (First (1 .. 14), Second (1 .. 14));
+            pragma Unreferenced (E);
+         begin
+            raise Program_Error with "14 fundamental pairs reached native entry";
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+      begin
+         declare
+            E : constant Fundamental_Estimate := Estimate_Fundamental_RANSAC
+              (First (1 .. 15), Second (1 .. 15));
+            pragma Unreferenced (E);
+         begin
+            raise Program_Error with "15 did not consume pending fundamental checkpoint";
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+      --  A subsequent valid call proves the pending checkpoint was consumed.
+      declare
+         E : constant Fundamental_Estimate := Estimate_Fundamental_RANSAC (First, Second, (0.1, 0.999));
+      begin
+         Check (Found (E), "checkpoint remained armed after 15");
+      end;
+      for Stage in Interfaces.C.int range 23 .. 28 loop
+         for Kind in Interfaces.C.int range 1 .. 5 loop
+            Fail (Stage, Kind);
+            begin
+               declare
+                  E : constant Fundamental_Estimate := Estimate_Fundamental_RANSAC (First, Second, (0.1, 0.999));
+                  pragma Unreferenced (E);
+               begin
+                  raise Program_Error with "fundamental fault did not raise OpenCV_Error";
+               end;
+            exception
+               when OpenCV.OpenCV_Error => null;
+            end;
+         end loop;
+      end loop;
+   end;
+   Ada.Text_IO.Put_Line ("PASS: Ada fundamental 30 exception translation/cleanup scenarios");
+   Ada.Text_IO.Put_Line ("PASS: 14-point Ada rejection preserves checkpoint; 15 true RANSAC consumes it");
 end Run_Refinement_Faults;

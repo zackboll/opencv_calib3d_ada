@@ -90,3 +90,29 @@ int32_t calib3d_test_homography_options_layout(int32_t field) {
 void calib3d_test_fill_homography_options(opencv_calib3d_homography_options *v) {
     *v = (opencv_calib3d_homography_options){2000,3.0,0.995};
 }
+
+int32_t calib3d_test_fundamental_layout(int32_t field) {
+    const size_t values[] = {
+        sizeof(opencv_calib3d_fundamental), _Alignof(opencv_calib3d_fundamental),
+        offsetof(opencv_calib3d_fundamental, f00), offsetof(opencv_calib3d_fundamental, f01),
+        offsetof(opencv_calib3d_fundamental, f02), offsetof(opencv_calib3d_fundamental, f10),
+        offsetof(opencv_calib3d_fundamental, f11), offsetof(opencv_calib3d_fundamental, f12),
+        offsetof(opencv_calib3d_fundamental, f20), offsetof(opencv_calib3d_fundamental, f21),
+        offsetof(opencv_calib3d_fundamental, f22)
+    };
+    return field >= 0 && field < 11 ? (int32_t)values[field] : -1;
+}
+void calib3d_test_fill_fundamental(opencv_calib3d_fundamental *v) {
+    *v = (opencv_calib3d_fundamental){1,2,3,4,5,6,7,8,9};
+}
+int32_t calib3d_test_fundamental_options_layout(int32_t field) {
+    const size_t values[] = {
+        sizeof(opencv_calib3d_fundamental_options), _Alignof(opencv_calib3d_fundamental_options),
+        offsetof(opencv_calib3d_fundamental_options, epipolar_threshold_pixels),
+        offsetof(opencv_calib3d_fundamental_options, confidence)
+    };
+    return field >= 0 && field < 4 ? (int32_t)values[field] : -1;
+}
+void calib3d_test_fill_fundamental_options(opencv_calib3d_fundamental_options *v) {
+    *v = (opencv_calib3d_fundamental_options){3.0,0.99};
+}

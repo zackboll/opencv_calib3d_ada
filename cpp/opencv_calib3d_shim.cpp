@@ -1,6 +1,7 @@
 #include "opencv_calib3d_shim.h"
 #include "pnp_profile.hpp"
 #include "homography_profile.hpp"
+#include "fundamental_profile.hpp"
 #include "opencv_core_module_bridge.hpp"
 
 #include <opencv2/core.hpp>
@@ -52,6 +53,14 @@ static_assert(std::is_standard_layout<opencv_calib3d_homography>::value,
 struct opencv_calib3d_homography_result_handle {
     bool found = false;
     opencv_calib3d_homography matrix{};
+    std::vector<int32_t> inliers;
+};
+
+static_assert(std::is_standard_layout<opencv_calib3d_fundamental>::value,
+              "fundamental must have standard C layout");
+struct opencv_calib3d_fundamental_result_handle {
+    bool found = false;
+    opencv_calib3d_fundamental matrix{};
     std::vector<int32_t> inliers;
 };
 
@@ -350,6 +359,120 @@ opencv_calib3d_status opencv_calib3d_homography_result_inlier(
     });
 }
 void opencv_calib3d_homography_result_destroy(opencv_calib3d_homography_result_handle *result) {
+    try { delete result; } catch (...) {}
+}
+
+opencv_calib3d_status opencv_calib3d_validate_fundamental_options(
+    const opencv_calib3d_fundamental_options *options) {
+    return guarded([&] {
+        require(options != nullptr && opencv_calib3d_detail::fundamental_options_fit(
+            options->epipolar_threshold_pixels, options->confidence),
+            "invalid fundamental RANSAC options");
+    });
+}
+
+opencv_calib3d_status opencv_calib3d_find_fundamental_ransac(
+    const opencv_core_mat_handle *first_points,
+    const opencv_core_mat_handle *second_points,
+    const opencv_calib3d_fundamental_options *options,
+    opencv_calib3d_fundamental_result_handle **result) {
+    if (result != nullptr) *result = nullptr;
+    return guarded([&] {
+        require(result != nullptr && options != nullptr, "null fundamental options/output");
+        require(opencv_calib3d_detail::fundamental_options_fit(
+                options->epipolar_threshold_pixels, options->confidence),
+                "invalid fundamental RANSAC options");
+        const cv::Mat &original_first = resolve_input(first_points);
+        const cv::Mat &original_second = resolve_input(second_points);
+        const int count = validate_image_points(original_first, false);
+        require(count == validate_image_points(original_second, false),
+                "fundamental correspondence counts differ");
+        require(count >= 15, "robust fundamental requires at least fifteen correspondences");
+        validate_finite_image_points(original_first);
+        validate_finite_image_points(original_second);
+        const cv::Mat first = original_first.isContinuous() ? original_first : original_first.clone();
+        const cv::Mat second = original_second.isContinuous() ? original_second : original_second.clone();
+        cv::Mat native_mask;
+        checkpoint(23);
+        const cv::Mat h = cv::findFundamentalMat(first, second, cv::FM_RANSAC,
+            options->epipolar_threshold_pixels, options->confidence, native_mask);
+        checkpoint(24);
+        auto value = std::make_unique<opencv_calib3d_fundamental_result_handle>();
+        if (!h.empty()) {
+            if (h.dims != 2 || h.rows != 3 || h.cols != 3 || h.type() != CV_64FC1)
+                throw std::runtime_error("native fundamental schema is invalid");
+            bool nonzero = false;
+            for (int row = 0; row < 3; ++row) for (int col = 0; col < 3; ++col) {
+                const double coefficient = h.at<double>(row, col);
+                if (!std::isfinite(coefficient))
+                    throw std::runtime_error("native fundamental is nonfinite");
+                nonzero = nonzero || coefficient != 0;
+            }
+            if (!nonzero) throw std::runtime_error("native fundamental is all zero");
+            value->matrix = {h.at<double>(0,0),h.at<double>(0,1),h.at<double>(0,2),
+                             h.at<double>(1,0),h.at<double>(1,1),h.at<double>(1,2),
+                             h.at<double>(2,0),h.at<double>(2,1),h.at<double>(2,2)};
+            checkpoint(25);
+            // Never publish the upstream Float32 mask; classify against final F.
+            // Classify the original Float64 values in correspondence order.
+            for (int i = 0; i < count; ++i) {
+                const auto s = original_first.at<cv::Vec2d>(i,0);
+                const auto d = original_second.at<cv::Vec2d>(i,0);
+                if (opencv_calib3d_detail::final_fundamental_inlier(value->matrix,
+                    s[0],s[1],d[0],d[1],options->epipolar_threshold_pixels))
+                    value->inliers.push_back(i);
+            }
+            value->found = value->inliers.size() >= 7;
+            if (!value->found) {
+                value->matrix = {};
+                value->inliers.clear();
+            }
+        }
+        checkpoint(26);
+        *result = value.release();
+    });
+}
+
+opencv_calib3d_status opencv_calib3d_fundamental_result_found(
+    const opencv_calib3d_fundamental_result_handle *result, uint8_t *found) {
+    if (found != nullptr) *found = 0;
+    return guarded([&] {
+        require(result != nullptr && found != nullptr, "null fundamental found argument");
+        *found = result->found ? 1U : 0U;
+    });
+}
+opencv_calib3d_status opencv_calib3d_fundamental_result_matrix(
+    const opencv_calib3d_fundamental_result_handle *result, opencv_calib3d_fundamental *matrix) {
+    if (matrix != nullptr) *matrix = {};
+    return guarded([&] {
+        require(result != nullptr && matrix != nullptr, "null fundamental matrix argument");
+        require(result->found, "matrix requested from a no-model result");
+        checkpoint(27);
+        *matrix = result->matrix;
+    });
+}
+opencv_calib3d_status opencv_calib3d_fundamental_result_inlier_count(
+    const opencv_calib3d_fundamental_result_handle *result, int32_t *count) {
+    if (count != nullptr) *count = 0;
+    return guarded([&] {
+        require(result != nullptr && count != nullptr, "null fundamental count argument");
+        require(result->inliers.size() <= static_cast<std::size_t>(INT32_MAX),
+                "fundamental count is not representable");
+        *count = static_cast<int32_t>(result->inliers.size());
+    });
+}
+opencv_calib3d_status opencv_calib3d_fundamental_result_inlier(
+    const opencv_calib3d_fundamental_result_handle *result, int32_t index, int32_t *correspondence_index) {
+    if (correspondence_index != nullptr) *correspondence_index = 0;
+    return guarded([&] {
+        require(result != nullptr && correspondence_index != nullptr, "null fundamental inlier argument");
+        require(index >= 0 && static_cast<std::size_t>(index) < result->inliers.size(),
+                "fundamental inlier index out of range");
+        checkpoint(28);
+        *correspondence_index = result->inliers[static_cast<std::size_t>(index)];
+    });
+}
+void opencv_calib3d_fundamental_result_destroy(opencv_calib3d_fundamental_result_handle *result) {
     try { delete result; } catch (...) {}
 }
 

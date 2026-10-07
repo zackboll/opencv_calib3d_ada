@@ -96,6 +96,37 @@ class RepositoryTests(unittest.TestCase):
                          "not a general 3-D", "4.1/4.10", "5.0", "upstream mask"):
             self.assertIn(required, contract)
 
+    def test_fundamental_true_ransac_common_call_and_final_classifier(self):
+        text = (ROOT / "cpp/opencv_calib3d_shim.cpp").read_text()
+        start = text.index("opencv_calib3d_status opencv_calib3d_find_fundamental_ransac(")
+        end = text.index("opencv_calib3d_status opencv_calib3d_fundamental_result_found(", start)
+        estimator = text[start:end]
+        self.assertEqual(estimator.count("cv::findFundamentalMat("), 1)
+        self.assertIn("count >= 15", estimator)
+        self.assertIn("cv::findFundamentalMat(first, second, cv::FM_RANSAC", estimator)
+        self.assertIn("options->epipolar_threshold_pixels, options->confidence, native_mask)", estimator)
+        self.assertIn("original_first.at<cv::Vec2d>(i,0)", estimator)
+        self.assertIn("original_second.at<cv::Vec2d>(i,0)", estimator)
+        self.assertIn("final_fundamental_inlier(value->matrix", estimator)
+        self.assertIn("value->inliers.size() >= 7", estimator)
+        self.assertNotIn("maximum_iterations", estimator)
+        self.assertNotRegex(estimator, r"native_mask\s*\.\s*(at|ptr|copyTo)")
+        for excluded in ("FM_LMEDS", "FM_7POINT", "FM_8POINT", "recoverPose(", "findEssentialMat("):
+            self.assertNotIn(excluded, estimator)
+
+    def test_fundamental_numeric_profile_and_all_examples(self):
+        helper = (ROOT / "cpp/fundamental_profile.hpp").read_text()
+        self.assertIn("threshold * threshold", helper)
+        self.assertIn("static_cast<float>(squared)", helper)
+        self.assertIn("confidence < DBL_EPSILON", helper)
+        self.assertIn("confidence > 1 - DBL_EPSILON", helper)
+        self.assertIn("std::hypot(a1,b1)", helper)
+        self.assertIn("error <= threshold", helper)
+        for workflow in ("cross-platform.yml", "opencv-compatibility.yml"):
+            text = (ROOT / ".github/workflows" / workflow).read_text()
+            for example in ("pnp_synthetic", "homography_synthetic", "fundamental_synthetic"):
+                self.assertIn("bin/" + example, text)
+
     def test_topology_rejects_extra_windows_branch(self):
         cross = (ROOT / ".github/workflows/cross-platform.yml").read_text()
         windows = (ROOT / ".github/workflows/windows-post-merge.yml").read_text()

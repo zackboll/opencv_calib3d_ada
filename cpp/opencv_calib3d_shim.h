@@ -18,6 +18,7 @@ extern "C" {
 typedef struct opencv_core_mat_handle opencv_core_mat_handle;
 typedef struct opencv_calib3d_pose_result_handle opencv_calib3d_pose_result_handle;
 typedef struct opencv_calib3d_homography_result_handle opencv_calib3d_homography_result_handle;
+typedef struct opencv_calib3d_fundamental_result_handle opencv_calib3d_fundamental_result_handle;
 typedef int32_t opencv_calib3d_status;
 
 enum {
@@ -61,6 +62,36 @@ typedef struct opencv_calib3d_homography_options {
     double reprojection_threshold_pixels;
     double confidence;
 } opencv_calib3d_homography_options;
+
+typedef struct opencv_calib3d_fundamental {
+    double f00, f01, f02;
+    double f10, f11, f12;
+    double f20, f21, f22;
+} opencv_calib3d_fundamental;
+
+typedef struct opencv_calib3d_fundamental_options {
+    double epipolar_threshold_pixels;
+    double confidence;
+} opencv_calib3d_fundamental_options;
+
+/* Shared exact native arithmetic profile, also used for Ada preflight. */
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_validate_fundamental_options(
+    const opencv_calib3d_fundamental_options *options);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_find_fundamental_ransac(
+    const opencv_core_mat_handle *first_points,
+    const opencv_core_mat_handle *second_points,
+    const opencv_calib3d_fundamental_options *options,
+    opencv_calib3d_fundamental_result_handle **result);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_fundamental_result_found(
+    const opencv_calib3d_fundamental_result_handle *result, uint8_t *found);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_fundamental_result_matrix(
+    const opencv_calib3d_fundamental_result_handle *result, opencv_calib3d_fundamental *matrix);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_fundamental_result_inlier_count(
+    const opencv_calib3d_fundamental_result_handle *result, int32_t *count);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_fundamental_result_inlier(
+    const opencv_calib3d_fundamental_result_handle *result, int32_t index, int32_t *correspondence_index);
+OPENCV_CALIB3D_API void opencv_calib3d_fundamental_result_destroy(
+    opencv_calib3d_fundamental_result_handle *result);
 
 OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_find_homography_ransac(
     const opencv_core_mat_handle *source_points,

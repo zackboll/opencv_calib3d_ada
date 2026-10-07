@@ -1,7 +1,7 @@
 # OpenCV Calib3D for Ada
 
 Handwritten thick Ada binding for camera pose and robust planar/projective
-2-D correspondence verification. Repository: `opencv_calib3d_ada`; Alire crate:
+and two-view epipolar 2-D correspondence verification. Repository: `opencv_calib3d_ada`; Alire crate:
 `opencv_calib3d`; public package: `OpenCV.Calib3D`.
 
 **Version 0.1.0-dev; review baseline, not a release.**
@@ -15,6 +15,19 @@ Task 002 adds iterative initial-guess refinement and Ada reprojection diagnostic
 Local OpenCV **4.10.0 / calib3d** qualification passes **19/19 AUnit**, raw ABI,
 public false/exception atomicity, production/fault ASan+UBSan, and the extended
 example. Remote review gates are tracked separately; no new release is claimed.
+
+Task 005 adds `Fundamental_Matrix`, pure-Ada `Maximum_Epipolar_Error`, and owned
+`Fundamental_Estimate` from `Estimate_Fundamental_RANSAC`. Equal counts **>=15**
+prevent the native 8..14 LMeDS fallback. The common native iteration ceiling is
+fixed at **1000**, with no iteration option. Native estimation rounds observations
+to Float32; public final-F inliers use the original Float64 points and the maximum
+of both point-to-epipolar-line distances (not Sampson distance). At least seven
+final inliers are required. Threshold squared-Float32 representability and the
+inclusive native DBL_EPSILON confidence interval prevent silent policy changes.
+F alone does not recover metric scale, camera position, or 3-D terrain location.
+See [contract](docs/fundamental-contract.md), [immutable source review](docs/fundamental-source-review.md),
+and [executed qualification](docs/fundamental-validation.md). Essential/relative
+pose is reserved for Task 006.
 
 ## Native backend split
 
@@ -101,6 +114,7 @@ alr test
 alr -n -C examples build
 alr -n -C examples exec -- sh ../scripts/run_native.sh bin/pnp_synthetic
 alr -n -C examples exec -- sh ../scripts/run_native.sh bin/homography_synthetic
+alr -n -C examples exec -- sh ../scripts/run_native.sh bin/fundamental_synthetic
 ```
 
 On Debian/Ubuntu:
@@ -163,7 +177,7 @@ The presence of those workflows alone is not evidence that they passed.
 ## Deliberate exclusions
 
 This first slice does not bind camera calibration, chessboards, stereo,
-essential/fundamental matrices, triangulation, affine estimators, image warping, USAC configuration,
+essential matrices, triangulation, affine estimators, image warping, USAC configuration,
 `solvePnPRefineLM`/VVS, P3P/AP3P/IPPE/SQPNP selection, fisheye, image undistortion/remap, DTED,
 Features, optical flow, or estimator/fusion policy.
 
