@@ -2094,6 +2094,239 @@ package body Calib3D_Tests is
 
    package Caller is new AUnit.Test_Caller (Fixture);
 
+   procedure Triangulation_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      Identity : constant Rotation_Matrix := [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+      Pose : Relative_Camera_Pose := (Identity, [-1.0, 0.0, 0.0]);
+      procedure Reject_Points (First, Second : Normalized_Image_Point_Array) is
+      begin
+         declare
+            Points : constant Triangulated_Point_Array := Triangulate_Normalized
+              (First, Second, (Identity, [-1.0, 0.0, 0.0]));
+            pragma Unreferenced (Points);
+         begin
+            Assert (False, "invalid correspondences accepted");
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Reject_Points;
+      procedure Reject (P : Relative_Camera_Pose) is
+      begin
+         declare
+            Points : constant Triangulated_Point_Array := Triangulate_Normalized
+              ([1 .. 0 => <>], [1 .. 0 => <>], P);
+            pragma Unreferenced (Points);
+         begin
+            Assert (False, "invalid empty-request pose accepted");
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Reject;
+   begin
+      Pose.Rotation_First_To_Second := [others => [others => 0.0]]; Reject (Pose);
+      Pose.Rotation_First_To_Second := Identity;
+      Pose.Rotation_First_To_Second (0, 0) := -1.0; Reject (Pose);
+      Pose.Rotation_First_To_Second (0, 0) := 0.9; Reject (Pose);
+      Pose.Rotation_First_To_Second := Identity;
+      Pose.Translation_Direction := [others => 0.0]; Reject (Pose);
+      for Kind in 0 .. 2 loop
+         Pose := (Identity, [-1.0, 0.0, 0.0]);
+         Pose.Rotation_First_To_Second (0, 0) := OpenCV.Float64_Value (Nonfinite (Interfaces.Integer_32 (Kind))); Reject (Pose);
+         Pose := (Identity, [-1.0, 0.0, 0.0]);
+         Pose.Translation_Direction (1) := OpenCV.Float64_Value (Nonfinite (Interfaces.Integer_32 (Kind))); Reject (Pose);
+         for Axis in 0 .. 1 loop
+            declare
+               Bad : Normalized_Image_Point_Array := [[0.4, 0.2]];
+            begin
+               Bad (1) (Axis) := OpenCV.Float64_Value (Nonfinite (Interfaces.Integer_32 (Kind)));
+               Reject_Points (Bad, [[0.2, 0.2]]);
+               Reject_Points ([[0.4, 0.2]], Bad);
+            end;
+         end loop;
+      end loop;
+      Reject_Points ([[0.4, 0.2]], [1 .. 0 => <>]);
+   end Triangulation_Invalid;
+
+   procedure Triangulation_Depths (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Identity : constant Rotation_Matrix := [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+      Forward : constant Triangulated_Point_Array := Triangulate_Normalized
+        ([[0.4, 0.0]], [[-0.4, 0.0]], (Identity, [0.0, 0.0, -1.0]));
+      Reverse_View : constant Triangulated_Point_Array := Triangulate_Normalized
+        ([[-0.4, 0.0]], [[0.4, 0.0]], (Identity, [0.0, 0.0, 1.0]));
+   begin
+      --  Independent known points: (0.2,0,0.5) and (0.2,0,-0.5).
+      --  Forward depths +0.5/-0.5; reversed depths -0.5/+0.5.
+      Assert (Forward (1).Status = Non_Positive_Depth, "second-camera-only negative depth");
+      Assert (Reverse_View (1).Status = Non_Positive_Depth, "first-camera-only negative depth");
+      Ada.Text_IO.Put_Line ("Triangulation analytic depth oracles: first/second +0.5/-0.5 and -0.5/+0.5 PASS");
+   end Triangulation_Depths;
+
+   procedure Triangulation_Noisy (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Pose : constant Relative_Camera_Pose :=
+        ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [-1.0, 0.0, 0.0]);
+      Points : constant Triangulated_Point_Array := Triangulate_Normalized
+        ([[0.4, 0.2]], [[0.2, 0.23]], Pose);
+      P : Triangulated_Point renames Points (1);
+      X, Y, Z, A, B : OpenCV.Float64_Value;
+      function Hypot (A, B : OpenCV.Float64_Value) return OpenCV.Float64_Value is
+         Scale : constant OpenCV.Float64_Value := OpenCV.Float64_Value'Max (abs A, abs B);
+      begin
+         return (if Scale = 0.0 then 0.0 else Scale * Math.Sqrt ((A / Scale)**2 + (B / Scale)**2));
+      end Hypot;
+   begin
+      Assert (P.Status = Usable, "no automatic noisy residual rejection");
+      X := P.Position_In_First_Camera (0);
+      Y := P.Position_In_First_Camera (1);
+      Z := P.Position_In_First_Camera (2);
+      A := X / Z - 0.4; B := Y / Z - 0.2;
+      Assert (Near (P.First_Normalized_Error, Hypot (A, B), 1.0E-12),
+              "independent first normalized reprojection");
+      A := (X - 1.0) / Z - 0.2; B := Y / Z - 0.23;
+      Assert (Near (P.Second_Normalized_Error, Hypot (A, B), 1.0E-12),
+              "independent second normalized reprojection");
+      Assert (P.First_Normalized_Error > 0.0 and then P.Second_Normalized_Error > 0.0,
+              "noise produces errors in both images");
+   end Triangulation_Noisy;
+
+   procedure Triangulation_Layout (T : in out Fixture) is
+      pragma Unreferenced (T);
+      function Layout (Field : Interfaces.Integer_32) return Interfaces.Integer_32
+        with Import, Convention => C, External_Name => "calib3d_test_triangulation_layout";
+      procedure Fill (Value : access ABI.C_Triangulated_Point)
+        with Import, Convention => C, External_Name => "calib3d_test_fill_triangulation";
+      Point : aliased ABI.C_Triangulated_Point;
+      type Positions is array (Natural range <>) of Natural;
+      Offsets : constant Positions := [Point.Point_Status'Position, Point.X'Position,
+        Point.Y'Position, Point.Z'Position, Point.Depth_First'Position,
+        Point.Depth_Second'Position, Point.Error_First'Position, Point.Error_Second'Position];
+   begin
+      Assert (ABI.C_Triangulated_Point'Size = Natural (Layout (0)) * System.Storage_Unit and then
+              ABI.C_Triangulated_Point'Alignment = Natural (Layout (1)), "triangulation size/alignment");
+      for I in Offsets'Range loop
+         Assert (Offsets (I) = Natural (Layout (Interfaces.Integer_32 (I + 2))), "triangulation component position");
+      end loop;
+      Fill (Point'Access);
+      Assert (Point.Point_Status = 4 and then Point.X = 1.0 and then Point.Y = 2.0 and then
+              Point.Z = 3.0 and then Point.Depth_First = 4.0 and then Point.Depth_Second = 5.0 and then
+              Point.Error_First = 6.0 and then Point.Error_Second = 7.0, "C-written full triangulation record");
+      Ada.Text_IO.Put_Line ("Triangulation compiler size=" & Interfaces.Integer_32'Image (Layout (0)) &
+        " alignment=" & Interfaces.Integer_32'Image (Layout (1)) & " all eight positions/interchange PASS");
+   end Triangulation_Layout;
+
+   procedure Triangulation_Rectified (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Pose : constant Relative_Camera_Pose :=
+        ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [-7.0, 0.0, 0.0]);
+      First : constant Normalized_Image_Point_Array (5 .. 6) := [[0.4, 0.2], [0.4, 0.2]];
+      Second : constant Normalized_Image_Point_Array (9 .. 10) := [[0.2, 0.2], [0.6, 0.2]];
+      Result : constant Triangulated_Point_Array := Triangulate_Normalized (First, Second, Pose);
+      One : constant Triangulated_Point_Array := Triangulate_Normalized (First (5 .. 5), Second (9 .. 9), Pose);
+      Empty : constant Triangulated_Point_Array := Triangulate_Normalized
+        ([1 .. 0 => <>], [1 .. 0 => <>], Pose);
+   begin
+      Assert (Result'First = 1 and then Result'Length = 2 and then One'Length = 1,
+              "one point and iteration-order pairing");
+      Assert (Empty'First = 1 and then Empty'Last = 0, "empty bounds");
+      Assert (Result (1).Status = Usable and then Result (2).Status = Non_Positive_Depth,
+              "rectified positive/negative disparity");
+      Assert (Near (Result (1).Position_In_First_Camera (0), 2.0) and then
+              Near (Result (1).Position_In_First_Camera (1), 1.0) and then
+              Near (Result (1).Position_In_First_Camera (2), 5.0) and then
+              Near (Result (1).First_Depth, 5.0) and then Near (Result (1).Second_Depth, 5.0),
+              "independent disparity geometry");
+      Assert (Result (1).First_Normalized_Error < 1.0E-12 and then
+              Result (1).Second_Normalized_Error < 1.0E-12, "normalized residuals");
+      Ada.Text_IO.Put_Line ("Triangulation rectified coordinate/depth absolute errors=" &
+        OpenCV.Float64_Value'Image (abs (Result (1).Position_In_First_Camera (0) - 2.0)) &
+        OpenCV.Float64_Value'Image (abs (Result (1).Position_In_First_Camera (1) - 1.0)) &
+        OpenCV.Float64_Value'Image (abs (Result (1).Position_In_First_Camera (2) - 5.0)));
+   end Triangulation_Rectified;
+
+   procedure Triangulation_Frames (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Normalized_Image_Point_Array := Two_View_Points (False);
+      Second : constant Normalized_Image_Point_Array := Two_View_Points (True);
+      Pose : constant Relative_Camera_Pose := (E_Rotation, E_Translation);
+      Reverse_Pose : Relative_Camera_Pose;
+      Forward : constant Triangulated_Point_Array := Triangulate_Normalized (First, Second, Pose);
+      Maximum_Forward, Maximum_Reverse : OpenCV.Float64_Value := 0.0;
+   begin
+      for I in 0 .. 2 loop
+         Reverse_Pose.Translation_Direction (I) := 0.0;
+         for J in 0 .. 2 loop
+            Reverse_Pose.Rotation_First_To_Second (I, J) := E_Rotation (J, I);
+            Reverse_Pose.Translation_Direction (I) := Reverse_Pose.Translation_Direction (I) -
+              E_Rotation (J, I) * E_Translation (J) / E_Norm;
+         end loop;
+      end loop;
+      declare
+         Backward : constant Triangulated_Point_Array := Triangulate_Normalized (Second, First, Reverse_Pose);
+      begin
+         for I in Forward'Range loop
+            declare
+               J : constant Integer := I - 1;
+               Expected : constant Object_Point :=
+                 [OpenCV.Float64_Value ((J * 7) mod 17 - 8) * 0.24 / E_Norm,
+                  OpenCV.Float64_Value ((J * 11) mod 19 - 9) * 0.19 / E_Norm,
+                  (4.0 + OpenCV.Float64_Value ((J * 13) mod 23) * 0.17) / E_Norm];
+               Second_Position : OpenCV.Float64_Value;
+            begin
+               Assert (Forward (I).Status = Usable and then Backward (I).Status = Usable, "both frames usable");
+               for Axis in 0 .. 2 loop
+                  Assert (Near (Forward (I).Position_In_First_Camera (Axis), Expected (Axis), 1.0E-8),
+                          "independent nonidentity baseline-scaled oracle");
+                  Maximum_Forward := OpenCV.Float64_Value'Max (Maximum_Forward,
+                    abs (Forward (I).Position_In_First_Camera (Axis) - Expected (Axis)));
+                  Second_Position := E_Translation (Axis) / E_Norm;
+                  for K in 0 .. 2 loop
+                     Second_Position := Second_Position + E_Rotation (Axis, K) * Expected (K);
+                  end loop;
+                  Assert (Near (Backward (I).Position_In_First_Camera (Axis), Second_Position, 1.0E-8),
+                          "inverse-frame geometry oracle");
+                  Maximum_Reverse := OpenCV.Float64_Value'Max (Maximum_Reverse,
+                    abs (Backward (I).Position_In_First_Camera (Axis) - Second_Position));
+               end loop;
+            end;
+         end loop;
+      end;
+      Ada.Text_IO.Put_Line ("Triangulation maximum nonidentity/inverse coordinate errors=" &
+        OpenCV.Float64_Value'Image (Maximum_Forward) & OpenCV.Float64_Value'Image (Maximum_Reverse));
+   end Triangulation_Frames;
+
+   procedure Triangulation_Composition (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Normalized_Image_Point_Array := Two_View_Points (False);
+      Second : constant Normalized_Image_Point_Array := Two_View_Points (True);
+      Estimate : constant Essential_Estimate := Estimate_Essential_RANSAC (First, Second, E_Policy);
+      Selected_First, Selected_Second : Normalized_Image_Point_Array (1 .. Pose_Inlier_Count (Estimate));
+   begin
+      Assert (Found (Estimate) and then Pose_Recovered (Estimate), "composition recovered pose");
+      for I in Selected_First'Range loop
+         Selected_First (I) := First (Pose_Inlier (Estimate, I));
+         Selected_Second (I) := Second (Pose_Inlier (Estimate, I));
+      end loop;
+      declare
+         Points : constant Triangulated_Point_Array :=
+           Triangulate_Normalized (Selected_First, Selected_Second, Recovered_Pose (Estimate));
+         Maximum : OpenCV.Float64_Value := 0.0;
+      begin
+         Assert (Points'Length = Pose_Inlier_Count (Estimate), "composition preserves count");
+         for P of Points loop
+            Assert (P.Status = Usable, "clean composition usable");
+            Assert (P.First_Depth > 0.0 and then P.Second_Depth > 0.0 and then
+                    P.First_Normalized_Error >= 0.0 and then P.Second_Normalized_Error >= 0.0,
+                    "composition depths and diagnostics");
+            Maximum := OpenCV.Float64_Value'Max (Maximum,
+              OpenCV.Float64_Value'Max (P.First_Normalized_Error, P.Second_Normalized_Error));
+         end loop;
+         Ada.Text_IO.Put_Line ("Triangulation composition selected/usable=" & Natural'Image (Points'Length) &
+           " invalid=0 max normalized error=" & OpenCV.Float64_Value'Image (Maximum));
+      end;
+   end Triangulation_Composition;
+
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
@@ -2154,6 +2387,13 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("relative camera-center direction validation", Relative_Center_Invalid'Access));
       Result.Add_Test (Caller.Create ("compiler-derived Essential/relative-pose/options layouts", Essential_Layout'Access));
       Result.Add_Test (Caller.Create ("relative cheirality retains points beyond 50 baseline units", Essential_Far_Points'Access));
+      Result.Add_Test (Caller.Create ("triangulation rectified disparity/behind/bounds oracle", Triangulation_Rectified'Access));
+      Result.Add_Test (Caller.Create ("triangulation nonidentity scale and inverse frames", Triangulation_Frames'Access));
+      Result.Add_Test (Caller.Create ("Essential pose-inlier triangulation composition", Triangulation_Composition'Access));
+      Result.Add_Test (Caller.Create ("compiler-derived triangulation record layout/interchange", Triangulation_Layout'Access));
+      Result.Add_Test (Caller.Create ("triangulation malformed pose rejected even when empty", Triangulation_Invalid'Access));
+      Result.Add_Test (Caller.Create ("independent noisy normalized reprojection diagnostics", Triangulation_Noisy'Access));
+      Result.Add_Test (Caller.Create ("independent first-only and second-only negative depths", Triangulation_Depths'Access));
       return Result;
    end Suite;
 end Calib3D_Tests;

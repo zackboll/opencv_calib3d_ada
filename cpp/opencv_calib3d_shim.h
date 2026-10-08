@@ -36,6 +36,36 @@ typedef struct opencv_calib3d_relative_pose {
     double tx, ty, tz;
 } opencv_calib3d_relative_pose;
 
+typedef struct opencv_calib3d_triangulation_result_handle
+    opencv_calib3d_triangulation_result_handle;
+enum {
+    OPENCV_CALIB3D_TRI_USABLE = 0,
+    OPENCV_CALIB3D_TRI_AT_INFINITY = 1,
+    OPENCV_CALIB3D_TRI_UNREPRESENTABLE = 2,
+    OPENCV_CALIB3D_TRI_NON_POSITIVE_DEPTH = 3,
+    OPENCV_CALIB3D_TRI_UNDEFINED_REPROJECTION = 4
+};
+typedef struct opencv_calib3d_triangulated_point {
+    int32_t status;
+    double x, y, z;
+    double depth_first, depth_second;
+    double error_first, error_second;
+} opencv_calib3d_triangulated_point;
+/* Inputs: Nx1 CV_64FC2, including typed 0x1 two-dimensional empty Mats.
+ * Untyped empty Mats are invalid. Pose validated even for empty batches.
+ * P1=[I|0], P2=[R|normalize(t)], first-frame unit-baseline coordinates. */
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_triangulate_normalized(
+    const opencv_core_mat_handle *first, const opencv_core_mat_handle *second,
+    const opencv_calib3d_relative_pose *pose,
+    opencv_calib3d_triangulation_result_handle **result);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_triangulation_result_count(
+    const opencv_calib3d_triangulation_result_handle *result, int32_t *count);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_triangulation_result_point(
+    const opencv_calib3d_triangulation_result_handle *result, int32_t index,
+    opencv_calib3d_triangulated_point *point);
+OPENCV_CALIB3D_API void opencv_calib3d_triangulation_result_destroy(
+    opencv_calib3d_triangulation_result_handle *result);
+
 typedef struct opencv_calib3d_essential_options {
     double normalized_epipolar_threshold;
     double confidence;

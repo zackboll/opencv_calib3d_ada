@@ -19,3 +19,6 @@ obj/profile-tests/fundamental_profile_test
 "$cxx" -std=c++17 -Wall -Wextra -Wpedantic -Werror -Icpp \
     tests/cpp/essential_profile_test.cpp -o obj/profile-tests/essential_profile_test
 obj/profile-tests/essential_profile_test
+"$cxx" -std=c++17 -Wall -Wextra -Wpedantic -Werror -Icpp \
+    tests/cpp/triangulation_profile_test.cpp -o obj/profile-tests/triangulation_profile_test
+obj/profile-tests/triangulation_profile_test

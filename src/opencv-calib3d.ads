@@ -149,6 +149,35 @@ package OpenCV.Calib3D is
       Rotation_First_To_Second : Rotation_Matrix;
       Translation_Direction : Camera_Direction;
    end record;
+   type Triangulation_Status is
+     (Usable, At_Infinity, Unrepresentable_Point, Non_Positive_Depth,
+      Undefined_Reprojection);
+   type Triangulated_Point
+     (Status : Triangulation_Status := Unrepresentable_Point) is record
+      case Status is
+         when Usable =>
+            Position_In_First_Camera : Object_Point;
+            First_Depth, Second_Depth : OpenCV.Float64_Value;
+            First_Normalized_Error, Second_Normalized_Error : OpenCV.Float64_Value;
+         when others => null;
+      end case;
+   end record;
+   type Triangulated_Point_Array is
+     array (Positive range <>) of Triangulated_Point;
+   --  P1=[I|0], P2=[R|normalize(t)]. First-camera coordinates in unit-baseline
+   --  units, NOT meters: multiply by the physical baseline for metric scale.
+   --  Equal finite counts fitting INT32; one pair permitted; empty returns 1..0
+   --  after pose validation. SO(3): absolute tolerance 1E-9 on R^T R and det=1.
+   --  No rotation repair. Nonzero finite translation normalized preserving sign.
+   --  W=0 is infinity; small nonzero W is divided without an epsilon cutoff.
+   --  Both depths must be positive. Errors are dimensionless, NOT pixels;
+   --  no residual rejection threshold. Usable is not an uncertainty certificate:
+   --  tiny parallax can produce enormous poorly conditioned finite points.
+   --  One result per pair in iteration order, output lower bound always one.
+   function Triangulate_Normalized
+     (First_Points, Second_Points : Normalized_Image_Point_Array;
+      Pose : Relative_Camera_Pose) return Triangulated_Point_Array;
+
    --  normalize(-R^T*t_hat): second-camera-center direction in first frame.
    function Second_Camera_Center_Direction_In_First
      (Pose : Relative_Camera_Pose) return Camera_Direction;

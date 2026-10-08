@@ -1347,4 +1347,111 @@ package body OpenCV.Calib3D is
       when Constraint_Error =>
          raise OpenCV.OpenCV_Error with "Essential conversion exceeds representable range";
    end Estimate_Essential_RANSAC;
+   function Triangulate_Normalized
+     (First_Points, Second_Points : Normalized_Image_Point_Array;
+      Pose : Relative_Camera_Pose) return Triangulated_Point_Array
+   is
+      type Result_Guard is new Ada.Finalization.Limited_Controlled with record
+         Handle : aliased System.Address := System.Null_Address;
+      end record;
+      overriding procedure Finalize (Self : in out Result_Guard);
+      overriding procedure Finalize (Self : in out Result_Guard) is
+      begin
+         C.Triangulation_Result_Destroy (Self.Handle);
+      end Finalize;
+      Guard : Result_Guard;
+      First, Second : OpenCV.Core.Mat;
+      R : Rotation_Matrix renames Pose.Rotation_First_To_Second;
+      T : constant Object_Point := Unit_Vector (Object_Point (Pose.Translation_Direction));
+      Native_Pose : aliased constant C.C_Relative_Pose :=
+        (Interfaces.C.double (R (0, 0)), Interfaces.C.double (R (0, 1)), Interfaces.C.double (R (0, 2)),
+         Interfaces.C.double (R (1, 0)), Interfaces.C.double (R (1, 1)), Interfaces.C.double (R (1, 2)),
+         Interfaces.C.double (R (2, 0)), Interfaces.C.double (R (2, 1)), Interfaces.C.double (R (2, 2)),
+         Interfaces.C.double (T (0)), Interfaces.C.double (T (1)), Interfaces.C.double (T (2)));
+      Count : aliased Interfaces.Integer_32 := 0;
+      Point : aliased C.C_Triangulated_Point;
+      Code : C.Status := C.Success;
+      function Snapshot (Points : Normalized_Image_Point_Array) return OpenCV.Core.Mat is
+         Values : Image_Point_Array (Points'Range);
+      begin
+         for I in Points'Range loop
+            Values (I) := Image_Point (Points (I));
+         end loop;
+         Validate (Values);
+         return Image_Matrix (Values);
+      end Snapshot;
+      procedure First_Callback (First_Handle : Bridge.Input_Mat_Handle) is
+         procedure Second_Callback (Second_Handle : Bridge.Input_Mat_Handle) is
+         begin
+            Code := C.Triangulate_Normalized
+              (First_Handle, Second_Handle, Native_Pose'Access, Guard.Handle'Access);
+         end Second_Callback;
+      begin
+         Bridge.With_Input_Handle (Second, Second_Callback'Access);
+      end First_Callback;
+      Dot, Det : OpenCV.Float64_Value;
+   begin
+      if First_Points'Length /= Second_Points'Length or else
+        First_Points'Length > Interfaces.Integer_32'Last
+      then
+         raise OpenCV.OpenCV_Error with "Triangulation requires equal counts fitting INT32";
+      end if;
+      for V of R loop
+         if not Is_Finite (V) or else abs (V) > 1.000000001 then
+            raise OpenCV.OpenCV_Error with "Invalid relative rotation";
+         end if;
+      end loop;
+      for I in 0 .. 2 loop
+         for J in 0 .. 2 loop
+            Dot := 0.0;
+            for K in 0 .. 2 loop
+               Dot := Dot + R (K, I) * R (K, J);
+            end loop;
+            if abs (Dot - (if I = J then 1.0 else 0.0)) > 1.0E-9 then
+               raise OpenCV.OpenCV_Error with "Relative rotation is not orthogonal";
+            end if;
+         end loop;
+      end loop;
+      Det := R (0, 0) * (R (1, 1) * R (2, 2) - R (1, 2) * R (2, 1)) -
+        R (0, 1) * (R (1, 0) * R (2, 2) - R (1, 2) * R (2, 0)) +
+        R (0, 2) * (R (1, 0) * R (2, 1) - R (1, 1) * R (2, 0));
+      if abs (Det - 1.0) > 1.0E-9 then
+         raise OpenCV.OpenCV_Error with "Relative rotation determinant is not +1";
+      end if;
+      if First_Points'Length = 0 then
+         return [1 .. 0 => <>];
+      end if;
+      First := Snapshot (First_Points);
+      Second := Snapshot (Second_Points);
+      Bridge.With_Input_Handle (First, First_Callback'Access);
+      C.Check (Code, "Triangulate_Normalized");
+      C.Check (C.Triangulation_Result_Count (Guard.Handle, Count'Access), "Triangulation.Count");
+      if Count /= Interfaces.Integer_32 (First_Points'Length) then
+         raise OpenCV.OpenCV_Error with "Invalid triangulation result count";
+      end if;
+      return Result : Triangulated_Point_Array (1 .. Natural (Count)) do
+         for I in Result'Range loop
+            C.Check (C.Triangulation_Result_Point
+              (Guard.Handle, Interfaces.Integer_32 (I - 1), Point'Access), "Triangulation.Point");
+            case Point.Point_Status is
+               when 0 =>
+                  Result (I) := (Status => Usable,
+                    Position_In_First_Camera => [OpenCV.Float64_Value (Point.X),
+                      OpenCV.Float64_Value (Point.Y), OpenCV.Float64_Value (Point.Z)],
+                    First_Depth => OpenCV.Float64_Value (Point.Depth_First),
+                    Second_Depth => OpenCV.Float64_Value (Point.Depth_Second),
+                    First_Normalized_Error => OpenCV.Float64_Value (Point.Error_First),
+                    Second_Normalized_Error => OpenCV.Float64_Value (Point.Error_Second));
+               when 1 => Result (I) := (Status => At_Infinity);
+               when 2 => Result (I) := (Status => Unrepresentable_Point);
+               when 3 => Result (I) := (Status => Non_Positive_Depth);
+               when 4 => Result (I) := (Status => Undefined_Reprojection);
+               when others => raise OpenCV.OpenCV_Error with "Unknown triangulation status";
+            end case;
+         end loop;
+      end return;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Triangulation conversion exceeds representable range";
+   end Triangulate_Normalized;
 end OpenCV.Calib3D;

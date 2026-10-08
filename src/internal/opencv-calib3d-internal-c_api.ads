@@ -14,6 +14,23 @@ package OpenCV.Calib3D.Internal.C_API is
    type C_Relative_Pose is record
       R00, R01, R02, R10, R11, R12, R20, R21, R22, TX, TY, TZ : Interfaces.C.double;
    end record with Convention => C;
+   type C_Triangulated_Point is record
+      Point_Status : Interfaces.Integer_32;
+      X, Y, Z, Depth_First, Depth_Second, Error_First, Error_Second : Interfaces.C.double;
+   end record with Convention => C;
+   function Triangulate_Normalized
+     (First, Second : OpenCV.Core.Module_Interop.Input_Mat_Handle;
+      Pose : access constant C_Relative_Pose; Result : access System.Address) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_triangulate_normalized";
+   function Triangulation_Result_Count
+     (Handle : System.Address; Count : access Interfaces.Integer_32) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_triangulation_result_count";
+   function Triangulation_Result_Point
+     (Handle : System.Address; Index : Interfaces.Integer_32;
+      Point : access C_Triangulated_Point) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_triangulation_result_point";
+   procedure Triangulation_Result_Destroy (Handle : System.Address)
+     with Import, Convention => C, External_Name => "opencv_calib3d_triangulation_result_destroy";
    type C_Essential_Options is record
       Normalized_Epipolar_Threshold, Confidence : Interfaces.C.double;
    end record with Convention => C;

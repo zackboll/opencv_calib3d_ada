@@ -7,6 +7,7 @@ procedure Run_Refinement_Faults is
    use OpenCV.Calib3D;
    use type OpenCV.Float64_Value;
    use type Interfaces.C.int;
+   use type Interfaces.C.double;
    procedure Fail (Stage, Kind : Interfaces.C.int)
      with Import, Convention => C, External_Name => "opencv_calib3d_test_fail";
    procedure Return_False
@@ -310,4 +311,69 @@ begin
    Ada.Text_IO.Put_Line ("PASS: Ada Essential 40 exception translation/cleanup scenarios");
    Ada.Text_IO.Put_Line ("PASS: five Ada rejection preserves armed checkpoint; six consumes; later valid call succeeds");
    Ada.Text_IO.Put_Line ("PASS: Ada no-E and E-found/no-pose semantics after real native calls (test-only controls)");
+   declare
+      pragma Suppress (Validity_Check);
+      procedure Inject (X, Y, Z, W : Interfaces.C.double)
+        with Import, Convention => C, External_Name => "opencv_calib3d_test_triangulation_h";
+      procedure Unknown
+        with Import, Convention => C, External_Name => "opencv_calib3d_test_triangulation_unknown";
+      function Live return Interfaces.C.int
+        with Import, Convention => C, External_Name => "opencv_calib3d_test_triangulation_live";
+      function Nonfinite (Kind : Interfaces.C.int) return Interfaces.C.double
+        with Import, Convention => C, External_Name => "calib3d_test_nonfinite";
+      Pose : constant Relative_Camera_Pose :=
+        ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [-1.0, 0.0, 0.0]);
+      First : constant Normalized_Image_Point_Array := [[0.4, 0.2], [0.4, 0.2]];
+      Second : constant Normalized_Image_Point_Array := [[0.2, 0.2], [0.2, 0.2]];
+      procedure Outcome (Expected : Triangulation_Status) is
+         Values : constant Triangulated_Point_Array := Triangulate_Normalized (First, Second, Pose);
+      begin
+         Check (Values'Length = 2 and then Values (1).Status = Expected and then
+           Values (2).Status = Usable, "injected point status/mixed-batch Ada mapping");
+         Check (Live = 0, "Ada result guard leaked injected batch");
+      end Outcome;
+   begin
+      for Stage in Interfaces.C.int range 37 .. 41 loop
+         for Kind in Interfaces.C.int range 1 .. 5 loop
+            Fail (Stage, Kind);
+            begin
+               declare
+                  Values : constant Triangulated_Point_Array := Triangulate_Normalized (First, Second, Pose);
+                  pragma Unreferenced (Values);
+               begin
+                  raise Program_Error with "triangulation fault not translated";
+               end;
+            exception
+               when OpenCV.OpenCV_Error => null;
+            end;
+            Check (Live = 0, "triangulation exception leaked handle");
+         end loop;
+      end loop;
+      Inject (2.0, 1.0, 5.0, 0.0); Outcome (At_Infinity);
+      Inject (0.4, 0.2, 1.0, 1.0E-300); Outcome (Usable);
+      Inject (2.0, 1.0, -5.0, 1.0); Outcome (Non_Positive_Depth);
+      Inject (100.0, 1.0, 1.0E-307, 1.0); Outcome (Undefined_Reprojection);
+      for Axis in 0 .. 3 loop
+         case Axis is
+            when 0 => Inject (Nonfinite (0), 1.0, 5.0, 1.0);
+            when 1 => Inject (2.0, Nonfinite (1), 5.0, 1.0);
+            when 2 => Inject (2.0, 1.0, Nonfinite (2), 1.0);
+            when 3 => Inject (2.0, 1.0, 5.0, Nonfinite (0));
+         end case;
+         Outcome (Unrepresentable_Point);
+      end loop;
+      Unknown;
+      begin
+         declare
+            Values : constant Triangulated_Point_Array := Triangulate_Normalized (First, Second, Pose);
+            pragma Unreferenced (Values);
+         begin
+            raise Program_Error with "unknown status not rejected";
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+      Check (Live = 0, "unknown-status rejection leaked handle");
+      Ada.Text_IO.Put_Line ("PASS: Ada triangulation 25 faults, all five status mappings, mixed batches, unknown-status rejection; live handles=0");
+   end;
 end Run_Refinement_Faults;

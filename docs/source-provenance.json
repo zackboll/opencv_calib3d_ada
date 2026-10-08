@@ -61,6 +61,12 @@
           "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/five-point.cpp",
           "sha256": "30e57492b26bd082446dea1396dc7bce5752b59dd7f44d4017cf548caf40f30c",
           "git_blob_sha1": "0cefe8df4c9cc4fc8d1588342862975dfa89fc36"
+        },
+        {
+          "path": "modules/calib3d/src/triangulate.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/triangulate.cpp",
+          "sha256": "190fa8e99e8b799523e2f2522f51b6b7bdb5e3e56e2ded2c13d8edd54d9c9515",
+          "git_blob_sha1": "cded42232aada74a8b7806ca19198ee12461e574"
         }
       ]
     },
@@ -124,6 +130,12 @@
           "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/five-point.cpp",
           "sha256": "7c2ed215ee7a4d1ad6fa950f9d67e185587c41b1051ca61d4a6871f6a0f8c7bb",
           "git_blob_sha1": "9fda9f73f1635ec15275eaab31c754ce8aa25178"
+        },
+        {
+          "path": "modules/calib3d/src/triangulate.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/triangulate.cpp",
+          "sha256": "5d8d8970de046dbe3e981dcda7581bb90ba746b9180ee90927238444489b938d",
+          "git_blob_sha1": "671659c84b7a77a335de61af8bae752fb6e88dd9"
         }
       ]
     },
@@ -187,6 +199,12 @@
           "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/five-point.cpp",
           "sha256": "9b0ae89ad250ce9675c88630477475c36b589ba62fea598502183051d035f305",
           "git_blob_sha1": "1c22eb22827b0eb65e3de2787af8a5c95a4e5eac"
+        },
+        {
+          "path": "modules/geometry/src/triangulate.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/triangulate.cpp",
+          "sha256": "8f1adccf184e2b1dc09867100a9ea38af3d1883ecf77b0609b8c27e990012b8f",
+          "git_blob_sha1": "3a0809b30339fcf1ad10ec6acbfd8cec822b04ce"
         }
       ]
     }

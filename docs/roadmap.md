@@ -1,5 +1,9 @@
 # Roadmap
 
+Task 007 normalized two-view triangulation adds standalone reconstruction and
+qualification. No metric scale, refinement, rectification, navigation
+or geospatial integration is included. See [progress](triangulation-validation.md).
+
 1. Validate/bootstrap robust PnP (`Project_Points`, `Camera_Center`, EPNP RANSAC).
 2. Installed/clean-consumer relocation and linkage qualification.
 3. Add pose refinement only after establishing a cross-version policy (4.1 lacks

@@ -1,5 +1,12 @@
 # OpenCV Calib3D for Ada
 
+Normalized two-view reconstruction is available through `Triangulate_Normalized`.
+Positions are **first-camera unit-baseline coordinates, not meters**; no metric
+baseline is recovered. See [contract](docs/triangulation-contract.md),
+[source review](docs/triangulation-source-review.md), and the explicitly
+[qualification report](docs/triangulation-validation.md).
+The fifth file-free example is `triangulation_synthetic`.
+
 Handwritten thick Ada binding for camera pose and robust planar/projective
 and two-view epipolar 2-D correspondence verification. Repository: `opencv_calib3d_ada`; Alire crate:
 `opencv_calib3d`; public package: `OpenCV.Calib3D`.

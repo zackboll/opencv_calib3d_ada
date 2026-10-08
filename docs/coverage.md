@@ -1,5 +1,12 @@
 # Coverage
 
+Task 007 registers 64 AUnit cases and 43 private ABI imports/exports.
+Triangulation coverage includes independent both-camera cheirality, rectified,
+nonidentity and inverse-frame geometry, noisy diagnostics, pose-inlier composition,
+all status mappings and unknown-status rejection, compiler layouts, complete raw
+schema/accessor negatives, and 25 raw plus 25 public Ada exception scenarios.
+See [qualification evidence](triangulation-validation.md).
+
 Bootstrap public coverage:
 
 - camera intrinsics (`fx`,`fy`,`cx`,`cy`, zero skew);
@@ -140,7 +147,7 @@ this inventory is not a pass claim.
 
 ## Task 006 inventory
 
-Current suite: **57 AUnit registrations**, adding nine cases: independent
+Task 006 baseline: **57 AUnit registrations**, adding nine cases: independent
 translation-only/known `[t_hat]_x R` normalized Sampson oracle, scale/sign/range/
 undefined/nonfinite geometry, clean and gross-outlier Essential plus relative
 pose, exact final-E Float64 inclusion/exclusion, five rejection/six native
@@ -148,7 +155,7 @@ RANSAC, invalid normalized observations/options, camera-center helper validation
 distinct Essential/relative-pose/options compiler-derived layout and all-field
 interchange, and positive-depth points beyond 50 baseline units.
 
-**39** private C declarations/imports and **five** standalone C/C++ profile
+Task 006 baseline: **39** private C declarations/imports and **five** standalone C/C++ profile
 helpers. Stage IDs 29..36 add **40 raw and 40 Ada** exception scenarios, reusing
 the macOS-safe fault helper. Raw production/fault and ASan+UBSan cover clean,
 outlier, both strided Core arrays, 0..5/6, invalid schema/options and all result
@@ -157,5 +164,5 @@ using test-only suppression after real native calls. Armed stage 29 verifies
 five rejects before native entry and six consumes the checkpoint. Pose
 qualification checks angular R error, R^T R/det, signed t dot/unit norm, and
 normalize(-R^T t) camera-center direction, not E coefficient equality.
-Ordinary Linux/macOS and manual pinned matrix run all four examples.
+Ordinary Linux/macOS and manual pinned matrix now run all five examples.
 See `essential-validation.md` for executed evidence; inventory is not a pass claim.
