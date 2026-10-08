@@ -56,7 +56,7 @@ def main() -> None:
 
     tests = (ROOT / "tests/src/calib3d_tests.adb").read_text()
     registrations = re.findall(r"Result\.Add_Test\s*\(Caller\.Create", tests)
-    check(len(registrations) == 64, "update documented AUnit inventory when changing tests")
+    check(len(registrations) == 74, "update documented AUnit inventory when changing tests")
     check(len(declared) == 43, "update private ABI inventory when changing exports")
     layout = (ROOT / "tests/layout/calib3d_layout.c").read_text()
     check("calib3d_test_triangulation_layout" in layout and

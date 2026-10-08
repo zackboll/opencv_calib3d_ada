@@ -1,5 +1,11 @@
 # Roadmap
 
+Task 008 adds pure-Ada triangulation parallax and caller-selected quality
+diagnostics, without changing reconstruction or Usable status. See
+[contract](triangulation-quality-contract.md) and
+[qualification](triangulation-quality-validation.md). Refinement, covariance,
+calibration and navigation/geospatial integration remain outside this task.
+
 Task 007 normalized two-view triangulation adds standalone reconstruction and
 qualification. No metric scale, refinement, rectification, navigation
 or geospatial integration is included. See [progress](triangulation-validation.md).
@@ -17,4 +23,4 @@ or geospatial integration is included. See [progress](triangulation-validation.m
 
 Task 005: robust fundamental-matrix epipolar verification only (see its contract).
 Task 006: Essential matrix and relative camera pose; not part of Task 005.
-Triangulation remains a later separate task.
+Standalone normalized triangulation was added in Task 007.
