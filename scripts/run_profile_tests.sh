@@ -16,3 +16,6 @@ obj/profile-tests/homography_profile_test
 "$cxx" -std=c++17 -Wall -Wextra -Wpedantic -Werror -Icpp \
     tests/cpp/fundamental_profile_test.cpp -o obj/profile-tests/fundamental_profile_test
 obj/profile-tests/fundamental_profile_test
+"$cxx" -std=c++17 -Wall -Wextra -Wpedantic -Werror -Icpp \
+    tests/cpp/essential_profile_test.cpp -o obj/profile-tests/essential_profile_test
+obj/profile-tests/essential_profile_test

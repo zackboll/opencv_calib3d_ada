@@ -1115,4 +1115,236 @@ package body OpenCV.Calib3D is
          end return;
       end;
    end Solve_PnP_RANSAC;
+   overriding procedure Finalize (Self : in out Essential_Estimate) is
+   begin
+      Free (Self.Data);
+      Free (Self.Pose_Data);
+      Self.Has_Model := False;
+      Self.Has_Pose := False;
+      Self.Value := [others => [others => 0.0]];
+      Self.Pose_Value := (Rotation_First_To_Second => [others => [others => 0.0]],
+                          Translation_Direction => [others => 0.0]);
+   end Finalize;
+   function Found (Estimate : Essential_Estimate) return Boolean is (Estimate.Has_Model);
+   function Essential (Estimate : Essential_Estimate) return Essential_Matrix is
+   begin
+      if not Estimate.Has_Model then
+         raise OpenCV.OpenCV_Error with "Essential requested from a no-E estimate";
+      end if;
+      return Estimate.Value;
+   end Essential;
+   function Inlier_Count (Estimate : Essential_Estimate) return Natural is
+     (if Estimate.Data = null then 0 else Estimate.Data.all'Length);
+   function Inlier (Estimate : Essential_Estimate; Index : Positive) return Positive is
+   begin
+      if Estimate.Data = null or else Index not in Estimate.Data.all'Range then
+         raise OpenCV.OpenCV_Error with "Essential inlier index out of range";
+      end if;
+      return Estimate.Data (Index);
+   end Inlier;
+   function Inliers (Estimate : Essential_Estimate) return Inlier_Index_Array is
+   begin
+      if Estimate.Data = null then
+         return [1 .. 0 => <>];
+      end if;
+      return Estimate.Data.all;
+   end Inliers;
+   function Pose_Recovered (Estimate : Essential_Estimate) return Boolean is (Estimate.Has_Pose);
+   function Recovered_Pose (Estimate : Essential_Estimate) return Relative_Camera_Pose is
+   begin
+      if not Estimate.Has_Pose then
+         raise OpenCV.OpenCV_Error with "Relative pose requested from a no-pose estimate";
+      end if;
+      return Estimate.Pose_Value;
+   end Recovered_Pose;
+   function Pose_Inlier_Count (Estimate : Essential_Estimate) return Natural is
+     (if Estimate.Pose_Data = null then 0 else Estimate.Pose_Data.all'Length);
+   function Pose_Inlier (Estimate : Essential_Estimate; Index : Positive) return Positive is
+   begin
+      if Estimate.Pose_Data = null or else Index not in Estimate.Pose_Data.all'Range then
+         raise OpenCV.OpenCV_Error with "Relative pose inlier index out of range";
+      end if;
+      return Estimate.Pose_Data (Index);
+   end Pose_Inlier;
+   function Pose_Inliers (Estimate : Essential_Estimate) return Inlier_Index_Array is
+   begin
+      if Estimate.Pose_Data = null then
+         return [1 .. 0 => <>];
+      end if;
+      return Estimate.Pose_Data.all;
+   end Pose_Inliers;
+
+   function Normalized_Sampson_Error
+     (Matrix : Essential_Matrix; First_Point, Second_Point : Normalized_Image_Point)
+      return Normalized_Sampson_Error_Result
+   is
+      Native : aliased constant C.C_Essential :=
+        (Interfaces.C.double (Matrix (0, 0)), Interfaces.C.double (Matrix (0, 1)),
+         Interfaces.C.double (Matrix (0, 2)), Interfaces.C.double (Matrix (1, 0)),
+         Interfaces.C.double (Matrix (1, 1)), Interfaces.C.double (Matrix (1, 2)),
+         Interfaces.C.double (Matrix (2, 0)), Interfaces.C.double (Matrix (2, 1)),
+         Interfaces.C.double (Matrix (2, 2)));
+      Defined : aliased Interfaces.Unsigned_8 := 0;
+      Error : aliased Interfaces.C.double := 0.0;
+   begin
+      C.Check (C.Normalized_Sampson_Error
+        (Native'Access, Interfaces.C.double (First_Point (0)), Interfaces.C.double (First_Point (1)),
+         Interfaces.C.double (Second_Point (0)), Interfaces.C.double (Second_Point (1)),
+         Defined'Access, Error'Access), "Calib3D.Normalized_Sampson_Error");
+      if Defined = 0 then
+         return (Defined => False);
+      end if;
+      return (Defined => True, Error => OpenCV.Float64_Value (Error));
+   exception
+      when Constraint_Error => return (Defined => False);
+   end Normalized_Sampson_Error;
+
+   function Second_Camera_Center_Direction_In_First
+     (Pose : Relative_Camera_Pose) return Camera_Direction
+   is
+      Center : Object_Point;
+   begin
+      for Value of Pose.Rotation_First_To_Second loop
+         if not Is_Finite (Value) then
+            raise OpenCV.OpenCV_Error with "Relative rotation must be finite";
+         end if;
+      end loop;
+      Center := Rotate (Pose.Rotation_First_To_Second,
+                        Object_Point (Pose.Translation_Direction), Transpose => True);
+      for Axis in 0 .. 2 loop
+         Center (Axis) := -Center (Axis);
+      end loop;
+      return Camera_Direction (Unit_Vector (Center));
+   end Second_Camera_Center_Direction_In_First;
+
+   function Estimate_Essential_RANSAC
+     (First_Points, Second_Points : Normalized_Image_Point_Array;
+      Options : Essential_RANSAC_Options := (others => <>)) return Essential_Estimate
+   is
+      type Result_Guard is new Ada.Finalization.Limited_Controlled with record
+         Handle : aliased System.Address := System.Null_Address;
+      end record;
+      overriding procedure Finalize (Self : in out Result_Guard);
+      overriding procedure Finalize (Self : in out Result_Guard) is
+      begin
+         C.Essential_Result_Destroy (Self.Handle);
+         Self.Handle := System.Null_Address;
+      end Finalize;
+      Guard : Result_Guard;
+      First, Second : OpenCV.Core.Mat;
+      Native_Options : aliased constant C.C_Essential_Options :=
+        (Interfaces.C.double (Options.Normalized_Epipolar_Threshold),
+         Interfaces.C.double (Options.Confidence));
+      Native_Found, Native_Pose_Found : aliased Interfaces.Unsigned_8 := 0;
+      Native_Count, Native_Pose_Count : aliased Interfaces.Integer_32 := 0;
+      Matrix : aliased C.C_Essential := (others => 0.0);
+      Pose : aliased C.C_Relative_Pose := (others => 0.0);
+      Code : C.Status := C.Success;
+      function Snapshot (Points : Normalized_Image_Point_Array) return OpenCV.Core.Mat is
+         Values : Image_Point_Array (Points'Range);
+      begin
+         for I in Points'Range loop
+            Values (I) := Image_Point (Points (I));
+         end loop;
+         Validate (Values);
+         return Image_Matrix (Values);
+      end Snapshot;
+      procedure First_Callback (First_Handle : Bridge.Input_Mat_Handle) is
+         procedure Second_Callback (Second_Handle : Bridge.Input_Mat_Handle) is
+         begin
+            Code := C.Find_Essential_RANSAC
+              (First_Handle, Second_Handle, Native_Options'Access, Guard.Handle'Access);
+         end Second_Callback;
+      begin
+         Bridge.With_Input_Handle (Second, Second_Callback'Access);
+      end First_Callback;
+      procedure Read_Indices (Data : in out Inlier_Buffer; Count : Interfaces.Integer_32;
+                              For_Pose : Boolean) is
+      begin
+         if Count < 5 or else Count > Interfaces.Integer_32 (First_Points'Length) then
+            raise OpenCV.OpenCV_Error with "Invalid Essential/pose inlier count";
+         end if;
+         Data := new Inlier_Index_Array (1 .. Natural (Count));
+         for I in Data.all'Range loop
+            declare
+               Index : aliased Interfaces.Integer_32 := 0;
+            begin
+               if For_Pose then
+                  C.Check (C.Essential_Result_Pose_Inlier
+                    (Guard.Handle, Interfaces.Integer_32 (I - 1), Index'Access), "Essential.Pose_Inlier");
+               else
+                  C.Check (C.Essential_Result_Inlier
+                    (Guard.Handle, Interfaces.Integer_32 (I - 1), Index'Access), "Essential.Inlier");
+               end if;
+               if Index < 0 or else Index >= Interfaces.Integer_32 (First_Points'Length) then
+                  raise OpenCV.OpenCV_Error with "Invalid Essential correspondence index";
+               end if;
+               Data (I) := Positive (Index + 1);
+               if I > 1 and then Data (I) <= Data (I - 1) then
+                  raise OpenCV.OpenCV_Error with "Essential indices not strictly ascending";
+               end if;
+            end;
+         end loop;
+      end Read_Indices;
+   begin
+      C.Check (C.Validate_Essential_Options (Native_Options'Access), "Essential.Options");
+      if First_Points'Length /= Second_Points'Length or else First_Points'Length < 6 or else
+        First_Points'Length > Interfaces.Integer_32'Last
+      then
+         raise OpenCV.OpenCV_Error with "Essential RANSAC requires equal counts >=6 fitting INT32";
+      end if;
+      First := Snapshot (First_Points);
+      Second := Snapshot (Second_Points);
+      Bridge.With_Input_Handle (First, First_Callback'Access);
+      C.Check (Code, "Calib3D.Estimate_Essential_RANSAC");
+      if Guard.Handle = System.Null_Address then
+         raise OpenCV.OpenCV_Error with "Native Essential did not publish a result";
+      end if;
+      C.Check (C.Essential_Result_Found (Guard.Handle, Native_Found'Access), "Essential.Found");
+      if Native_Found = 0 then
+         return Estimate : Essential_Estimate do
+            null;
+         end return;
+      end if;
+      C.Check (C.Essential_Result_Matrix (Guard.Handle, Matrix'Access), "Essential.Matrix");
+      C.Check (C.Essential_Result_Inlier_Count (Guard.Handle, Native_Count'Access), "Essential.Count");
+      C.Check (C.Essential_Result_Pose_Found (Guard.Handle, Native_Pose_Found'Access), "Essential.Pose_Found");
+      return Estimate : Essential_Estimate do
+         Estimate.Value :=
+           [[OpenCV.Float64_Value (Matrix.E00), OpenCV.Float64_Value (Matrix.E01), OpenCV.Float64_Value (Matrix.E02)],
+            [OpenCV.Float64_Value (Matrix.E10), OpenCV.Float64_Value (Matrix.E11), OpenCV.Float64_Value (Matrix.E12)],
+            [OpenCV.Float64_Value (Matrix.E20), OpenCV.Float64_Value (Matrix.E21), OpenCV.Float64_Value (Matrix.E22)]];
+         Read_Indices (Estimate.Data, Native_Count, False);
+         Estimate.Has_Model := True;
+         if Native_Pose_Found /= 0 then
+            C.Check (C.Essential_Result_Pose (Guard.Handle, Pose'Access), "Essential.Pose");
+            C.Check (C.Essential_Result_Pose_Inlier_Count
+              (Guard.Handle, Native_Pose_Count'Access), "Essential.Pose_Count");
+            Estimate.Pose_Value :=
+              (Rotation_First_To_Second =>
+                [[OpenCV.Float64_Value (Pose.R00), OpenCV.Float64_Value (Pose.R01), OpenCV.Float64_Value (Pose.R02)],
+                 [OpenCV.Float64_Value (Pose.R10), OpenCV.Float64_Value (Pose.R11), OpenCV.Float64_Value (Pose.R12)],
+                 [OpenCV.Float64_Value (Pose.R20), OpenCV.Float64_Value (Pose.R21), OpenCV.Float64_Value (Pose.R22)]],
+               Translation_Direction => Camera_Direction (Unit_Vector
+                 ([OpenCV.Float64_Value (Pose.TX), OpenCV.Float64_Value (Pose.TY), OpenCV.Float64_Value (Pose.TZ)])));
+            Read_Indices (Estimate.Pose_Data, Native_Pose_Count, True);
+            for Index of Estimate.Pose_Data.all loop
+               declare
+                  Present : Boolean := False;
+               begin
+                  for Essential_Index of Estimate.Data.all loop
+                     Present := Present or else Index = Essential_Index;
+                  end loop;
+                  if not Present then
+                     raise OpenCV.OpenCV_Error with "Pose inlier not an Essential inlier";
+                  end if;
+               end;
+            end loop;
+            Estimate.Has_Pose := True;
+         end if;
+      end return;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Essential conversion exceeds representable range";
+   end Estimate_Essential_RANSAC;
 end OpenCV.Calib3D;

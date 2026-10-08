@@ -2,6 +2,7 @@
 #include "pnp_profile.hpp"
 #include "homography_profile.hpp"
 #include "fundamental_profile.hpp"
+#include "essential_profile.hpp"
 #include "opencv_core_module_bridge.hpp"
 
 #include <opencv2/core.hpp>
@@ -64,6 +65,19 @@ struct opencv_calib3d_fundamental_result_handle {
     std::vector<int32_t> inliers;
 };
 
+static_assert(std::is_standard_layout<opencv_calib3d_essential>::value,
+              "essential must have standard C layout");
+static_assert(std::is_standard_layout<opencv_calib3d_relative_pose>::value,
+              "relative pose must have standard C layout");
+static_assert(std::is_standard_layout<opencv_calib3d_essential_options>::value,
+              "essential options must have standard C layout");
+struct opencv_calib3d_essential_result_handle {
+    bool found = false, pose_found = false;
+    opencv_calib3d_essential matrix{};
+    opencv_calib3d_relative_pose pose{};
+    std::vector<int32_t> inliers, pose_inliers;
+};
+
 namespace {
 thread_local char error_text[1024] = "";
 
@@ -71,6 +85,8 @@ thread_local char error_text[1024] = "";
 thread_local int failure_stage = 0;
 thread_local int failure_kind = 0;
 thread_local bool refinement_false = false;
+thread_local bool essential_no_model = false;
+thread_local bool essential_no_pose = false;
 void checkpoint(int stage) {
     if (failure_stage != stage) return;
     const int kind = failure_kind;
@@ -727,6 +743,227 @@ opencv_calib3d_status opencv_calib3d_pose_result_inlier(
 }
 
 void opencv_calib3d_pose_result_destroy(opencv_calib3d_pose_result_handle *result) {
+    try { delete result; } catch (...) {}
+}
+opencv_calib3d_status opencv_calib3d_validate_essential_options(
+    const opencv_calib3d_essential_options *options) {
+    return guarded([&] {
+        require(options && opencv_calib3d_detail::essential_options_fit(
+            options->normalized_epipolar_threshold,options->confidence),
+            "invalid essential threshold/confidence profile");
+    });
+}
+
+opencv_calib3d_status opencv_calib3d_normalized_sampson_error(
+    const opencv_calib3d_essential *matrix, double x1, double y1, double x2, double y2,
+    uint8_t *defined, double *error) {
+    if (defined) *defined = 0;
+    if (error) *error = 0;
+    return guarded([&] {
+        require(matrix && defined && error, "null Sampson argument");
+        require(opencv_calib3d_detail::essential_finite(*matrix,x1,y1,x2,y2),
+                "Sampson inputs must be finite");
+        double value = 0;
+        if (opencv_calib3d_detail::normalized_sampson_error(*matrix,x1,y1,x2,y2,value)) {
+            *error = value;
+            *defined = 1;
+        }
+    });
+}
+
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+void opencv_calib3d_test_essential_no_model(void) { essential_no_model = true; }
+void opencv_calib3d_test_essential_no_pose(void) { essential_no_pose = true; }
+#endif
+
+opencv_calib3d_status opencv_calib3d_find_essential_ransac(
+    const opencv_core_mat_handle *first_points, const opencv_core_mat_handle *second_points,
+    const opencv_calib3d_essential_options *options,
+    opencv_calib3d_essential_result_handle **result) {
+    if (result) *result = nullptr;
+    return guarded([&] {
+        require(result, "null essential result output");
+        require(options && opencv_calib3d_detail::essential_options_fit(
+            options->normalized_epipolar_threshold,options->confidence),
+            "invalid essential options");
+        const auto &first_input = resolve_input(first_points);
+        const auto &second_input = resolve_input(second_points);
+        const int count = validate_image_points(first_input, true);
+        require(count == validate_image_points(second_input, true) && count >= 6,
+                "essential RANSAC requires equal counts >=6");
+        validate_finite_image_points(first_input);
+        validate_finite_image_points(second_input);
+        // Snapshot both original CV_64F observations, including strided Regions.
+        const cv::Mat first = first_input.clone(), second = second_input.clone();
+        const cv::Mat identity = cv::Mat::eye(3,3,CV_64F);
+        cv::Mat native_mask;
+        checkpoint(29);
+#if CV_VERSION_MAJOR >= 5
+        // 5.0 removed the compatibility overload. The required argument is
+        // fixed, not caller policy; 4.x retains the 4.1-compatible call below.
+        cv::Mat e = cv::findEssentialMat(first,second,identity,cv::RANSAC,
+            options->confidence,options->normalized_epipolar_threshold,1000,native_mask);
+#else
+        cv::Mat e = cv::findEssentialMat(first,second,identity,cv::RANSAC,
+            options->confidence,options->normalized_epipolar_threshold,native_mask);
+#endif
+        checkpoint(30);
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+        if (essential_no_model) { essential_no_model = false; e.release(); }
+#endif
+        auto value = std::make_unique<opencv_calib3d_essential_result_handle>();
+        if (!e.empty()) {
+            if (e.dims != 2 || e.rows != 3 || e.cols != 3 || e.type() != CV_64FC1)
+                throw std::runtime_error("native essential schema is invalid");
+            bool nonzero = false;
+            for (int row=0;row<3;++row) for (int col=0;col<3;++col) {
+                const double coefficient = e.at<double>(row,col);
+                if (!std::isfinite(coefficient))
+                    throw std::runtime_error("native essential is nonfinite");
+                nonzero = nonzero || coefficient != 0;
+            }
+            if (!nonzero) throw std::runtime_error("native essential is all zero");
+            value->matrix = {e.at<double>(0,0),e.at<double>(0,1),e.at<double>(0,2),
+                e.at<double>(1,0),e.at<double>(1,1),e.at<double>(1,2),
+                e.at<double>(2,0),e.at<double>(2,1),e.at<double>(2,2)};
+            cv::Mat mask = cv::Mat::zeros(count,1,CV_8U);
+            for (int i=0;i<count;++i) {
+                const auto p = first.at<cv::Vec2d>(i,0), q = second.at<cv::Vec2d>(i,0);
+                if (opencv_calib3d_detail::final_essential_inlier(value->matrix,
+                    p[0],p[1],q[0],q[1],options->normalized_epipolar_threshold)) {
+                    value->inliers.push_back(i);
+                    mask.at<uint8_t>(i,0) = 255;
+                }
+            }
+            value->found = value->inliers.size() >= 5;
+            checkpoint(31);
+            if (value->found) {
+                cv::Mat rotation, translation;
+                const int support = cv::recoverPose(e,first,second,identity,rotation,translation,
+                    std::numeric_limits<double>::max(),mask,cv::noArray());
+                checkpoint(32);
+                if (rotation.dims != 2 || rotation.rows != 3 || rotation.cols != 3 ||
+                    rotation.type() != CV_64FC1 || translation.dims != 2 ||
+                    translation.rows != 3 || translation.cols != 1 ||
+                    translation.type() != CV_64FC1 || mask.dims != 2 ||
+                    mask.rows != count || mask.cols != 1 || mask.type() != CV_8UC1)
+                    throw std::runtime_error("native relative pose schema is invalid");
+                for (int row=0;row<3;++row) {
+                    for (int col=0;col<3;++col)
+                        if (!std::isfinite(rotation.at<double>(row,col)))
+                            throw std::runtime_error("native rotation is nonfinite");
+                    if (!std::isfinite(translation.at<double>(row,0)))
+                        throw std::runtime_error("native translation direction is nonfinite");
+                }
+                double tx=translation.at<double>(0), ty=translation.at<double>(1),
+                       tz=translation.at<double>(2);
+                const double scale=std::max({std::abs(tx),std::abs(ty),std::abs(tz)});
+                if (scale == 0) throw std::runtime_error("native translation direction is zero");
+                tx/=scale; ty/=scale; tz/=scale;
+                const double norm=std::hypot(std::hypot(tx,ty),tz);
+                tx/=norm; ty/=norm; tz/=norm;
+                if (!std::isfinite(tx) || !std::isfinite(ty) || !std::isfinite(tz))
+                    throw std::runtime_error("invalid normalized translation direction");
+                for (int i=0;i<count;++i) if (mask.at<uint8_t>(i,0)) {
+                    if (!std::binary_search(value->inliers.begin(),value->inliers.end(),i))
+                        throw std::runtime_error("native pose mask is not a final-E subset");
+                    value->pose_inliers.push_back(i);
+                }
+                if (support < 0 || static_cast<std::size_t>(support) != value->pose_inliers.size())
+                    throw std::runtime_error("native pose support/mask mismatch");
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+                if (essential_no_pose) { essential_no_pose = false; value->pose_inliers.clear(); }
+#endif
+                value->pose_found = value->pose_inliers.size() >= 5;
+                if (value->pose_found)
+                    value->pose = {rotation.at<double>(0,0),rotation.at<double>(0,1),rotation.at<double>(0,2),
+                        rotation.at<double>(1,0),rotation.at<double>(1,1),rotation.at<double>(1,2),
+                        rotation.at<double>(2,0),rotation.at<double>(2,1),rotation.at<double>(2,2),tx,ty,tz};
+                else value->pose_inliers.clear();
+            } else {
+                value->matrix = {};
+                value->inliers.clear();
+            }
+        }
+        *result = value.release();
+    });
+}
+
+opencv_calib3d_status opencv_calib3d_essential_result_found(
+    const opencv_calib3d_essential_result_handle *result, uint8_t *found) {
+    if (found) *found = 0;
+    return guarded([&] {
+        require(result && found, "null essential found argument");
+        *found = result->found ? 1 : 0;
+    });
+}
+opencv_calib3d_status opencv_calib3d_essential_result_matrix(
+    const opencv_calib3d_essential_result_handle *result, opencv_calib3d_essential *matrix) {
+    if (matrix) *matrix = {};
+    return guarded([&] {
+        require(result && matrix, "null essential matrix argument");
+        require(result->found, "matrix requested from a no-E result");
+        checkpoint(33);
+        *matrix = result->matrix;
+    });
+}
+opencv_calib3d_status opencv_calib3d_essential_result_inlier_count(
+    const opencv_calib3d_essential_result_handle *result, int32_t *count) {
+    if (count) *count = 0;
+    return guarded([&] {
+        require(result && count, "null essential count argument");
+        *count = static_cast<int32_t>(result->inliers.size());
+    });
+}
+opencv_calib3d_status opencv_calib3d_essential_result_inlier(
+    const opencv_calib3d_essential_result_handle *result, int32_t index, int32_t *correspondence_index) {
+    if (correspondence_index) *correspondence_index = 0;
+    return guarded([&] {
+        require(result && correspondence_index, "null essential inlier argument");
+        require(index >= 0 && static_cast<std::size_t>(index) < result->inliers.size(),
+                "essential inlier index out of range");
+        checkpoint(34);
+        *correspondence_index = result->inliers[static_cast<std::size_t>(index)];
+    });
+}
+opencv_calib3d_status opencv_calib3d_essential_result_pose_found(
+    const opencv_calib3d_essential_result_handle *result, uint8_t *found) {
+    if (found) *found = 0;
+    return guarded([&] {
+        require(result && found, "null relative pose found argument");
+        *found = result->pose_found ? 1 : 0;
+    });
+}
+opencv_calib3d_status opencv_calib3d_essential_result_pose(
+    const opencv_calib3d_essential_result_handle *result, opencv_calib3d_relative_pose *pose) {
+    if (pose) *pose = {};
+    return guarded([&] {
+        require(result && pose, "null relative pose argument");
+        require(result->pose_found, "pose requested from a no-pose result");
+        checkpoint(35);
+        *pose = result->pose;
+    });
+}
+opencv_calib3d_status opencv_calib3d_essential_result_pose_inlier_count(
+    const opencv_calib3d_essential_result_handle *result, int32_t *count) {
+    if (count) *count = 0;
+    return guarded([&] {
+        require(result && count, "null relative pose count argument");
+        *count = static_cast<int32_t>(result->pose_inliers.size());
+    });
+}
+opencv_calib3d_status opencv_calib3d_essential_result_pose_inlier(
+    const opencv_calib3d_essential_result_handle *result, int32_t index, int32_t *correspondence_index) {
+    if (correspondence_index) *correspondence_index = 0;
+    return guarded([&] {
+        require(result && correspondence_index, "null relative pose inlier argument");
+        require(index >= 0 && static_cast<std::size_t>(index) < result->pose_inliers.size(),
+                "relative pose inlier index out of range");
+        checkpoint(36);
+        *correspondence_index = result->pose_inliers[static_cast<std::size_t>(index)];
+    });
+}
+void opencv_calib3d_essential_result_destroy(opencv_calib3d_essential_result_handle *result) {
     try { delete result; } catch (...) {}
 }
 } // extern "C"

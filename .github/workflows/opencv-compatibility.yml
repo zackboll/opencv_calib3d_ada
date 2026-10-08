@@ -66,3 +66,4 @@ jobs:
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/pnp_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/homography_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/fundamental_synthetic
+          alr -n -C examples exec -- sh ../scripts/run_native.sh bin/essential_synthetic

@@ -1661,6 +1661,437 @@ package body Calib3D_Tests is
       end loop;
    end Fundamental_Invalid;
 
+   E_Policy : constant Essential_RANSAC_Options := (1.0E-6, 0.999);
+   E_Rotation : constant Rotation_Matrix :=
+     [[Math.Cos (0.08), 0.0, Math.Sin (0.08)], [0.0, 1.0, 0.0],
+      [-Math.Sin (0.08), 0.0, Math.Cos (0.08)]];
+   E_Translation : constant Camera_Direction := [-0.75, 0.08, 0.12];
+   E_Norm : constant OpenCV.Float64_Value := Math.Sqrt (0.75**2 + 0.08**2 + 0.12**2);
+   function Two_View_Points (Second : Boolean) return Normalized_Image_Point_Array is
+   begin
+      return Points : Normalized_Image_Point_Array (1 .. 40) do
+         for I in Points'Range loop
+            declare
+               J : constant Integer := I - 1;
+               X : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((J * 7) mod 17 - 8) * 0.24;
+               Y : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((J * 11) mod 19 - 9) * 0.19;
+               Z : constant OpenCV.Float64_Value := 4.0 + OpenCV.Float64_Value ((J * 13) mod 23) * 0.17;
+               X2 : constant OpenCV.Float64_Value := E_Rotation (0, 0) * X + E_Rotation (0, 2) * Z - 0.75;
+               Y2 : constant OpenCV.Float64_Value := Y + 0.08;
+               Z2 : constant OpenCV.Float64_Value := E_Rotation (2, 0) * X + E_Rotation (2, 2) * Z + 0.12;
+            begin
+               Assert (Z > 0.0 and then Z2 > 0.0, "synthetic fixture positive depths");
+               Points (I) := (if Second then [X2 / Z2, Y2 / Z2] else [X / Z, Y / Z]);
+            end;
+         end loop;
+      end return;
+   end Two_View_Points;
+
+   function Known_Essential return Essential_Matrix is
+      TX : constant OpenCV.Float64_Value := E_Translation (0) / E_Norm;
+      TY : constant OpenCV.Float64_Value := E_Translation (1) / E_Norm;
+      TZ : constant OpenCV.Float64_Value := E_Translation (2) / E_Norm;
+      Cross : constant Rotation_Matrix := [[0.0, -TZ, TY], [TZ, 0.0, -TX], [-TY, TX, 0.0]];
+   begin
+      return E : Essential_Matrix := [others => [others => 0.0]] do
+         for Row in 0 .. 2 loop
+            for Col in 0 .. 2 loop
+               for K in 0 .. 2 loop
+                  E (Row, Col) := E (Row, Col) + Cross (Row, K) * E_Rotation (K, Col);
+               end loop;
+            end loop;
+         end loop;
+      end return;
+   end Known_Essential;
+
+   procedure Essential_Oracle (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Simple : constant Essential_Matrix := [[0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]];
+      Known : constant Essential_Matrix := Known_Essential;
+      First : constant Normalized_Image_Point_Array := Two_View_Points (False);
+      Second : constant Normalized_Image_Point_Array := Two_View_Points (True);
+      Scaled : Essential_Matrix;
+   begin
+      for Scale of Reprojection_Error_Array'[1.0, -7.0, 1.0E6] loop
+         for Row in 0 .. 2 loop
+            for Col in 0 .. 2 loop
+               Scaled (Row, Col) := Scale * Simple (Row, Col);
+            end loop;
+         end loop;
+         declare
+            Zero : constant Normalized_Sampson_Error_Result :=
+              Normalized_Sampson_Error (Scaled, [0.2, 0.1], [-0.1, 0.1]);
+            Nonzero : constant Normalized_Sampson_Error_Result :=
+              Normalized_Sampson_Error (Scaled, [0.2, 0.1], [-0.1, 0.3]);
+         begin
+            Assert (Zero.Defined and then Zero.Error = 0.0, "translation-only exact Sampson");
+            --  r=y1-y2, four-normal norm=sqrt(2): independently derived.
+            Assert (Nonzero.Defined and then Near (Nonzero.Error, 0.2 / Math.Sqrt (2.0), 1.0E-15),
+                    "independent nonzero normalized Sampson and scale/sign oracle");
+         end;
+         for Row in 0 .. 2 loop
+            for Col in 0 .. 2 loop
+               Scaled (Row, Col) := Scale * Known (Row, Col);
+            end loop;
+         end loop;
+         for I in First'Range loop
+            declare
+               Error : constant Normalized_Sampson_Error_Result :=
+                 Normalized_Sampson_Error (Scaled, First (I), Second (I));
+            begin
+               Assert (Error.Defined and then Error.Error < 1.0E-15, "known [t]_x R exact geometry");
+            end;
+         end loop;
+      end loop;
+      Ada.Text_IO.Put_Line ("independent Essential [t]_x R / normalized Sampson zero/nonzero/scale/sign oracle PASS");
+   end Essential_Oracle;
+
+   procedure Essential_Error_Range (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      E : Essential_Matrix := [others => [others => 0.0]];
+   begin
+      Assert (not Normalized_Sampson_Error (E, [0.2, 0.1], [-0.1, 0.1]).Defined, "zero denominator");
+      E (0, 0) := OpenCV.Float64_Value'Last;
+      Assert (not Normalized_Sampson_Error (E, [2.0, 0.0], [0.0, 0.0]).Defined, "product overflow");
+      E (0, 1) := OpenCV.Float64_Value'Last;
+      Assert (not Normalized_Sampson_Error (E, [1.0, 1.0], [0.0, 0.0]).Defined, "sum overflow");
+      E := [others => [others => 0.0]]; E (0, 2) := OpenCV.Float64_Value'Last;
+      Assert (not Normalized_Sampson_Error (E, [0.0, 0.0], [2.0, 0.0]).Defined, "residual overflow");
+      E := [others => [others => 0.0]];
+      E (0, 2) := 1.0E-300; E (2, 2) := OpenCV.Float64_Value'Last;
+      Assert (not Normalized_Sampson_Error (E, [0.0, 0.0], [0.0, 0.0]).Defined, "division overflow");
+      E := [others => [others => 0.0]]; E (0, 2) := 1.0E200; E (2, 1) := -1.0E200;
+      declare
+         Error : constant Normalized_Sampson_Error_Result :=
+           Normalized_Sampson_Error (E, [0.2, 0.1], [-0.1, 0.3]);
+      begin
+         Assert (Error.Defined and then Near (Error.Error, 0.2 / Math.Sqrt (2.0)), "scaled robust norm");
+      end;
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         for Input in 0 .. 12 loop
+            declare
+               Matrix : Essential_Matrix := Known_Essential;
+               First, Second : Normalized_Image_Point := [0.2, 0.1];
+               Bad : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Kind));
+            begin
+               if Input < 9 then
+                  Matrix (Input / 3, Input mod 3) := Bad;
+               elsif Input < 11 then
+                  First (Input - 9) := Bad;
+               else
+                  Second (Input - 11) := Bad;
+               end if;
+               begin
+                  declare
+                     Error : constant Normalized_Sampson_Error_Result := Normalized_Sampson_Error (Matrix, First, Second);
+                     pragma Unreferenced (Error);
+                  begin
+                     Assert (False, "nonfinite Sampson input accepted");
+                  end;
+               exception
+                  when OpenCV.OpenCV_Error => null;
+               end;
+            end;
+         end loop;
+      end loop;
+   end Essential_Error_Range;
+
+   procedure Check_Essential (Estimate : Essential_Estimate;
+                              First, Second : Normalized_Image_Point_Array; Label : String) is
+      E : constant Essential_Matrix := Essential (Estimate);
+      EI : constant Inlier_Index_Array := Inliers (Estimate);
+      PI : constant Inlier_Index_Array := Pose_Inliers (Estimate);
+      Pose : constant Relative_Camera_Pose := Recovered_Pose (Estimate);
+      R : constant Rotation_Matrix := Pose.Rotation_First_To_Second;
+      Center : constant Camera_Direction := Second_Camera_Center_Direction_In_First (Pose);
+      Maximum, Trace, Dot, Center_Error, Unit_Norm, Orthogonal_Error : OpenCV.Float64_Value := 0.0;
+      Angle, Determinant : OpenCV.Float64_Value;
+   begin
+      Assert (Found (Estimate) and then Pose_Recovered (Estimate), "Essential and relative pose found");
+      Assert (EI'Length >= 5 and then PI'Length >= 5, "Essential/pose support minimum");
+      for I in EI'Range loop
+         Assert (EI (I) <= First'Length and then Inlier (Estimate, I) = EI (I), "valid Essential index");
+         if I > 1 then
+            Assert (EI (I) > EI (I - 1), "unique ascending Essential indices");
+         end if;
+      end loop;
+      for I in PI'Range loop
+         Assert (Contains (EI, PI (I)) and then Pose_Inlier (Estimate, I) = PI (I), "pose subset/index");
+         if I > 1 then
+            Assert (PI (I) > PI (I - 1), "unique ascending pose indices");
+         end if;
+      end loop;
+      for I in 1 .. First'Length loop
+         declare
+            Error : constant Normalized_Sampson_Error_Result := Normalized_Sampson_Error
+              (E, First (First'First + I - 1), Second (Second'First + I - 1));
+            Accepted : constant Boolean := Error.Defined and then Error.Error <= E_Policy.Normalized_Epipolar_Threshold;
+         begin
+            Assert (Contains (EI, I) = Accepted, "exact final-E original Float64 inclusion/exclusion");
+            if Accepted then
+               Maximum := OpenCV.Float64_Value'Max (Maximum, Error.Error);
+            end if;
+         end;
+      end loop;
+      for Row in 0 .. 2 loop
+         declare
+            Expected_Center : OpenCV.Float64_Value := 0.0;
+         begin
+            for Col in 0 .. 2 loop
+               Trace := Trace + R (Row, Col) * E_Rotation (Row, Col);
+               Expected_Center := Expected_Center - E_Rotation (Col, Row) * E_Translation (Col) / E_Norm;
+               declare
+                  Product : OpenCV.Float64_Value := 0.0;
+               begin
+                  for Axis in 0 .. 2 loop
+                     Product := Product + R (Axis, Row) * R (Axis, Col);
+                  end loop;
+                  Orthogonal_Error := OpenCV.Float64_Value'Max
+                    (Orthogonal_Error, abs (Product - (if Row = Col then 1.0 else 0.0)));
+               end;
+            end loop;
+            Dot := Dot + Pose.Translation_Direction (Row) * E_Translation (Row) / E_Norm;
+            Unit_Norm := Unit_Norm + Pose.Translation_Direction (Row)**2;
+            Center_Error := Center_Error + (Center (Row) - Expected_Center)**2;
+         end;
+      end loop;
+      Angle := Math.Arccos (OpenCV.Float64_Value'Max (-1.0, OpenCV.Float64_Value'Min (1.0, (Trace - 1.0) / 2.0)));
+      Determinant := R (0, 0) * (R (1, 1) * R (2, 2) - R (1, 2) * R (2, 1))
+        - R (0, 1) * (R (1, 0) * R (2, 2) - R (1, 2) * R (2, 0))
+        + R (0, 2) * (R (1, 0) * R (2, 1) - R (1, 1) * R (2, 0));
+      Assert (Angle < 1.0E-5 and then Dot > 1.0 - 1.0E-8, "rotation angular and signed translation oracle");
+      Assert (Math.Sqrt (Center_Error) < 1.0E-5, "camera center normalize(-R^T t), not t");
+      Assert (Near (Unit_Norm, 1.0, 1.0E-12) and then Near (Determinant, 1.0, 1.0E-12)
+              and then Orthogonal_Error < 1.0E-12, "SO(3) and unit direction qualification");
+      for Which in 0 .. 1 loop
+         begin
+            declare
+               Index : constant Positive := (if Which = 0 then Inlier (Estimate, EI'Length + 1)
+                                             else Pose_Inlier (Estimate, PI'Length + 1));
+               pragma Unreferenced (Index);
+            begin
+               Assert (False, "out of range inlier accepted");
+            end;
+         exception
+            when OpenCV.OpenCV_Error => null;
+         end;
+      end loop;
+      Ada.Text_IO.Put_Line (Label & " Essential support=" & Natural'Image (EI'Length) &
+        " Pose support=" & Natural'Image (PI'Length) & " max Sampson=" & OpenCV.Float64_Value'Image (Maximum));
+      Ada.Text_IO.Put_Line ("rotation angle=" & OpenCV.Float64_Value'Image (Angle) &
+        " signed t dot=" & OpenCV.Float64_Value'Image (Dot) & " center direction error=" &
+        OpenCV.Float64_Value'Image (Math.Sqrt (Center_Error)) & " orthogonality error=" &
+        OpenCV.Float64_Value'Image (Orthogonal_Error) & " det=" & OpenCV.Float64_Value'Image (Determinant));
+   end Check_Essential;
+
+   procedure Essential_Clean (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Normalized_Image_Point_Array := Two_View_Points (False);
+      Second : constant Normalized_Image_Point_Array := Two_View_Points (True);
+      Estimate : constant Essential_Estimate := Estimate_Essential_RANSAC (First, Second, E_Policy);
+   begin
+      Check_Essential (Estimate, First, Second, "clean");
+   end Essential_Clean;
+   procedure Essential_Outliers (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Normalized_Image_Point_Array := Two_View_Points (False);
+      Second : Normalized_Image_Point_Array := Two_View_Points (True);
+   begin
+      for I of Inlier_Index_Array'[2, 7, 15] loop
+         Second (I) (0) := Second (I) (0) + 2.0;
+         Second (I) (1) := Second (I) (1) - 1.5;
+      end loop;
+      declare
+         Estimate : constant Essential_Estimate := Estimate_Essential_RANSAC (First, Second, E_Policy);
+      begin
+         Check_Essential (Estimate, First, Second, "outlier");
+         for I of Inlier_Index_Array'[2, 7, 15] loop
+            Assert (not Contains (Inliers (Estimate), I) and then not Contains (Pose_Inliers (Estimate), I),
+                    "gross Essential/pose outlier survived");
+         end loop;
+      end;
+      Ada.Text_IO.Put_Line ("Essential/pose 2/7/15 absent; final Float64 classification PASS");
+   end Essential_Outliers;
+
+   procedure Reject_Essential (First, Second : Normalized_Image_Point_Array;
+                               Options : Essential_RANSAC_Options := E_Policy) is
+   begin
+      declare
+         Estimate : constant Essential_Estimate := Estimate_Essential_RANSAC (First, Second, Options);
+         pragma Unreferenced (Estimate);
+      begin
+         Assert (False, "invalid Essential input accepted");
+      end;
+   exception
+      when OpenCV.OpenCV_Error => null;
+   end Reject_Essential;
+   procedure Essential_Minimum (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Normalized_Image_Point_Array := Two_View_Points (False);
+      Second : constant Normalized_Image_Point_Array := Two_View_Points (True);
+   begin
+      for N in 0 .. 5 loop
+         Reject_Essential (First (1 .. N), Second (1 .. N));
+      end loop;
+      declare
+         Estimate : constant Essential_Estimate := Estimate_Essential_RANSAC (First (1 .. 6), Second (1 .. 6), E_Policy);
+      begin
+         Assert (Found (Estimate), "six points permitted actual Essential RANSAC");
+      end;
+      Ada.Text_IO.Put_Line ("Essential 0..5 rejection / 6 native subset RANSAC PASS (armed proof in fault helper)");
+   end Essential_Minimum;
+   procedure Essential_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      First : Normalized_Image_Point_Array := Two_View_Points (False);
+      Second : Normalized_Image_Point_Array := Two_View_Points (True);
+      Bad : Essential_RANSAC_Options;
+   begin
+      Reject_Essential (First, Second (1 .. 39));
+      for V of Reprojection_Error_Array'[0.0, -1.0, 1.0E-30, 1.0E20, OpenCV.Float64_Value'Last] loop
+         Bad := E_Policy; Bad.Normalized_Epipolar_Threshold := V;
+         Reject_Essential (First, Second, Bad);
+      end loop;
+      for V of Reprojection_Error_Array'[0.0, -1.0, 1.0, 2.0] loop
+         Bad := E_Policy; Bad.Confidence := V;
+         Reject_Essential (First, Second, Bad);
+      end loop;
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         Bad := E_Policy; Bad.Confidence := OpenCV.Float64_Value (Nonfinite (Kind));
+         Reject_Essential (First, Second, Bad);
+         Bad := E_Policy; Bad.Normalized_Epipolar_Threshold := OpenCV.Float64_Value (Nonfinite (Kind));
+         Reject_Essential (First, Second, Bad);
+         for Axis in 0 .. 1 loop
+            First (1) (Axis) := OpenCV.Float64_Value (Nonfinite (Kind));
+            Reject_Essential (First, Second); First := Two_View_Points (False);
+            Second (1) (Axis) := OpenCV.Float64_Value (Nonfinite (Kind));
+            Reject_Essential (First, Second); Second := Two_View_Points (True);
+         end loop;
+      end loop;
+      for V of Reprojection_Error_Array'[2.0**(-53), 1.0 - 2.0**(-53)] loop
+         declare
+            Options : aliased constant ABI.C_Essential_Options := (1.0E-3, Interfaces.C.double (V));
+         begin
+            ABI.Check (ABI.Validate_Essential_Options (Options'Access), "Essential exact open confidence interval");
+         end;
+      end loop;
+   end Essential_Invalid;
+
+   procedure Relative_Center_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      Pose : Relative_Camera_Pose := (E_Rotation, E_Translation);
+   begin
+      for Input in 0 .. 12 loop
+         Pose := (E_Rotation, E_Translation);
+         if Input < 9 then
+            Pose.Rotation_First_To_Second (Input / 3, Input mod 3) := OpenCV.Float64_Value (Nonfinite (0));
+         elsif Input < 12 then
+            Pose.Translation_Direction (Input - 9) := OpenCV.Float64_Value (Nonfinite (0));
+         else
+            Pose.Translation_Direction := [others => 0.0];
+         end if;
+         begin
+            declare
+               Center : constant Camera_Direction := Second_Camera_Center_Direction_In_First (Pose);
+               pragma Unreferenced (Center);
+            begin
+               Assert (False, "invalid relative pose direction accepted");
+            end;
+         exception
+            when OpenCV.OpenCV_Error => null;
+         end;
+      end loop;
+   end Relative_Center_Invalid;
+
+   procedure Essential_Layout (T : in out Fixture) is
+      pragma Unreferenced (T);
+      function Layout (Field : Interfaces.Integer_32) return Interfaces.Integer_32
+        with Import, Convention => C, External_Name => "calib3d_test_essential_layout";
+      procedure Fill (Value : access ABI.C_Essential)
+        with Import, Convention => C, External_Name => "calib3d_test_fill_essential";
+      function Pose_Layout (Field : Interfaces.Integer_32) return Interfaces.Integer_32
+        with Import, Convention => C, External_Name => "calib3d_test_relative_pose_layout";
+      procedure Fill_Pose (Value : access ABI.C_Relative_Pose)
+        with Import, Convention => C, External_Name => "calib3d_test_fill_relative_pose";
+      function Options_Layout (Field : Interfaces.Integer_32) return Interfaces.Integer_32
+        with Import, Convention => C, External_Name => "calib3d_test_essential_options_layout";
+      procedure Fill_Options (Value : access ABI.C_Essential_Options)
+        with Import, Convention => C, External_Name => "calib3d_test_fill_essential_options";
+      Value : aliased ABI.C_Essential;
+      Pose : aliased ABI.C_Relative_Pose;
+      Options : aliased ABI.C_Essential_Options;
+      type Positions is array (Natural range <>) of Natural;
+      Offsets : constant Positions := [Value.E00'Position, Value.E01'Position, Value.E02'Position,
+        Value.E10'Position, Value.E11'Position, Value.E12'Position,
+        Value.E20'Position, Value.E21'Position, Value.E22'Position];
+      Pose_Offsets : constant Positions := [Pose.R00'Position, Pose.R01'Position, Pose.R02'Position,
+        Pose.R10'Position, Pose.R11'Position, Pose.R12'Position,
+        Pose.R20'Position, Pose.R21'Position, Pose.R22'Position,
+        Pose.TX'Position, Pose.TY'Position, Pose.TZ'Position];
+      Option_Offsets : constant Positions := [Options.Normalized_Epipolar_Threshold'Position, Options.Confidence'Position];
+   begin
+      Assert (ABI.C_Essential'Size = Natural (Layout (0)) * System.Storage_Unit and then
+              ABI.C_Essential'Alignment = Natural (Layout (1)), "Essential C/Ada size/alignment");
+      for I in Offsets'Range loop
+         Assert (Offsets (I) = Natural (Layout (Interfaces.Integer_32 (I + 2))), "Essential field position");
+      end loop;
+      Fill (Value'Access);
+      Assert (Value.E00 = 1.0 and then Value.E01 = 2.0 and then Value.E02 = 3.0 and then
+              Value.E10 = 4.0 and then Value.E11 = 5.0 and then Value.E12 = 6.0 and then
+              Value.E20 = 7.0 and then Value.E21 = 8.0 and then Value.E22 = 9.0, "C-written all-nine Essential interchange");
+      Assert (ABI.C_Relative_Pose'Size = Natural (Pose_Layout (0)) * System.Storage_Unit and then
+              ABI.C_Relative_Pose'Alignment = Natural (Pose_Layout (1)), "relative pose C/Ada size/alignment");
+      for I in Pose_Offsets'Range loop
+         Assert (Pose_Offsets (I) = Natural (Pose_Layout (Interfaces.Integer_32 (I + 2))), "relative pose field position");
+      end loop;
+      Fill_Pose (Pose'Access);
+      Assert (Pose.R00 = 1.0 and then Pose.R01 = 2.0 and then Pose.R02 = 3.0 and then
+              Pose.R10 = 4.0 and then Pose.R11 = 5.0 and then Pose.R12 = 6.0 and then
+              Pose.R20 = 7.0 and then Pose.R21 = 8.0 and then Pose.R22 = 9.0 and then
+              Pose.TX = 10.0 and then Pose.TY = 11.0 and then Pose.TZ = 12.0, "C-written all-twelve relative pose interchange");
+      Assert (ABI.C_Essential_Options'Size = Natural (Options_Layout (0)) * System.Storage_Unit and then
+              ABI.C_Essential_Options'Alignment = Natural (Options_Layout (1)), "Essential options C/Ada layout");
+      for I in Option_Offsets'Range loop
+         Assert (Option_Offsets (I) = Natural (Options_Layout (Interfaces.Integer_32 (I + 2))), "Essential options position");
+      end loop;
+      Fill_Options (Options'Access);
+      Assert (Options.Normalized_Epipolar_Threshold = 0.001 and then Options.Confidence = 0.999, "C-written Essential options");
+      Ada.Text_IO.Put_Line ("Essential/relative pose/options compiler sizes=" &
+        Interfaces.Integer_32'Image (Layout (0)) & Interfaces.Integer_32'Image (Pose_Layout (0)) &
+        Interfaces.Integer_32'Image (Options_Layout (0)) & " alignments=" &
+        Interfaces.Integer_32'Image (Layout (1)) & Interfaces.Integer_32'Image (Pose_Layout (1)) &
+        Interfaces.Integer_32'Image (Options_Layout (1)) & "; all 9/12/2 positions and C-written interchange PASS");
+   end Essential_Layout;
+
+   procedure Essential_Far_Points (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First, Second : Normalized_Image_Point_Array (1 .. 40);
+   begin
+      for I in First'Range loop
+         declare
+            J : constant Integer := I - 1;
+            X : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((J * 7) mod 17 - 8) * 0.24;
+            Y : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((J * 11) mod 19 - 9) * 0.19;
+            Z : constant OpenCV.Float64_Value := 100.0 + OpenCV.Float64_Value ((J * 13) mod 23) * 1.7;
+            X2 : constant OpenCV.Float64_Value := E_Rotation (0, 0) * X + E_Rotation (0, 2) * Z - 0.75;
+            Z2 : constant OpenCV.Float64_Value := E_Rotation (2, 0) * X + E_Rotation (2, 2) * Z + 0.12;
+         begin
+            --  Every depth exceeds 50 baseline units. The explicit distance
+            --  threshold must not reject this supported positive-depth fixture.
+            Assert (Z / E_Norm > 50.0 and then Z2 / E_Norm > 50.0, "far fixture depths");
+            First (I) := [X / Z, Y / Z];
+            Second (I) := [X2 / Z2, (Y + 0.08) / Z2];
+         end;
+      end loop;
+      declare
+         Estimate : constant Essential_Estimate := Estimate_Essential_RANSAC (First, Second, E_Policy);
+      begin
+         Check_Essential (Estimate, First, Second, "far (>50 baseline units)");
+      end;
+   end Essential_Far_Points;
+
    package Caller is new AUnit.Test_Caller (Fixture);
 
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
@@ -1714,6 +2145,15 @@ package body Calib3D_Tests is
        Result.Add_Test (Caller.Create ("all-five distorted iterative refinement", Refinement_Distorted'Access));
        Result.Add_Test (Caller.Create ("RANSAC inlier subset iterative refinement", Refinement_Inliers'Access));
        Result.Add_Test (Caller.Create ("invalid refinement preserves initial pose", Refinement_Invalid'Access));
+      Result.Add_Test (Caller.Create ("independent normalized Sampson and known Essential oracle", Essential_Oracle'Access));
+      Result.Add_Test (Caller.Create ("Sampson undefined/range/nonfinite geometry", Essential_Error_Range'Access));
+      Result.Add_Test (Caller.Create ("clean Essential and signed relative pose geometry", Essential_Clean'Access));
+      Result.Add_Test (Caller.Create ("gross Essential/pose outliers and final Float64 classification", Essential_Outliers'Access));
+      Result.Add_Test (Caller.Create ("Essential five rejection/six actual RANSAC", Essential_Minimum'Access));
+      Result.Add_Test (Caller.Create ("Essential invalid normalized observations/options", Essential_Invalid'Access));
+      Result.Add_Test (Caller.Create ("relative camera-center direction validation", Relative_Center_Invalid'Access));
+      Result.Add_Test (Caller.Create ("compiler-derived Essential/relative-pose/options layouts", Essential_Layout'Access));
+      Result.Add_Test (Caller.Create ("relative cheirality retains points beyond 50 baseline units", Essential_Far_Points'Access));
       return Result;
    end Suite;
 end Calib3D_Tests;

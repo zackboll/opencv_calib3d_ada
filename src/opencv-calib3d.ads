@@ -117,6 +117,71 @@ package OpenCV.Calib3D is
    type World_Ray_Array is array (Positive range <>) of World_Ray;
    type Rotation_Matrix is array (Natural range 0 .. 2, Natural range 0 .. 2)
      of OpenCV.Float64_Value;
+
+   --  Calibrated normalized coordinates ONLY. Do not pass distorted pixels:
+   --  use Undistort_To_Normalized separately for each camera first.
+   --  x2^T * E * x1 = 0, x=(normalized_x,normalized_y,1).
+   --  Arbitrary nonzero scale; no E(2,2)=1 or coefficient sign convention.
+   type Essential_Matrix is
+     array (Natural range 0 .. 2, Natural range 0 .. 2) of OpenCV.Float64_Value;
+   type Normalized_Sampson_Error_Result (Defined : Boolean := False) is record
+      case Defined is
+         when True => Error : OpenCV.Float64_Value;
+         when False => null;
+      end case;
+   end record;
+   --  abs(x2^T E x1) / norm((E*x1).xy, (E^T*x2).xy), dimensionless.
+   --  This is NOT Maximum_Epipolar_Error. Nonfinite inputs raise OpenCV_Error;
+   --  zero denominator/nonrepresentable arithmetic returns Defined=False.
+   --  No epsilon, clamping, NaN publication, or escaping Constraint_Error.
+   function Normalized_Sampson_Error
+     (Matrix : Essential_Matrix; First_Point, Second_Point : Normalized_Image_Point)
+      return Normalized_Sampson_Error_Result;
+   type Essential_RANSAC_Options is record
+      Normalized_Epipolar_Threshold : OpenCV.Float64_Value := 1.0E-3;
+      Confidence : OpenCV.Float64_Value := 0.999;
+   end record;
+   --  X_second = R * X_first + lambda * t_hat, UNKNOWN lambda > 0.
+   --  recoverPose does NOT recover metric baseline magnitude or navigation
+   --  position. Translation_Direction is unit translation-TERM direction,
+   --  NOT the second camera position or camera-center motion direction.
+   type Relative_Camera_Pose is record
+      Rotation_First_To_Second : Rotation_Matrix;
+      Translation_Direction : Camera_Direction;
+   end record;
+   --  normalize(-R^T*t_hat): second-camera-center direction in first frame.
+   function Second_Camera_Center_Direction_In_First
+     (Pose : Relative_Camera_Pose) return Camera_Direction;
+   type Essential_Estimate is limited private;
+   --  Equal counts >=6 fitting INT32. OpenCV can solve five points, but five
+   --  bypass subset consensus; this RANSAC API deliberately requires six.
+   --  Fixed native maximum 1000; adaptive termination may stop earlier.
+   --  Observations/five-point algebra are Float64; native error and squared
+   --  threshold comparison are Float32. Public inliers instead classify final
+   --  E against ORIGINAL Float64 observations using defined Sampson <= threshold.
+   --  Threshold finite positive; double square and Float32 conversion finite
+   --  positive. Confidence finite and strictly (0,1), without epsilon limits.
+   --  Found requires >=5 final Essential inliers. Pose recovery uses exactly
+   --  those inliers, explicit finite Double'Last distance cutoff (not hidden 50),
+   --  and requires >=5 cheirality survivors. Infinite/nonrepresentable internal
+   --  triangulations can still fail. Insufficient pose support retains E.
+   function Estimate_Essential_RANSAC
+     (First_Points, Second_Points : Normalized_Image_Point_Array;
+      Options : Essential_RANSAC_Options := (others => <>)) return Essential_Estimate;
+   function Found (Estimate : Essential_Estimate) return Boolean;
+   --  Raises OpenCV_Error if Found=False.
+   function Essential (Estimate : Essential_Estimate) return Essential_Matrix;
+   function Inlier_Count (Estimate : Essential_Estimate) return Natural;
+   function Inlier (Estimate : Essential_Estimate; Index : Positive) return Positive;
+   --  One-based correspondence positions, valid/unique/strictly ascending.
+   function Inliers (Estimate : Essential_Estimate) return Inlier_Index_Array;
+   function Pose_Recovered (Estimate : Essential_Estimate) return Boolean;
+   --  Raises OpenCV_Error if Pose_Recovered=False.
+   function Recovered_Pose (Estimate : Essential_Estimate) return Relative_Camera_Pose;
+   function Pose_Inlier_Count (Estimate : Essential_Estimate) return Natural;
+   function Pose_Inlier (Estimate : Essential_Estimate; Index : Positive) return Positive;
+   --  Cheirality-qualified subset of Essential inliers, likewise ascending.
+   function Pose_Inliers (Estimate : Essential_Estimate) return Inlier_Index_Array;
    type Reprojection_Error_Array is
      array (Positive range <>) of OpenCV.Float64_Value;
 
@@ -246,6 +311,15 @@ package OpenCV.Calib3D is
 
 private
    type Inlier_Buffer is access Inlier_Index_Array;
+   type Essential_Estimate is new Ada.Finalization.Limited_Controlled with record
+      Has_Model, Has_Pose : Boolean := False;
+      Value : Essential_Matrix := [others => [others => 0.0]];
+      Pose_Value : Relative_Camera_Pose :=
+        (Rotation_First_To_Second => [others => [others => 0.0]],
+         Translation_Direction => [others => 0.0]);
+      Data, Pose_Data : Inlier_Buffer := null;
+   end record;
+   overriding procedure Finalize (Self : in out Essential_Estimate);
    type Fundamental_Estimate is new Ada.Finalization.Limited_Controlled with record
       Has_Model : Boolean := False;
       Value     : Fundamental_Matrix := [others => [others => 0.0]];

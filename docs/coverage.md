@@ -124,7 +124,7 @@ counts/results; inventory is not a pass claim.
 
 ## Task 005 inventory
 
-Current suite: **48 AUnit registrations**, adding eight fundamental cases:
+Task 005 suite: **48 AUnit registrations**, adding eight fundamental cases:
 known-F 0/3-pixel/scale/undefined oracle; large/tiny finite arithmetic and invalid
 inputs; noncoplanar direct stereo clean estimation; gross vertical outliers and
 final Float64 inclusion/exclusion; 14 rejection/15 true RANSAC; real collinear
@@ -137,3 +137,25 @@ and ASan+UBSan cover both strided Core inputs, schemas/options, 14/15, clean/out
 no-model, access/destruction and cleanup. Linux/macOS and the manual pinned matrix
 run all three examples. See `fundamental-validation.md` for executed results;
 this inventory is not a pass claim.
+
+## Task 006 inventory
+
+Current suite: **57 AUnit registrations**, adding nine cases: independent
+translation-only/known `[t_hat]_x R` normalized Sampson oracle, scale/sign/range/
+undefined/nonfinite geometry, clean and gross-outlier Essential plus relative
+pose, exact final-E Float64 inclusion/exclusion, five rejection/six native
+RANSAC, invalid normalized observations/options, camera-center helper validation,
+distinct Essential/relative-pose/options compiler-derived layout and all-field
+interchange, and positive-depth points beyond 50 baseline units.
+
+**39** private C declarations/imports and **five** standalone C/C++ profile
+helpers. Stage IDs 29..36 add **40 raw and 40 Ada** exception scenarios, reusing
+the macOS-safe fault helper. Raw production/fault and ASan+UBSan cover clean,
+outlier, both strided Core arrays, 0..5/6, invalid schema/options and all result
+access/destruction. Fault variants separately cover no-E and E-found/no-pose
+using test-only suppression after real native calls. Armed stage 29 verifies
+five rejects before native entry and six consumes the checkpoint. Pose
+qualification checks angular R error, R^T R/det, signed t dot/unit norm, and
+normalize(-R^T t) camera-center direction, not E coefficient equality.
+Ordinary Linux/macOS and manual pinned matrix run all four examples.
+See `essential-validation.md` for executed evidence; inventory is not a pass claim.

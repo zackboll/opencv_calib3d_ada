@@ -56,8 +56,8 @@ def main() -> None:
 
     tests = (ROOT / "tests/src/calib3d_tests.adb").read_text()
     registrations = re.findall(r"Result\.Add_Test\s*\(Caller\.Create", tests)
-    check(len(registrations) == 48, "update documented AUnit inventory when changing tests")
-    check(len(declared) == 27, "update private ABI inventory when changing exports")
+    check(len(registrations) == 57, "update documented AUnit inventory when changing tests")
+    check(len(declared) == 39, "update private ABI inventory when changing exports")
     check("count >= 15" in cpp and "cv::findFundamentalMat(first, second, cv::FM_RANSAC" in cpp,
           "fundamental must prevent the hidden 8..14 LMeDS fallback")
     check("final_fundamental_inlier(value->matrix" in cpp and "value->inliers.size() >= 7" in cpp,
@@ -69,7 +69,18 @@ def main() -> None:
           "fundamental confidence must prevent native substitution")
     helpers = {p.name for p in (ROOT / "tests/cpp").glob("*test.*")}
     check(helpers == {"header_test.c", "profile_test.cpp", "homography_profile_test.cpp",
-                      "fundamental_profile_test.cpp"}, "update helper inventory")
+                      "fundamental_profile_test.cpp", "essential_profile_test.cpp"}, "update helper inventory")
+    check("count >= 6" in cpp and "cv::findEssentialMat(first,second,identity,cv::RANSAC" in cpp,
+          "Essential requires six for true subset RANSAC and identity intrinsics")
+    check(re.search(r"#if CV_VERSION_MAJOR >= 5\s+//[^#]+"
+                    r"options->normalized_epipolar_threshold,1000,native_mask\);\s+#else\s+"
+                    r"cv::Mat e = cv::findEssentialMat\([^#]+"
+                    r"options->normalized_epipolar_threshold,native_mask\);\s+#endif", cpp),
+          "Essential uses legacy 4.x overload and required fixed-1000 5.0 overload")
+    check("final_essential_inlier(value->matrix" in cpp and "value->inliers.size() >= 5" in cpp,
+          "Essential requires final-E Float64 Sampson classification and five support")
+    check("std::numeric_limits<double>::max(),mask,cv::noArray()" in cpp,
+          "relative pose must avoid hidden 50-unit depth cutoff")
     check("final_homography_inlier(value->matrix" in cpp and "native_mask.copyTo" not in cpp,
           "homography must independently classify final H")
     check("count >= 5" in cpp and "cv::findHomography(source, destination, cv::RANSAC" in cpp,
