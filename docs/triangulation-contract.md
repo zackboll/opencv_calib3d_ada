@@ -1,5 +1,11 @@
 # Normalized two-view triangulation
 
+Task 008's separate [quality diagnostics](triangulation-quality-contract.md)
+do not change this solver, its Status contract, or any native ABI behavior.
+`Usable` means finite positive-depth reconstruction with defined residuals,
+not well-conditioned ray geometry. Measure parallax before triangulation or
+assess existing values afterward using caller-selected thresholds.
+
 `Triangulate_Normalized` is standalone; it neither estimates Essential matrices
 nor performs RANSAC. Applications may select `Pose_Inliers` before calling it.
 

@@ -1,5 +1,12 @@
 # Architecture
 
+Task 008 adds a pure-Ada bearing/quality layer above normalized observations,
+relative pose and public triangulation values. It shares Task 007 SO(3)
+validation and scaled normalization, uses R^T to compare first-frame bearings,
+and never enters the native ABI. Core ownership, 43 C imports/exports, and native
+triangulation classification are unchanged. See
+[quality contract](triangulation-quality-contract.md).
+
 Normalized triangulation reuses the relative-pose ABI record and Core callback
 boundary, snapshots observations, and returns only discriminated Ada values.
 The private owned batch vector is published atomically. See

@@ -1347,6 +1347,151 @@ package body OpenCV.Calib3D is
       when Constraint_Error =>
          raise OpenCV.OpenCV_Error with "Essential conversion exceeds representable range";
    end Estimate_Essential_RANSAC;
+   procedure Validate_Relative_Rotation (Pose : Relative_Camera_Pose) is
+      R : Rotation_Matrix renames Pose.Rotation_First_To_Second;
+      Dot, Det : OpenCV.Float64_Value;
+   begin
+      for V of R loop
+         if not Is_Finite (V) or else abs (V) > 1.000000001 then
+            raise OpenCV.OpenCV_Error with "Invalid relative rotation";
+         end if;
+      end loop;
+      for I in 0 .. 2 loop
+         for J in 0 .. 2 loop
+            Dot := 0.0;
+            for K in 0 .. 2 loop
+               Dot := Dot + R (K, I) * R (K, J);
+            end loop;
+            if abs (Dot - (if I = J then 1.0 else 0.0)) > 1.0E-9 then
+               raise OpenCV.OpenCV_Error with "Relative rotation is not orthogonal";
+            end if;
+         end loop;
+      end loop;
+      Det := R (0, 0) * (R (1, 1) * R (2, 2) - R (1, 2) * R (2, 1)) -
+        R (0, 1) * (R (1, 0) * R (2, 2) - R (1, 2) * R (2, 0)) +
+        R (0, 2) * (R (1, 0) * R (2, 1) - R (1, 1) * R (2, 0));
+      if abs (Det - 1.0) > 1.0E-9 then
+         raise OpenCV.OpenCV_Error with "Relative rotation determinant is not +1";
+      end if;
+   end Validate_Relative_Rotation;
+
+   procedure Validate_Relative_Pose (Pose : Relative_Camera_Pose) is
+      T : constant Object_Point := Unit_Vector (Object_Point (Pose.Translation_Direction));
+   begin
+      Validate_Vector (T);
+      Validate_Relative_Rotation (Pose);
+   end Validate_Relative_Pose;
+
+   function Measure_Stereo_Parallax
+     (First_Points, Second_Points : Normalized_Image_Point_Array;
+      Pose : Relative_Camera_Pose) return Stereo_Parallax_Array
+   is
+   begin
+      Validate_Relative_Pose (Pose);
+      if First_Points'Length /= Second_Points'Length then
+         raise OpenCV.OpenCV_Error with "Parallax requires equal point counts";
+      end if;
+      return Result : Stereo_Parallax_Array (1 .. First_Points'Length) do
+         for I in Result'Range loop
+            declare
+               P : Normalized_Image_Point renames First_Points (First_Points'First + I - 1);
+               Q : Normalized_Image_Point renames Second_Points (Second_Points'First + I - 1);
+               A : constant Object_Point := Unit_Vector ([P (0), P (1), 1.0]);
+               B : constant Object_Point := Unit_Vector (Rotate
+                 (Pose.Rotation_First_To_Second, Unit_Vector ([Q (0), Q (1), 1.0]), True));
+               Cross : constant Object_Point :=
+                 [A (1) * B (2) - A (2) * B (1),
+                  A (2) * B (0) - A (0) * B (2),
+                  A (0) * B (1) - A (1) * B (0)];
+               Dot : OpenCV.Float64_Value := 0.0;
+               Scale : OpenCV.Float64_Value := 0.0;
+               Squared : OpenCV.Float64_Value := 0.0;
+               Norm : OpenCV.Float64_Value := 0.0;
+            begin
+               Validate_Vector (Cross);
+               for Axis in 0 .. 2 loop
+                  Dot := Dot + A (Axis) * B (Axis);
+                  if not Is_Finite (Dot) then
+                     raise OpenCV.OpenCV_Error with "Nonfinite bearing dot product";
+                  end if;
+                  Scale := OpenCV.Float64_Value'Max (Scale, abs Cross (Axis));
+               end loop;
+               --  Scale even the bounded cross product: squaring a tiny
+               --  component directly could underflow and erase its angle.
+               if Scale /= 0.0 then
+                  for Component of Cross loop
+                     Squared := Squared + (Component / Scale) ** 2;
+                  end loop;
+                  Norm := Scale * Math.Sqrt (Squared);
+               end if;
+               if not Is_Finite (Norm) then
+                  raise OpenCV.OpenCV_Error with "Nonfinite bearing cross norm";
+               end if;
+               Result (I) := (Math.Arctan (Norm, Dot), Math.Arctan (Norm, abs Dot));
+               if not Is_Finite (Result (I).Forward_Ray_Angle_Radians) or else
+                 not Is_Finite (Result (I).Acute_Line_Angle_Radians)
+               then
+                  raise OpenCV.OpenCV_Error with "Nonfinite parallax angle";
+               end if;
+            end;
+         end loop;
+      end return;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Parallax exceeds Float64 range";
+   end Measure_Stereo_Parallax;
+
+   function Assess_Triangulation
+     (First_Points, Second_Points : Normalized_Image_Point_Array;
+      Pose : Relative_Camera_Pose;
+      Points : Triangulated_Point_Array;
+      Options : Triangulation_Quality_Options := (others => <>))
+      return Triangulation_Quality_Array
+   is
+      Angles : constant Stereo_Parallax_Array :=
+        Measure_Stereo_Parallax (First_Points, Second_Points, Pose);
+   begin
+      if Points'Length /= Angles'Length then
+         raise OpenCV.OpenCV_Error with "Assessment requires equal point counts";
+      end if;
+      if not Is_Finite (Options.Minimum_Acute_Parallax_Radians) or else
+        Options.Minimum_Acute_Parallax_Radians < 0.0 or else
+        Options.Minimum_Acute_Parallax_Radians > Math.Arctan (1.0, 0.0) or else
+        not Is_Finite (Options.Maximum_Normalized_Reprojection_Error) or else
+        Options.Maximum_Normalized_Reprojection_Error < 0.0
+      then
+         raise OpenCV.OpenCV_Error with "Invalid triangulation quality options";
+      end if;
+      return Result : Triangulation_Quality_Array (Angles'Range) do
+         for I in Result'Range loop
+            declare
+               P : Triangulated_Point renames Points (Points'First + I - 1);
+               Residual_OK : Boolean := False;
+               Angle_OK : constant Boolean := Angles (I).Acute_Line_Angle_Radians >=
+                 Options.Minimum_Acute_Parallax_Radians;
+            begin
+               if P.Status = Usable then
+                  Validate_Vector (P.Position_In_First_Camera);
+                  if not Is_Finite (P.First_Depth) or else P.First_Depth <= 0.0 or else
+                    not Is_Finite (P.Second_Depth) or else P.Second_Depth <= 0.0 or else
+                    not Is_Finite (P.First_Normalized_Error) or else P.First_Normalized_Error < 0.0 or else
+                    not Is_Finite (P.Second_Normalized_Error) or else P.Second_Normalized_Error < 0.0
+                  then
+                     raise OpenCV.OpenCV_Error with "Invalid manually constructed usable point";
+                  end if;
+                  Residual_OK := P.First_Normalized_Error <= Options.Maximum_Normalized_Reprojection_Error
+                    and then P.Second_Normalized_Error <= Options.Maximum_Normalized_Reprojection_Error;
+               end if;
+               Result (I) := (P.Status, Angles (I), Angle_OK, Residual_OK,
+                 P.Status = Usable and then Angle_OK and then Residual_OK);
+            end;
+         end loop;
+      end return;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Assessment exceeds representable range";
+   end Assess_Triangulation;
+
    function Triangulate_Normalized
      (First_Points, Second_Points : Normalized_Image_Point_Array;
       Pose : Relative_Camera_Pose) return Triangulated_Point_Array
@@ -1389,35 +1534,13 @@ package body OpenCV.Calib3D is
       begin
          Bridge.With_Input_Handle (Second, Second_Callback'Access);
       end First_Callback;
-      Dot, Det : OpenCV.Float64_Value;
    begin
       if First_Points'Length /= Second_Points'Length or else
         First_Points'Length > Interfaces.Integer_32'Last
       then
          raise OpenCV.OpenCV_Error with "Triangulation requires equal counts fitting INT32";
       end if;
-      for V of R loop
-         if not Is_Finite (V) or else abs (V) > 1.000000001 then
-            raise OpenCV.OpenCV_Error with "Invalid relative rotation";
-         end if;
-      end loop;
-      for I in 0 .. 2 loop
-         for J in 0 .. 2 loop
-            Dot := 0.0;
-            for K in 0 .. 2 loop
-               Dot := Dot + R (K, I) * R (K, J);
-            end loop;
-            if abs (Dot - (if I = J then 1.0 else 0.0)) > 1.0E-9 then
-               raise OpenCV.OpenCV_Error with "Relative rotation is not orthogonal";
-            end if;
-         end loop;
-      end loop;
-      Det := R (0, 0) * (R (1, 1) * R (2, 2) - R (1, 2) * R (2, 1)) -
-        R (0, 1) * (R (1, 0) * R (2, 2) - R (1, 2) * R (2, 0)) +
-        R (0, 2) * (R (1, 0) * R (2, 1) - R (1, 1) * R (2, 0));
-      if abs (Det - 1.0) > 1.0E-9 then
-         raise OpenCV.OpenCV_Error with "Relative rotation determinant is not +1";
-      end if;
+      Validate_Relative_Rotation (Pose);
       if First_Points'Length = 0 then
          return [1 .. 0 => <>];
       end if;

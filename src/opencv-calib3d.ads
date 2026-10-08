@@ -178,6 +178,48 @@ package OpenCV.Calib3D is
      (First_Points, Second_Points : Normalized_Image_Point_Array;
       Pose : Relative_Camera_Pose) return Triangulated_Point_Array;
 
+   type Stereo_Parallax is record
+      Forward_Ray_Angle_Radians : OpenCV.Float64_Value;
+      Acute_Line_Angle_Radians : OpenCV.Float64_Value;
+   end record;
+   type Stereo_Parallax_Array is array (Positive range <>) of Stereo_Parallax;
+   --  Pure Ada bearing diagnostics: compare b1 with normalize(R^T*b2).
+   --  Forward angle is 0..pi; acute line angle is 0..pi/2, including
+   --  antiparallel lines as weak geometry. Translation never shifts bearings.
+   --  Equal finite observations; same pose validation as triangulation.
+   --  One-based iteration order; empty returns 1..0 after pose validation.
+   function Measure_Stereo_Parallax
+     (First_Points, Second_Points : Normalized_Image_Point_Array;
+      Pose : Relative_Camera_Pose) return Stereo_Parallax_Array;
+
+   type Triangulation_Quality_Options is record
+      Minimum_Acute_Parallax_Radians : OpenCV.Float64_Value := 0.0;
+      Maximum_Normalized_Reprojection_Error : OpenCV.Float64_Value :=
+        OpenCV.Float64_Value'Last;
+   end record;
+   type Triangulation_Quality is record
+      Original_Status : Triangulation_Status;
+      Parallax : Stereo_Parallax;
+      Passes_Parallax_Limit : Boolean;
+      Passes_Reprojection_Limit : Boolean;
+      Accepted : Boolean;
+   end record;
+   type Triangulation_Quality_Array is
+     array (Positive range <>) of Triangulation_Quality;
+   --  Caller policy only, not covariance/confidence or a depth-error bound.
+   --  Inclusive thresholds, finite minimum in 0..pi/2 and maximum >=0.
+   --  Zero minimum disables parallax filtering. Defaults accept all Usable
+   --  results. Equal counts, paired by iteration order, one-based output.
+   --  Allegedly Usable entries must have finite position, positive finite
+   --  depths and nonnegative finite errors; otherwise raise OpenCV_Error.
+   --  Never modifies/recreates Points or changes triangulation status.
+   function Assess_Triangulation
+     (First_Points, Second_Points : Normalized_Image_Point_Array;
+      Pose : Relative_Camera_Pose;
+      Points : Triangulated_Point_Array;
+      Options : Triangulation_Quality_Options := (others => <>))
+      return Triangulation_Quality_Array;
+
    --  normalize(-R^T*t_hat): second-camera-center direction in first frame.
    function Second_Camera_Center_Direction_In_First
      (Pose : Relative_Camera_Pose) return Camera_Direction;

@@ -1,5 +1,14 @@
 # Coverage
 
+Task 008 registers **74 AUnit cases**, preserving all 64 Task 007 cases and
+adding ten focused cases: analytic rectified angle, tiny/zero angle, transpose
+quarter-turn, antiparallel rays, inverse-frame/translation-scale invariance,
+inclusive combined quality flags, low-parallax usable native reconstruction,
+noisy native residual thresholds, invalid inputs/public values, and extreme
+finite bearings. Existing composition now measures and assesses forty points.
+Six C/C++ helpers and 43 private ABI imports/exports remain unchanged.
+See [executed quality evidence](triangulation-quality-validation.md).
+
 Task 007 registers 64 AUnit cases and 43 private ABI imports/exports.
 Triangulation coverage includes independent both-camera cheirality, rectified,
 nonidentity and inverse-frame geometry, noisy diagnostics, pose-inlier composition,

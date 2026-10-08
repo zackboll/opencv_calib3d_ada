@@ -1,5 +1,14 @@
 # OpenCV Calib3D for Ada
 
+Pure-Ada `Measure_Stereo_Parallax` and `Assess_Triangulation` expose directed
+ray angles (0..pi), acute line angles (0..pi/2), and caller-selected inclusive
+parallax/residual quality flags. Numerically `Usable` does not mean geometrically
+well-conditioned. Defaults preserve validity; no universal cutoff or uncertainty
+model is implied. See [quality contract](docs/triangulation-quality-contract.md)
+and [qualification](docs/triangulation-quality-validation.md). The existing
+`triangulation_synthetic` example demonstrates usable, weak-angle and non-Usable
+correspondences; the API uses radians and the example also prints degrees.
+
 Normalized two-view reconstruction is available through `Triangulate_Normalized`.
 Positions are **first-camera unit-baseline coordinates, not meters**; no metric
 baseline is recovered. See [contract](docs/triangulation-contract.md),

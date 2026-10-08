@@ -2311,8 +2311,41 @@ package body Calib3D_Tests is
       declare
          Points : constant Triangulated_Point_Array :=
            Triangulate_Normalized (Selected_First, Selected_Second, Recovered_Pose (Estimate));
-         Maximum : OpenCV.Float64_Value := 0.0;
+         Angles : constant Stereo_Parallax_Array := Measure_Stereo_Parallax
+           (Selected_First, Selected_Second, Recovered_Pose (Estimate));
+         Quality : constant Triangulation_Quality_Array := Assess_Triangulation
+           (Selected_First, Selected_Second, Recovered_Pose (Estimate), Points);
+         Angular_Quality : constant Triangulation_Quality_Array := Assess_Triangulation
+           (Selected_First, Selected_Second, Recovered_Pose (Estimate), Points,
+            (Minimum_Acute_Parallax_Radians => 0.1, others => <>));
+         Residual_Quality : constant Triangulation_Quality_Array := Assess_Triangulation
+           (Selected_First, Selected_Second, Recovered_Pose (Estimate), Points,
+            (Maximum_Normalized_Reprojection_Error => 1.0E-10, others => <>));
+         Minimum_Angle : OpenCV.Float64_Value := OpenCV.Float64_Value'Last;
+         Maximum_Angle, Maximum : OpenCV.Float64_Value := 0.0;
+         Usable_Count, Default_Count, Angular_Count, Residual_Count : Natural := 0;
       begin
+         Assert (Points'Length = 40 and then Quality'Length = 40 and then Angles'Length = 40,
+           "composition forty selected/triangulated/assessed");
+         for I in Quality'Range loop
+            Assert (Quality (I).Original_Status = Points (I).Status and then
+              Angles (I).Forward_Ray_Angle_Radians >= 0.0 and then
+              Angles (I).Forward_Ray_Angle_Radians <= OpenCV.Float64_Value (Ada.Numerics.Pi) and then
+              Angles (I).Acute_Line_Angle_Radians >= 0.0 and then
+              Angles (I).Acute_Line_Angle_Radians <= OpenCV.Float64_Value (Ada.Numerics.Pi) / 2.0,
+              "finite composition angles in range and status preserved");
+            Minimum_Angle := OpenCV.Float64_Value'Min (Minimum_Angle, Angles (I).Acute_Line_Angle_Radians);
+            Maximum_Angle := OpenCV.Float64_Value'Max (Maximum_Angle, Angles (I).Acute_Line_Angle_Radians);
+            if Points (I).Status = Usable then Usable_Count := Usable_Count + 1; end if;
+            if Quality (I).Accepted then Default_Count := Default_Count + 1; end if;
+            if Angular_Quality (I).Accepted then Angular_Count := Angular_Count + 1; end if;
+            if Residual_Quality (I).Accepted then Residual_Count := Residual_Count + 1; end if;
+         end loop;
+         Assert (Default_Count = Usable_Count, "defaults preserve triangulation validity");
+         Ada.Text_IO.Put_Line ("Quality composition min/max acute=" &
+           OpenCV.Float64_Value'Image (Minimum_Angle) & OpenCV.Float64_Value'Image (Maximum_Angle) &
+           " usable/default/angle(0.1)/residual(1e-10)=" & Natural'Image (Usable_Count) &
+           Natural'Image (Default_Count) & Natural'Image (Angular_Count) & Natural'Image (Residual_Count));
          Assert (Points'Length = Pose_Inlier_Count (Estimate), "composition preserves count");
          for P of Points loop
             Assert (P.Status = Usable, "clean composition usable");
@@ -2326,6 +2359,229 @@ package body Calib3D_Tests is
            " invalid=0 max normalized error=" & OpenCV.Float64_Value'Image (Maximum));
       end;
    end Triangulation_Composition;
+
+   Stereo_Pose : constant Relative_Camera_Pose :=
+     ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [-1.0, 0.0, 0.0]);
+
+   procedure Parallax_Rectified (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant Stereo_Parallax_Array := Measure_Stereo_Parallax
+        ([5 => [0.4, 0.0]], [9 => [0.2, 0.0]], Stereo_Pose);
+      Expected : constant OpenCV.Float64_Value := Math.Arctan (0.4) - Math.Arctan (0.2);
+   begin
+      Assert (A'First = 1 and then A'Length = 1, "one-based one-point parallax");
+      Assert (Near (A (1).Forward_Ray_Angle_Radians, Expected, 1.0E-15) and then
+        Near (A (1).Acute_Line_Angle_Radians, Expected, 1.0E-15), "independent atan difference");
+      Ada.Text_IO.Put_Line ("Rectified angle/error=" & OpenCV.Float64_Value'Image (Expected) &
+        OpenCV.Float64_Value'Image (abs (A (1).Forward_Ray_Angle_Radians - Expected)));
+   end Parallax_Rectified;
+
+   procedure Parallax_Tiny (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant Stereo_Parallax_Array := Measure_Stereo_Parallax
+        ([[0.0, 0.0], [0.0, 0.0]], [[1.0E-12, 0.0], [0.0, 0.0]], Stereo_Pose);
+   begin
+      Assert (A (1).Forward_Ray_Angle_Radians > 0.0 and then
+        Near (A (1).Forward_Ray_Angle_Radians, Math.Arctan (1.0E-12), 1.0E-27) and then
+        Near (A (1).Acute_Line_Angle_Radians, Math.Arctan (1.0E-12), 1.0E-27), "tiny angle not acos zero");
+      Assert (A (2).Forward_Ray_Angle_Radians = 0.0 and then A (2).Acute_Line_Angle_Radians = 0.0,
+        "exact parallel zero");
+      Ada.Text_IO.Put_Line ("Tiny angle=" & OpenCV.Float64_Value'Image (A (1).Forward_Ray_Angle_Radians));
+   end Parallax_Tiny;
+
+   procedure Parallax_Transpose (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Pose : constant Relative_Camera_Pose :=
+        ([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], [-1.0, 0.0, 0.0]);
+      A : constant Stereo_Parallax_Array := Measure_Stereo_Parallax ([[1.0, 0.0]], [[0.0, 1.0]], Pose);
+   begin
+      Assert (Near (A (1).Forward_Ray_Angle_Radians, 0.0, 1.0E-15) and then
+        Near (A (1).Acute_Line_Angle_Radians, 0.0, 1.0E-15), "R transpose quarter-turn");
+   end Parallax_Transpose;
+
+   procedure Parallax_Antiparallel (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Pose : constant Relative_Camera_Pose :=
+        ([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]], [-1.0, 0.0, 0.0]);
+      A : constant Stereo_Parallax_Array := Measure_Stereo_Parallax ([[0.0, 0.0]], [[0.0, 0.0]], Pose);
+   begin
+      Assert (Near (A (1).Forward_Ray_Angle_Radians, OpenCV.Float64_Value (Ada.Numerics.Pi), 1.0E-15)
+        and then A (1).Acute_Line_Angle_Radians = 0.0, "antiparallel pi / zero");
+   end Parallax_Antiparallel;
+
+   procedure Parallax_Frames (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Normalized_Image_Point_Array := Two_View_Points (False);
+      Second : constant Normalized_Image_Point_Array := Two_View_Points (True);
+      Pose : constant Relative_Camera_Pose := (E_Rotation, E_Translation);
+      Reverse_Pose, Scaled_Pose : Relative_Camera_Pose := Pose;
+      A : constant Stereo_Parallax_Array := Measure_Stereo_Parallax (First, Second, Pose);
+      Maximum : OpenCV.Float64_Value := 0.0;
+   begin
+      for I in 0 .. 2 loop
+         Reverse_Pose.Translation_Direction (I) := 0.0;
+         Scaled_Pose.Translation_Direction (I) := 7.0 * E_Translation (I);
+         for J in 0 .. 2 loop
+            Reverse_Pose.Rotation_First_To_Second (I, J) := E_Rotation (J, I);
+            Reverse_Pose.Translation_Direction (I) := Reverse_Pose.Translation_Direction (I) -
+              E_Rotation (J, I) * E_Translation (J) / E_Norm;
+         end loop;
+      end loop;
+      declare
+         B : constant Stereo_Parallax_Array := Measure_Stereo_Parallax (Second, First, Reverse_Pose);
+         C : constant Stereo_Parallax_Array := Measure_Stereo_Parallax (First, Second, Scaled_Pose);
+      begin
+         for I in A'Range loop
+            Maximum := OpenCV.Float64_Value'Max (Maximum,
+              abs (A (I).Forward_Ray_Angle_Radians - B (I).Forward_Ray_Angle_Radians));
+            Assert (Near (A (I).Forward_Ray_Angle_Radians, B (I).Forward_Ray_Angle_Radians, 1.0E-15)
+              and then Near (A (I).Acute_Line_Angle_Radians, B (I).Acute_Line_Angle_Radians, 1.0E-15),
+              "inverse-frame symmetry");
+            Assert (A (I) = C (I), "translation magnitude invariance");
+         end loop;
+      end;
+      Ada.Text_IO.Put_Line ("Parallax inverse maximum error=" & OpenCV.Float64_Value'Image (Maximum));
+   end Parallax_Frames;
+
+   procedure Quality_Boundaries (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Normalized_Image_Point_Array := [5 => [0.4, 0.0]];
+      Second : constant Normalized_Image_Point_Array := [9 => [0.2, 0.0]];
+      Points : constant Triangulated_Point_Array (12 .. 12) :=
+        [12 => (Usable, [2.0, 0.0, 5.0], 5.0, 5.0, 0.01, 0.02)];
+      Alpha : constant OpenCV.Float64_Value :=
+        Measure_Stereo_Parallax (First, Second, Stereo_Pose) (1).Acute_Line_Angle_Radians;
+   begin
+      for Minimum of Reprojection_Error_Array'[0.0, Alpha / 2.0, Alpha, Alpha * 2.0] loop
+         for Maximum of Reprojection_Error_Array'[0.01, 0.02, 0.03] loop
+            declare
+               Q : constant Triangulation_Quality_Array := Assess_Triangulation
+                 (First, Second, Stereo_Pose, Points, (Minimum, Maximum));
+            begin
+               Assert (Q'First = 1 and then Q (1).Original_Status = Usable and then Points (12).Status = Usable,
+                 "quality preserves status and iteration bounds");
+               Assert (Q (1).Passes_Parallax_Limit = (Minimum <= Alpha) and then
+                 Q (1).Passes_Reprojection_Limit = (Maximum >= 0.02) and then
+                 Q (1).Accepted = (Minimum <= Alpha and then Maximum >= 0.02), "inclusive combined policy flags");
+            end;
+         end loop;
+      end loop;
+      declare
+         Q : constant Triangulation_Quality_Array := Assess_Triangulation
+           (First, Second, Stereo_Pose, [7 => (Status => Non_Positive_Depth)]);
+      begin
+         Assert (not Q (1).Accepted and then not Q (1).Passes_Reprojection_Limit and then
+           Q (1).Parallax.Acute_Line_Angle_Radians > 0.0, "nonusable keeps parallax");
+      end;
+      Ada.Text_IO.Put_Line ("Quality below/equal/above angle and residual boundaries, all combined flags PASS");
+   end Quality_Boundaries;
+
+   procedure Quality_Low_Parallax (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Normalized_Image_Point_Array := [[0.0, 0.0]];
+      Second : constant Normalized_Image_Point_Array := [[-1.0E-8, 0.0]];
+      Points : constant Triangulated_Point_Array := Triangulate_Normalized (First, Second, Stereo_Pose);
+      Q : constant Triangulation_Quality_Array := Assess_Triangulation
+        (First, Second, Stereo_Pose, Points, (Minimum_Acute_Parallax_Radians => 1.0E-6, others => <>));
+   begin
+      Assert (Points (1).Status = Usable, "finite small disparity reconstruction usable");
+      Assert (not Q (1).Accepted and then not Q (1).Passes_Parallax_Limit and then
+        Q (1).Passes_Reprojection_Limit, "usable is not well conditioned");
+      Assert (Near (Q (1).Parallax.Acute_Line_Angle_Radians, Math.Arctan (1.0E-8), 1.0E-23),
+        "independent disparity angle");
+      Ada.Text_IO.Put_Line ("Low-parallax native Usable / quality rejected angle=" &
+        OpenCV.Float64_Value'Image (Q (1).Parallax.Acute_Line_Angle_Radians));
+   end Quality_Low_Parallax;
+
+   procedure Quality_Noisy (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Normalized_Image_Point_Array := [[0.4, 0.2]];
+      Second : constant Normalized_Image_Point_Array := [[0.2, 0.23]];
+      Points : constant Triangulated_Point_Array := Triangulate_Normalized (First, Second, Stereo_Pose);
+      Maximum : constant OpenCV.Float64_Value := OpenCV.Float64_Value'Max
+        (Points (1).First_Normalized_Error, Points (1).Second_Normalized_Error);
+   begin
+      for Limit of Reprojection_Error_Array'[Maximum / 2.0, Maximum, Maximum * 2.0] loop
+         declare
+            Q : constant Triangulation_Quality_Array := Assess_Triangulation
+              (First, Second, Stereo_Pose, Points, (Maximum_Normalized_Reprojection_Error => Limit, others => <>));
+         begin
+            Assert (Points (1).Status = Usable and then Q (1).Accepted = (Limit >= Maximum),
+              "native noisy residual inclusive threshold / unchanged usable");
+         end;
+      end loop;
+      Ada.Text_IO.Put_Line ("Noisy quality below/equal/above maximum=" & OpenCV.Float64_Value'Image (Maximum));
+   end Quality_Noisy;
+
+   procedure Quality_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Allow deliberately malformed IEEE fixtures to reach API validation.
+      pragma Suppress (Validity_Check);
+      Empty : constant Normalized_Image_Point_Array := [1 .. 0 => <>];
+      One : constant Normalized_Image_Point_Array := [[0.0, 0.0]];
+      Good : constant Triangulated_Point := (Usable, [0.0, 0.0, 1.0], 1.0, 1.0, 0.0, 0.0);
+      procedure Reject (P : Relative_Camera_Pose; A, B : Normalized_Image_Point_Array;
+                        Points : Triangulated_Point_Array; O : Triangulation_Quality_Options := (others => <>)) is
+      begin
+         declare
+            Q : constant Triangulation_Quality_Array := Assess_Triangulation (A, B, P, Points, O);
+         begin
+            Assert (False, "invalid assessment accepted" & Natural'Image (Q'Length));
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Reject;
+      P : Relative_Camera_Pose;
+      Bad : Triangulated_Point := Good;
+      A : Normalized_Image_Point_Array := One;
+   begin
+      Assert (Measure_Stereo_Parallax (Empty, Empty, Stereo_Pose)'Length = 0 and then
+        Assess_Triangulation (Empty, Empty, Stereo_Pose, [1 .. 0 => <>])'Length = 0, "validated empty diagnostics");
+      Reject (Stereo_Pose, One, Empty, [Good]);
+      Reject (Stereo_Pose, One, One, [1 .. 0 => <>]);
+      P := Stereo_Pose; P.Rotation_First_To_Second (0, 0) := 2.0;
+      Reject (P, Empty, Empty, [1 .. 0 => <>]);
+      P := Stereo_Pose; P.Rotation_First_To_Second (0, 0) := -1.0;
+      Reject (P, Empty, Empty, [1 .. 0 => <>]);
+      P := Stereo_Pose; P.Translation_Direction := [0.0, 0.0, 0.0];
+      Reject (P, Empty, Empty, [1 .. 0 => <>]);
+      for Kind in 0 .. 2 loop
+         declare
+            V : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Interfaces.Integer_32 (Kind)));
+         begin
+            P := Stereo_Pose; P.Translation_Direction (0) := V; Reject (P, One, One, [Good]);
+            P := Stereo_Pose; P.Rotation_First_To_Second (0, 0) := V; Reject (P, One, One, [Good]);
+            A := One; A (1) (0) := V; Reject (Stereo_Pose, A, One, [Good]);
+            Reject (Stereo_Pose, One, A, [Good]);
+            Reject (Stereo_Pose, Empty, Empty, [1 .. 0 => <>], (V, 0.0));
+            Reject (Stereo_Pose, Empty, Empty, [1 .. 0 => <>], (0.0, V));
+            Bad := Good; Bad.Position_In_First_Camera (1) := V; Reject (Stereo_Pose, One, One, [Bad]);
+            Bad := Good; Bad.First_Depth := V; Reject (Stereo_Pose, One, One, [Bad]);
+            Bad := Good; Bad.Second_Depth := V; Reject (Stereo_Pose, One, One, [Bad]);
+            Bad := Good; Bad.First_Normalized_Error := V; Reject (Stereo_Pose, One, One, [Bad]);
+            Bad := Good; Bad.Second_Normalized_Error := V; Reject (Stereo_Pose, One, One, [Bad]);
+         end;
+      end loop;
+      Reject (Stereo_Pose, Empty, Empty, [1 .. 0 => <>], (-1.0, 0.0));
+      Reject (Stereo_Pose, Empty, Empty, [1 .. 0 => <>], (2.0, 0.0));
+      Reject (Stereo_Pose, Empty, Empty, [1 .. 0 => <>], (0.0, -1.0));
+      for V of Reprojection_Error_Array'[0.0, -1.0] loop
+         Bad := Good; Bad.First_Depth := V; Reject (Stereo_Pose, One, One, [Bad]);
+         Bad := Good; Bad.Second_Depth := V; Reject (Stereo_Pose, One, One, [Bad]);
+      end loop;
+      Bad := Good; Bad.First_Normalized_Error := -1.0; Reject (Stereo_Pose, One, One, [Bad]);
+      Bad := Good; Bad.Second_Normalized_Error := -1.0; Reject (Stereo_Pose, One, One, [Bad]);
+   end Quality_Invalid;
+
+   procedure Parallax_Large (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant Stereo_Parallax_Array := Measure_Stereo_Parallax
+        ([[OpenCV.Float64_Value'Last, OpenCV.Float64_Value'Last]],
+         [[-OpenCV.Float64_Value'Last, OpenCV.Float64_Value'Last]], Stereo_Pose);
+   begin
+      Assert (Near (A (1).Forward_Ray_Angle_Radians, OpenCV.Float64_Value (Ada.Numerics.Pi) / 2.0, 1.0E-15),
+        "extreme finite bearings do not square unscaled coordinates");
+   end Parallax_Large;
 
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
@@ -2394,6 +2650,16 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("triangulation malformed pose rejected even when empty", Triangulation_Invalid'Access));
       Result.Add_Test (Caller.Create ("independent noisy normalized reprojection diagnostics", Triangulation_Noisy'Access));
       Result.Add_Test (Caller.Create ("independent first-only and second-only negative depths", Triangulation_Depths'Access));
+      Result.Add_Test (Caller.Create ("Parallax_Rectified", Parallax_Rectified'Access));
+      Result.Add_Test (Caller.Create ("Parallax_Tiny", Parallax_Tiny'Access));
+      Result.Add_Test (Caller.Create ("Parallax_Transpose", Parallax_Transpose'Access));
+      Result.Add_Test (Caller.Create ("Parallax_Antiparallel", Parallax_Antiparallel'Access));
+      Result.Add_Test (Caller.Create ("Parallax_Frames", Parallax_Frames'Access));
+      Result.Add_Test (Caller.Create ("Quality_Boundaries", Quality_Boundaries'Access));
+      Result.Add_Test (Caller.Create ("Quality_Low_Parallax", Quality_Low_Parallax'Access));
+      Result.Add_Test (Caller.Create ("Quality_Noisy", Quality_Noisy'Access));
+      Result.Add_Test (Caller.Create ("Quality_Invalid", Quality_Invalid'Access));
+      Result.Add_Test (Caller.Create ("Parallax_Large", Parallax_Large'Access));
       return Result;
    end Suite;
 end Calib3D_Tests;
