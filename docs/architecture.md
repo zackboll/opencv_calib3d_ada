@@ -1,5 +1,10 @@
 # Architecture
 
+Normalized triangulation reuses the relative-pose ABI record and Core callback
+boundary, snapshots observations, and returns only discriminated Ada values.
+The private owned batch vector is published atomically. See
+[triangulation contract](triangulation-contract.md) for gauge and status policy.
+
 `OpenCV.Calib3D` is a handwritten thick binding. The public Ada API is stable
 across the supported native module move:
 

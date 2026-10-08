@@ -56,8 +56,16 @@ def main() -> None:
 
     tests = (ROOT / "tests/src/calib3d_tests.adb").read_text()
     registrations = re.findall(r"Result\.Add_Test\s*\(Caller\.Create", tests)
-    check(len(registrations) == 57, "update documented AUnit inventory when changing tests")
-    check(len(declared) == 39, "update private ABI inventory when changing exports")
+    check(len(registrations) == 64, "update documented AUnit inventory when changing tests")
+    check(len(declared) == 43, "update private ABI inventory when changing exports")
+    layout = (ROOT / "tests/layout/calib3d_layout.c").read_text()
+    check("calib3d_test_triangulation_layout" in layout and
+          "calib3d_test_fill_triangulation" in tests and
+          all(f"offsetof(opencv_calib3d_triangulated_point,{field})" in layout
+              for field in ("status", "x", "y", "z", "depth_first", "depth_second",
+                            "error_first", "error_second")), "triangulation layout helper coverage")
+    check("cv::triangulatePoints(p1,p2,points1,points2,h)" in cpp and
+          "h.type()!=CV_64FC1" in cpp, "triangulation Float64 path/output schema")
     check("count >= 15" in cpp and "cv::findFundamentalMat(first, second, cv::FM_RANSAC" in cpp,
           "fundamental must prevent the hidden 8..14 LMeDS fallback")
     check("final_fundamental_inlier(value->matrix" in cpp and "value->inliers.size() >= 7" in cpp,
@@ -69,7 +77,8 @@ def main() -> None:
           "fundamental confidence must prevent native substitution")
     helpers = {p.name for p in (ROOT / "tests/cpp").glob("*test.*")}
     check(helpers == {"header_test.c", "profile_test.cpp", "homography_profile_test.cpp",
-                      "fundamental_profile_test.cpp", "essential_profile_test.cpp"}, "update helper inventory")
+                      "fundamental_profile_test.cpp", "essential_profile_test.cpp",
+                      "triangulation_profile_test.cpp"}, "update helper inventory")
     check("count >= 6" in cpp and "cv::findEssentialMat(first,second,identity,cv::RANSAC" in cpp,
           "Essential requires six for true subset RANSAC and identity intrinsics")
     check(re.search(r"#if CV_VERSION_MAJOR >= 5\s+//[^#]+"

@@ -3,6 +3,7 @@
 #include "homography_profile.hpp"
 #include "fundamental_profile.hpp"
 #include "essential_profile.hpp"
+#include "triangulation_profile.hpp"
 #include "opencv_core_module_bridge.hpp"
 
 #include <opencv2/core.hpp>
@@ -78,6 +79,18 @@ struct opencv_calib3d_essential_result_handle {
     std::vector<int32_t> inliers, pose_inliers;
 };
 
+struct opencv_calib3d_triangulation_result_handle {
+    std::vector<opencv_calib3d_triangulated_point> points;
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+    static thread_local int live;
+    opencv_calib3d_triangulation_result_handle() { ++live; }
+    ~opencv_calib3d_triangulation_result_handle() { --live; }
+#endif
+};
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+thread_local int opencv_calib3d_triangulation_result_handle::live = 0;
+#endif
+
 namespace {
 thread_local char error_text[1024] = "";
 
@@ -87,6 +100,8 @@ thread_local int failure_kind = 0;
 thread_local bool refinement_false = false;
 thread_local bool essential_no_model = false;
 thread_local bool essential_no_pose = false;
+thread_local bool triangulation_override = false, triangulation_unknown = false;
+thread_local double triangulation_h[4]{};
 void checkpoint(int stage) {
     if (failure_stage != stage) return;
     const int kind = failure_kind;
@@ -964,6 +979,99 @@ opencv_calib3d_status opencv_calib3d_essential_result_pose_inlier(
     });
 }
 void opencv_calib3d_essential_result_destroy(opencv_calib3d_essential_result_handle *result) {
+    try { delete result; } catch (...) {}
+}
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+void opencv_calib3d_test_triangulation_h(double x, double y, double z, double w) {
+    triangulation_h[0]=x; triangulation_h[1]=y; triangulation_h[2]=z; triangulation_h[3]=w;
+    triangulation_override=true;
+}
+void opencv_calib3d_test_triangulation_unknown(void) { triangulation_unknown=true; }
+int opencv_calib3d_test_triangulation_live(void) {
+    return opencv_calib3d_triangulation_result_handle::live;
+}
+#endif
+opencv_calib3d_status opencv_calib3d_triangulate_normalized(
+    const opencv_core_mat_handle *first_handle, const opencv_core_mat_handle *second_handle,
+    const opencv_calib3d_relative_pose *pose,
+    opencv_calib3d_triangulation_result_handle **result) {
+    if (result) *result=nullptr;
+    return guarded([&] {
+        require(result && pose, "null triangulation result/pose");
+        double r[3][3], t[3];
+        require(opencv_calib3d_detail::triangulation_pose(*pose,r,t), "invalid relative pose");
+        const cv::Mat &a=resolve_input(first_handle), &b=resolve_input(second_handle);
+        const auto schema=[](const cv::Mat &m) {
+            require(m.dims==2 && m.type()==CV_64FC2 && m.cols==1 && m.rows>=0,
+                    "triangulation points must be typed Nx1 Float64 C2");
+        };
+        schema(a); schema(b);
+        require(a.rows==b.rows, "triangulation counts differ");
+        validate_finite_image_points(a); validate_finite_image_points(b);
+        auto owned=std::make_unique<opencv_calib3d_triangulation_result_handle>();
+        if (a.rows==0) { *result=owned.release(); return; }
+        const cv::Mat first=a.clone(), second=b.clone();
+        cv::Mat p1(3,4,CV_64FC1), p2(3,4,CV_64FC1);
+        for (int i=0;i<3;++i) for (int j=0;j<4;++j) {
+            p1.at<double>(i,j)=i==j ? 1.0 : 0.0;
+            p2.at<double>(i,j)=j==3 ? t[i] : r[i][j];
+        }
+        cv::Mat points1(2,a.rows,CV_64FC1), points2(2,a.rows,CV_64FC1), h;
+        for (int i=0;i<a.rows;++i) for (int j=0;j<2;++j) {
+            points1.at<double>(j,i)=first.at<cv::Vec2d>(i,0)[j];
+            points2.at<double>(j,i)=second.at<cv::Vec2d>(i,0)[j];
+        }
+        checkpoint(37);
+        cv::triangulatePoints(p1,p2,points1,points2,h);
+        checkpoint(38);
+        if (h.dims!=2 || h.rows!=4 || h.cols!=a.rows || h.type()!=CV_64FC1)
+            throw std::runtime_error("malformed native homogeneous triangulation output");
+        checkpoint(39);
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+        // Only replace the first column, after a real native call and schema check.
+        if (triangulation_override) {
+            triangulation_override=false;
+            for (int j=0;j<4;++j) h.at<double>(j,0)=triangulation_h[j];
+        }
+#endif
+        owned->points.reserve(static_cast<std::size_t>(a.rows));
+        for (int i=0;i<a.rows;++i) {
+            const double v[4]={h.at<double>(0,i),h.at<double>(1,i),h.at<double>(2,i),h.at<double>(3,i)};
+            owned->points.push_back(opencv_calib3d_detail::classify_triangulation(v,r,t,
+                points1.at<double>(0,i),points1.at<double>(1,i),
+                points2.at<double>(0,i),points2.at<double>(1,i)));
+        }
+        checkpoint(40);
+        *result=owned.release();
+    });
+}
+opencv_calib3d_status opencv_calib3d_triangulation_result_count(
+    const opencv_calib3d_triangulation_result_handle *result, int32_t *count) {
+    if (count) *count=0;
+    return guarded([&] {
+        require(result && count,"null triangulation count argument");
+        *count=static_cast<int32_t>(result->points.size());
+    });
+}
+opencv_calib3d_status opencv_calib3d_triangulation_result_point(
+    const opencv_calib3d_triangulation_result_handle *result, int32_t index,
+    opencv_calib3d_triangulated_point *point) {
+    if (point) *point={};
+    return guarded([&] {
+        require(result && point,"null triangulation point argument");
+        require(index>=0 && static_cast<std::size_t>(index)<result->points.size(),
+                "triangulation index out of range");
+        checkpoint(41);
+        *point=result->points[static_cast<std::size_t>(index)];
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+        if (triangulation_unknown) {
+            triangulation_unknown=false;
+            point->status=867;
+        }
+#endif
+    });
+}
+void opencv_calib3d_triangulation_result_destroy(opencv_calib3d_triangulation_result_handle *result) {
     try { delete result; } catch (...) {}
 }
 } // extern "C"

@@ -4,6 +4,7 @@
 #include "homography_profile.hpp"
 #include "fundamental_profile.hpp"
 #include "essential_profile.hpp"
+#include "triangulation_profile.hpp"
 
 #include <opencv2/core.hpp>
 #include <opencv2/core/version.hpp>
@@ -18,6 +19,9 @@ extern "C" void opencv_calib3d_test_fail(int stage, int kind);
 extern "C" void opencv_calib3d_test_refinement_false(void);
 extern "C" void opencv_calib3d_test_essential_no_model(void);
 extern "C" void opencv_calib3d_test_essential_no_pose(void);
+extern "C" void opencv_calib3d_test_triangulation_h(double,double,double,double);
+extern "C" void opencv_calib3d_test_triangulation_unknown(void);
+extern "C" int opencv_calib3d_test_triangulation_live(void);
 #endif
 
 namespace {
@@ -675,6 +679,23 @@ void essential_boundary() {
                 std::binary_search(ei.begin(),ei.end(),index) && (pi.empty() || index>pi.back()),"pose subset/order");
             pi.push_back(index);
         }
+        auto selected_first=matrix(pose_count,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+        auto selected_second=matrix(pose_count,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+        for (int i=0;i<pose_count;++i) {
+            output(selected_first.get()).at<cv::Vec2d>(i,0)=output(fraw).at<cv::Vec2d>(pi[i],0);
+            output(selected_second.get()).at<cv::Vec2d>(i,0)=output(sraw).at<cv::Vec2d>(pi[i],0);
+        }
+        opencv_calib3d_triangulation_result_handle *tri=nullptr;
+        check(opencv_calib3d_triangulate_normalized(selected_first.get(),selected_second.get(),&p,&tri)==0,
+              "actual-shim Essential composition");
+        std::unique_ptr<opencv_calib3d_triangulation_result_handle,
+            decltype(&opencv_calib3d_triangulation_result_destroy)> tri_owned(tri,opencv_calib3d_triangulation_result_destroy);
+        for (int i=0;i<pose_count;++i) {
+            opencv_calib3d_triangulated_point point{};
+            check(opencv_calib3d_triangulation_result_point(tri,i,&point)==0 && point.status==0 &&
+                  point.depth_first>0 && point.depth_second>0 && std::isfinite(point.error_first) &&
+                  std::isfinite(point.error_second),"composition positive-depth finite diagnostics");
+        }
         for (int i=0;i<n;++i) {
             const auto a=output(fraw).at<cv::Vec2d>(i,0),b=output(sraw).at<cv::Vec2d>(i,0);
             double error=0;
@@ -1031,9 +1052,178 @@ void run() {
 }
 } // namespace
 
+void triangulation_boundary() {
+    double r[3][3],t[3];
+    const opencv_calib3d_relative_pose stereo{1,0,0,0,1,0,0,0,1,-1,0,0};
+    check(opencv_calib3d_detail::triangulation_pose(stereo,r,t),"profile stereo pose");
+    const double infinity[4]={2,1,5,0},tiny[4]={.4,.2,1,1e-300};
+    check(opencv_calib3d_detail::classify_triangulation(infinity,r,t,.4,.2,.2,.2).status==1 &&
+          opencv_calib3d_detail::classify_triangulation(tiny,r,t,.4,.2,.2,.2).status==0,
+          "production/fault instrumented exact-zero/tiny-W classifier");
+    const auto zero=[](const opencv_calib3d_triangulated_point &p) {
+        return p.status==0 && p.x==0 && p.y==0 && p.z==0 && p.depth_first==0 &&
+               p.depth_second==0 && p.error_first==0 && p.error_second==0;
+    };
+    auto first_parent=matrix(2,2,OPENCV_CORE_DEPTH_FLOAT64,2);
+    auto second_parent=matrix(2,2,OPENCV_CORE_DEPTH_FLOAT64,2);
+    opencv_core_mat_handle *fraw=nullptr,*sraw=nullptr;
+    check(opencv_core_mat_region(first_parent.get(),0,0,1,2,&fraw)==0 &&
+          opencv_core_mat_region(second_parent.get(),0,0,1,2,&sraw)==0,"triangulation Core Regions");
+    Mat first(fraw,opencv_core_mat_destroy),second(sraw,opencv_core_mat_destroy);
+    check(!output(fraw).isContinuous() && !output(sraw).isContinuous(),"both inputs strided");
+    output(fraw).at<cv::Vec2d>(0,0)={.4,.2}; output(fraw).at<cv::Vec2d>(1,0)={.4,.2};
+    output(sraw).at<cv::Vec2d>(0,0)={.2,.2}; output(sraw).at<cv::Vec2d>(1,0)={.6,.2};
+    const opencv_calib3d_relative_pose pose{1,0,0,0,1,0,0,0,1,-7,0,0};
+    opencv_calib3d_triangulation_result_handle *raw=nullptr;
+    check(opencv_calib3d_triangulate_normalized(fraw,sraw,&pose,&raw)==0 && raw,"Float64 triangulation");
+    std::unique_ptr<opencv_calib3d_triangulation_result_handle,
+        decltype(&opencv_calib3d_triangulation_result_destroy)> owned(raw,opencv_calib3d_triangulation_result_destroy);
+    int32_t count=-1;
+    check(opencv_calib3d_triangulation_result_count(raw,&count)==0 && count==2,"triangulation count");
+    opencv_calib3d_triangulated_point point{};
+    check(opencv_calib3d_triangulation_result_point(raw,0,&point)==0 && point.status==0 &&
+          std::abs(point.x-2)<1e-9 && std::abs(point.y-1)<1e-9 && std::abs(point.z-5)<1e-9,
+          "raw independent rectified oracle");
+    check(opencv_calib3d_triangulation_result_point(raw,1,&point)==0 && point.status==3 &&
+          point.x==0 && point.depth_first==0,"behind point zeroed");
+    auto invalid=[&](const opencv_core_mat_handle *a,const opencv_core_mat_handle *b,
+                     const opencv_calib3d_relative_pose *p) {
+        auto *result=raw;
+        check(opencv_calib3d_triangulate_normalized(a,b,p,&result)==1 && !result,"invalid triangulation atomicity");
+    };
+    invalid(nullptr,sraw,&pose); invalid(fraw,nullptr,&pose); invalid(fraw,sraw,nullptr);
+    check(opencv_calib3d_triangulate_normalized(fraw,sraw,&pose,nullptr)==1,"null result");
+    for (int channels:{1,2,3}) {
+        auto bad=matrix(2,1,channels==2 ? OPENCV_CORE_DEPTH_FLOAT32 : OPENCV_CORE_DEPTH_FLOAT64,channels);
+        invalid(bad.get(),sraw,&pose); invalid(fraw,bad.get(),&pose);
+    }
+    auto mismatch=matrix(1,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    invalid(mismatch.get(),sraw,&pose);
+    invalid(fraw,mismatch.get(),&pose);
+    auto wrong=matrix(1,2,OPENCV_CORE_DEPTH_FLOAT64,2);
+    invalid(wrong.get(),sraw,&pose); invalid(fraw,wrong.get(),&pose);
+    auto nd=matrix(2,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    const int sizes[]={2,2,2}; output(nd.get())=cv::Mat(3,sizes,CV_64FC2,cv::Scalar(0,0));
+    invalid(nd.get(),sraw,&pose); invalid(fraw,nd.get(),&pose);
+    auto untyped=matrix(0,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    output(untyped.get())=cv::Mat();
+    invalid(untyped.get(),untyped.get(),&pose);
+    auto malformed_empty=matrix(0,2,OPENCV_CORE_DEPTH_FLOAT64,2);
+    invalid(malformed_empty.get(),malformed_empty.get(),&pose);
+    for (double v:{std::numeric_limits<double>::quiet_NaN(),
+                   std::numeric_limits<double>::infinity(),-std::numeric_limits<double>::infinity()}) {
+        for (int axis=0;axis<2;++axis) {
+            output(fraw).at<cv::Vec2d>(0,0)[axis]=v; invalid(fraw,sraw,&pose);
+            output(fraw).at<cv::Vec2d>(0,0)={.4,.2};
+            output(sraw).at<cv::Vec2d>(0,0)[axis]=v; invalid(fraw,sraw,&pose);
+            output(sraw).at<cv::Vec2d>(0,0)={.2,.2};
+        }
+    }
+    auto empty=matrix(0,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    opencv_calib3d_triangulation_result_handle *empty_result=nullptr;
+    check(opencv_calib3d_triangulate_normalized(empty.get(),empty.get(),&pose,&empty_result)==0,
+          "typed empty schema");
+    opencv_calib3d_triangulation_result_destroy(empty_result);
+    auto bad_pose=pose; bad_pose.tx=0;
+    invalid(fraw,sraw,&bad_pose); invalid(empty.get(),empty.get(),&bad_pose);
+    bad_pose=pose; bad_pose.r00=-1; invalid(fraw,sraw,&bad_pose);
+    bad_pose=pose; bad_pose.ty=std::numeric_limits<double>::infinity(); invalid(fraw,sraw,&bad_pose);
+    bad_pose=pose; bad_pose.r00=.9; invalid(fraw,sraw,&bad_pose);
+    bad_pose=pose; bad_pose.r00=bad_pose.r11=bad_pose.r22=0; invalid(fraw,sraw,&bad_pose);
+    bad_pose=pose; bad_pose.r01=std::numeric_limits<double>::quiet_NaN(); invalid(fraw,sraw,&bad_pose);
+    point={9,9,9,9,9,9,9,9};
+    check(opencv_calib3d_triangulation_result_point(nullptr,0,&point)==1 && zero(point),"null handle clears full record");
+    check(opencv_calib3d_triangulation_result_point(raw,0,nullptr)==1,"null point output");
+    count=9;
+    check(opencv_calib3d_triangulation_result_count(nullptr,&count)==1 && count==0,"null count handle clears");
+    check(opencv_calib3d_triangulation_result_count(raw,nullptr)==1,"null count output");
+    for (int index:{-1,2}) {
+        point={9,9,9,9,9,9,9,9};
+        check(opencv_calib3d_triangulation_result_point(raw,index,&point)==1 && zero(point),"accessor bounds clearing");
+    }
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+    const int expected[]={0,1,2,3,4,4};
+    for (int stage:{37,38,39,40}) for (int kind=1;kind<=5;++kind) {
+        auto *result=raw;
+        opencv_calib3d_test_fail(stage,kind);
+        check(opencv_calib3d_triangulate_normalized(fraw,sraw,&pose,&result)==expected[kind] &&
+              result==nullptr,"triangulation fault atomicity");
+    }
+    for (int kind=1;kind<=5;++kind) {
+        point={9,9,9,9,9,9,9,9};
+        opencv_calib3d_test_fail(41,kind);
+        check(opencv_calib3d_triangulation_result_point(raw,0,&point)==expected[kind] &&
+              zero(point),"triangulation fault accessor clearing");
+    }
+    const double fixtures[][4]={{2,1,5,0},{.4,.2,1,1e-300},{2,1,-5,1},{100,1,1e-307,1},
+        {NAN,1,5,1},{2,INFINITY,5,1},{2,1,-INFINITY,1},{2,1,5,NAN}};
+    const int statuses[]={1,0,3,4,2,2,2,2};
+    for (int i=0;i<8;++i) {
+        const auto &h=fixtures[i];
+        opencv_calib3d_test_triangulation_h(h[0],h[1],h[2],h[3]);
+        opencv_calib3d_triangulation_result_handle *batch=nullptr;
+        check(opencv_calib3d_triangulate_normalized(fraw,sraw,&pose,&batch)==0,"injected homogeneous after native execution");
+        check(opencv_calib3d_triangulation_result_point(batch,0,&point)==0 && point.status==statuses[i],"homogeneous classification");
+        if (point.status!=0) {
+            point.status=0; check(zero(point),"all invalid numeric fields zero");
+        }
+        check(opencv_calib3d_triangulation_result_point(batch,1,&point)==0 && point.status==3,"mixed batch retains second point");
+        opencv_calib3d_triangulation_result_destroy(batch);
+    }
+    opencv_calib3d_test_triangulation_unknown();
+    check(opencv_calib3d_triangulation_result_point(raw,0,&point)==0 && point.status==867,"unknown classification successful accessor");
+    check(opencv_calib3d_test_triangulation_live()==1,"fault batch cleanup");
+#endif
+    const auto single=[&](cv::Vec2d a,cv::Vec2d b,const opencv_calib3d_relative_pose &p) {
+        auto one=matrix(1,1,OPENCV_CORE_DEPTH_FLOAT64,2),two=matrix(1,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+        output(one.get()).at<cv::Vec2d>(0,0)=a; output(two.get()).at<cv::Vec2d>(0,0)=b;
+        opencv_calib3d_triangulation_result_handle *batch=nullptr;
+        check(opencv_calib3d_triangulate_normalized(one.get(),two.get(),&p,&batch)==0,"one-point native triangulation");
+        opencv_calib3d_triangulated_point value{};
+        check(opencv_calib3d_triangulation_result_point(batch,0,&value)==0,"one-point accessor");
+        opencv_calib3d_triangulation_result_destroy(batch);
+        return value;
+    };
+    const opencv_calib3d_relative_pose axial{1,0,0,0,1,0,0,0,1,0,0,-1};
+    check(single({.4,0},{-.4,0},axial).status==3,"second-only negative depth +.5/-.5");
+    auto reverse_axial=axial; reverse_axial.tz=1;
+    check(single({-.4,0},{.4,0},reverse_axial).status==3,"first-only negative depth -.5/+.5");
+    const auto parallel=single({.4,.2},{.4,.2},pose);
+    std::cout << "Triangulation parallel native status=" << parallel.status << " depth=" << parallel.depth_first << '\n';
+    check(parallel.status>=0 && parallel.status<=4,"parallel classified by finite/depth policy");
+    const auto near=single({.4,.2},{.4-1e-12,.2},pose);
+    check(near.status==0 && near.z>1e11,"small nonzero disparity finite geometry");
+    const auto noisy=single({.4,.2},{.2,.23},pose);
+    check(noisy.status==0 && std::abs(noisy.error_first-std::hypot(noisy.x/noisy.z-.4,noisy.y/noisy.z-.2))<1e-12 &&
+          std::abs(noisy.error_second-std::hypot((noisy.x-1)/noisy.z-.2,noisy.y/noisy.z-.23))<1e-12,
+          "independent noisy scalar reprojection");
+    const double c=std::cos(.08),s=std::sin(.08),norm=std::hypot(-.75,.08,.12);
+    const cv::Matx33d rotation(c,0,s,0,1,0,-s,0,c);
+    const cv::Vec3d translation(-.75,.08,.12),unit=translation/norm;
+    const opencv_calib3d_relative_pose nonidentity{c,0,s,0,1,0,-s,0,c,unit[0],unit[1],unit[2]};
+    const auto rt=rotation.t(); const auto tr=-rt*unit;
+    const opencv_calib3d_relative_pose reverse{rt(0,0),rt(0,1),rt(0,2),rt(1,0),rt(1,1),rt(1,2),
+        rt(2,0),rt(2,1),rt(2,2),tr[0],tr[1],tr[2]};
+    double forward_error=0,reverse_error=0;
+    for (int j=0;j<40;++j) {
+        const cv::Vec3d x(((j*7)%17-8)*.24,((j*11)%19-9)*.19,4+((j*13)%23)*.17);
+        const auto y=rotation*x+translation;
+        const cv::Vec2d a(x[0]/x[2],x[1]/x[2]),b(y[0]/y[2],y[1]/y[2]);
+        const auto f=single(a,b,nonidentity),back=single(b,a,reverse);
+        check(f.status==0 && back.status==0,"nonidentity/reverse usable");
+        forward_error=std::max(forward_error,cv::norm(cv::Vec3d(f.x,f.y,f.z)-x/norm));
+        reverse_error=std::max(reverse_error,cv::norm(cv::Vec3d(back.x,back.y,back.z)-y/norm));
+    }
+    check(forward_error<1e-8 && reverse_error<1e-8,"independent nonidentity/inverse-frame geometry");
+    std::cout << "Triangulation raw maximum nonidentity/inverse errors=" << forward_error << '/' << reverse_error << '\n';
+    opencv_calib3d_triangulation_result_destroy(nullptr);
+    std::cout << "PASS: Float64 triangulation rectified/behind, real strided Regions, typed empty, raw negatives/faults\n";
+}
+
 int main() {
     try {
         run();
+        triangulation_boundary();
         return 0;
     } catch (const std::exception &error) {
         std::cerr << "FAIL: " << error.what() << '\n';
