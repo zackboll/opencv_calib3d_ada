@@ -24,3 +24,8 @@ or geospatial integration is included. See [progress](triangulation-validation.m
 Task 005: robust fundamental-matrix epipolar verification only (see its contract).
 Task 006: Essential matrix and relative camera pose; not part of Task 005.
 Standalone normalized triangulation was added in Task 007.
+
+Task 009 adds bounded normalized point-only refinement at fixed relative pose.
+See [contract](triangulation-refinement-contract.md) and
+[qualification](triangulation-refinement-validation.md). It does not add bundle
+adjustment, metric scale, covariance, depth uncertainty or navigation conversion.

@@ -229,3 +229,15 @@ assign geographic meaning to `(X,Y,Z)`.
 ## License
 
 Apache-2.0; see `LICENSE` and `NOTICE`.
+
+## Point-only normalized refinement
+
+`Refine_Triangulated_Points` adds bounded pure-Ada damped Gauss-Newton after
+linear triangulation and caller parallax screening. Pose and unit-baseline gauge
+stay fixed; only strictly decreasing, positive-depth updates publish new point
+coordinates and recomputed diagnostics. Inputs remain immutable. Default budget
+is 20 (maximum 100), and default minimum parallax is zero.
+See [contract](docs/triangulation-refinement-contract.md) and
+[executed qualification](docs/triangulation-refinement-validation.md).
+`triangulation_synthetic` demonstrates clean/noisy correspondences. This minimizes
+normalized reprojection residual, not metric 3-D error or covariance.

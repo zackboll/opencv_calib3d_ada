@@ -8,6 +8,7 @@ with Interfaces;
 with Interfaces.C;
 with OpenCV.Calib3D;
 with OpenCV.Calib3D.Internal.C_API;
+with OpenCV.Calib3D.Internal.Point_Refinement;
 with System;
 
 package body Calib3D_Tests is
@@ -2322,11 +2323,34 @@ package body Calib3D_Tests is
            (Selected_First, Selected_Second, Recovered_Pose (Estimate), Points,
             (Maximum_Normalized_Reprojection_Error => 1.0E-10, others => <>));
          Minimum_Angle : OpenCV.Float64_Value := OpenCV.Float64_Value'Last;
+         Refined : constant Point_Refinement_Result_Array := Refine_Triangulated_Points
+           (Selected_First, Selected_Second, Recovered_Pose (Estimate), Points);
+         Snapshot : constant Triangulated_Point_Array := Points;
+         Counts : array (Point_Refinement_Outcome) of Natural := [others => 0];
          Maximum_Angle, Maximum : OpenCV.Float64_Value := 0.0;
          Usable_Count, Default_Count, Angular_Count, Residual_Count : Natural := 0;
       begin
          Assert (Points'Length = 40 and then Quality'Length = 40 and then Angles'Length = 40,
            "composition forty selected/triangulated/assessed");
+         Assert (Refined'Length = 40, "composition forty refined");
+         for I in Refined'Range loop
+            Counts (Refined (I).Outcome) := Counts (Refined (I).Outcome) + 1;
+            Assert (not Refined (I).Residuals_Evaluated or else
+              Refined (I).Final_Normalized_RMS <= Refined (I).Initial_Normalized_RMS, "composition nonworsening");
+            if Refined (I).Outcome = Improved then
+               Assert (Refined (I).Point.Status = Usable and then Refined (I).Point.First_Depth > 0.0 and then
+                 Refined (I).Point.Second_Depth > 0.0 and then Refined (I).Point.First_Normalized_Error >= 0.0 and then
+                 Refined (I).Point.First_Normalized_Error <= OpenCV.Float64_Value'Last and then
+                 Refined (I).Point.Second_Normalized_Error >= 0.0 and then
+                 Refined (I).Point.Second_Normalized_Error <= OpenCV.Float64_Value'Last, "composition updated diagnostics");
+            else
+               Assert (Refined (I).Point = Points (I), "composition correspondence preservation");
+            end if;
+         end loop;
+         Assert (Points = Snapshot, "composition no initial mutation");
+         for Outcome in Point_Refinement_Outcome loop
+            Ada.Text_IO.Put_Line ("Refinement composition " & Point_Refinement_Outcome'Image (Outcome) & Natural'Image (Counts (Outcome)));
+         end loop;
          for I in Quality'Range loop
             Assert (Quality (I).Original_Status = Points (I).Status and then
               Angles (I).Forward_Ray_Angle_Radians >= 0.0 and then
@@ -2442,6 +2466,293 @@ package body Calib3D_Tests is
       end;
       Ada.Text_IO.Put_Line ("Parallax inverse maximum error=" & OpenCV.Float64_Value'Image (Maximum));
    end Parallax_Frames;
+
+   package Refinement_Kernel renames OpenCV.Calib3D.Internal.Point_Refinement;
+
+   function Independent_Projection (X : Object_Point; P : Relative_Camera_Pose)
+      return Refinement_Kernel.Residual_Vector
+   is
+      Q : Object_Point := [others => 0.0];
+      Norm : constant OpenCV.Float64_Value := Math.Sqrt
+        (P.Translation_Direction (0) ** 2 + P.Translation_Direction (1) ** 2 +
+         P.Translation_Direction (2) ** 2);
+   begin
+      for I in 0 .. 2 loop
+         Q (I) := P.Translation_Direction (I) / Norm;
+         for J in 0 .. 2 loop
+            Q (I) := Q (I) + P.Rotation_First_To_Second (I, J) * X (J);
+         end loop;
+      end loop;
+      return [X (0) / X (2), X (1) / X (2), Q (0) / Q (2), Q (1) / Q (2)];
+   end Independent_Projection;
+
+   function Independent_RMS (X : Object_Point; P : Relative_Camera_Pose;
+                             A, B : Normalized_Image_Point) return OpenCV.Float64_Value is
+      V : constant Refinement_Kernel.Residual_Vector := Independent_Projection (X, P);
+   begin
+      --  Bounded fixtures only: this independent oracle may safely square.
+      return Math.Sqrt ((V (0) - A (0)) ** 2 + (V (1) - A (1)) ** 2 +
+                        (V (2) - B (0)) ** 2 + (V (3) - B (1)) ** 2) / 2.0;
+   end Independent_RMS;
+
+   procedure Refinement_Jacobian (T : in out Fixture) is
+      pragma Unreferenced (T);
+      P : Relative_Camera_Pose;
+      X : constant Object_Point := [2.0, 1.0, 5.0];
+      Plus, Minus : Object_Point;
+      V : Refinement_Kernel.Evaluation;
+      Fp, Fm : Refinement_Kernel.Residual_Vector;
+      H : constant OpenCV.Float64_Value := 1.0E-5;
+      Maximum : OpenCV.Float64_Value := 0.0;
+   begin
+      for Fixture_Index in 1 .. 2 loop
+         P := (if Fixture_Index = 1 then Stereo_Pose else
+           (E_Rotation, [E_Translation (0) / E_Norm, E_Translation (1) / E_Norm, E_Translation (2) / E_Norm]));
+         Assert (Refinement_Kernel.Evaluate (X, [0.4, 0.2], [0.2, 0.2], P, V), "Jacobian evaluated");
+         for Col in 0 .. 2 loop
+            Plus := X; Minus := X;
+            Plus (Col) := Plus (Col) + H;
+            Minus (Col) := Minus (Col) - H;
+            Fp := Independent_Projection (Plus, P);
+            Fm := Independent_Projection (Minus, P);
+            for Row in 0 .. 3 loop
+               Maximum := OpenCV.Float64_Value'Max (Maximum,
+                 abs (V.Jacobian (Row, Col) - (Fp (Row) - Fm (Row)) / (2.0 * H)));
+               Assert (Near (V.Jacobian (Row, Col), (Fp (Row) - Fm (Row)) / (2.0 * H), 1.0E-9),
+                 "independent central difference component");
+            end loop;
+         end loop;
+      end loop;
+      Ada.Text_IO.Put_Line ("Refinement Jacobian maximum absolute error=" & OpenCV.Float64_Value'Image (Maximum));
+   end Refinement_Jacobian;
+
+   procedure Refinement_Solver (T : in out Fixture) is
+      pragma Unreferenced (T);
+      V : Refinement_Kernel.Evaluation := (Residual => [0.1, -0.2, 0.3, 0.0],
+        Jacobian => [[2.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 2.0], [0.0, 0.0, 0.0]],
+        others => 0.0);
+      Update : Object_Point;
+      E : Refinement_Kernel.Evaluation;
+      Product : OpenCV.Float64_Value;
+   begin
+      Assert (Refinement_Kernel.Step (V, 0.001, Update), "SPD damped solve");
+      for I in 0 .. 2 loop
+         Assert (Near (1.001 * Update (I) * 2.0, -V.Residual (I), 1.0E-14), "scaled normal residual and negative gradient");
+      end loop;
+      V.Jacobian := [[1.0, 0.2, -0.3], [0.1, 1.0, 0.4], [0.3, -0.2, 1.0], [0.7, 0.2, -0.5]];
+      Assert (Refinement_Kernel.Step (V, 0.001, Update), "coupled SPD solve");
+      for I in 0 .. 2 loop
+         Product := 0.001 * Update (I);
+         for Row in 0 .. 3 loop
+            Product := Product + V.Jacobian (Row, I) * V.Residual (Row);
+            for Col in 0 .. 2 loop
+               Product := Product + V.Jacobian (Row, I) * V.Jacobian (Row, Col) * Update (Col);
+            end loop;
+         end loop;
+         Assert (abs Product < 1.0E-13, "independent coupled damped normal residual");
+      end loop;
+      V.Jacobian := [others => [others => 0.0]];
+      Assert (not Refinement_Kernel.Step (V, 0.001, Update), "zero Jacobian not zero solve");
+      Assert (Update (0) = 0.0, "failure output initialized, not an accepted solve");
+      Assert (not Refinement_Kernel.Evaluate ([1.0, 1.0, -1.0], [0.0, 0.0], [0.0, 0.0], Stereo_Pose, E),
+        "nonpositive trial rejected");
+      Assert (E.Norm = 0.0, "failed evaluation not consumed");
+      Assert (not Refinement_Kernel.Evaluate ([OpenCV.Float64_Value'Last, 0.0, 1.0E-300],
+        [0.0, 0.0], [0.0, 0.0], Stereo_Pose, E), "overflow trial rejected");
+      Assert (E.Norm = 0.0, "overflow evaluation not consumed");
+   end Refinement_Solver;
+
+   procedure Refinement_Geometry (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant Normalized_Image_Point_Array (4 .. 4) := [[0.4, 0.2]];
+      B : Normalized_Image_Point_Array (8 .. 8);
+      P, Saved : Relative_Camera_Pose;
+      Projection : Refinement_Kernel.Residual_Vector;
+   begin
+      for Fixture_Index in 1 .. 3 loop
+         P := (if Fixture_Index < 3 then Stereo_Pose else (E_Rotation, E_Translation));
+         Saved := P;
+         Projection := Independent_Projection ([2.0, 1.0, 5.0], P);
+         B (8) := [Projection (2), Projection (3)];
+         if Fixture_Index > 1 then
+            B (8) (0) := B (8) (0) + 0.025;
+            B (8) (1) := B (8) (1) - 0.04;
+         end if;
+         declare
+            Initial : constant Triangulated_Point_Array := Triangulate_Normalized (A, B, P);
+            Copy : constant Triangulated_Point_Array := Initial;
+            Results : constant Point_Refinement_Result_Array := Refine_Triangulated_Points (A, B, P, Initial);
+            R : Point_Refinement_Result renames Results (1);
+            Before : constant OpenCV.Float64_Value := Independent_RMS (Initial (1).Position_In_First_Camera, P, A (4), B (8));
+            After : constant OpenCV.Float64_Value := Independent_RMS (R.Point.Position_In_First_Camera, P, A (4), B (8));
+            Previous : OpenCV.Float64_Value := R.Initial_Normalized_RMS;
+         begin
+            Assert (Initial = Copy and then P = Saved, "input points and pose unchanged");
+            Assert (R.Point.Status = Usable and then R.Point.First_Depth > 0.0 and then R.Point.Second_Depth > 0.0,
+              "positive usable geometry");
+            Assert (R.Residuals_Evaluated and then After <= Before and then R.Final_Normalized_RMS <= R.Initial_Normalized_RMS,
+              "independent nonworsening objective");
+            if Fixture_Index > 1 then
+               Assert (R.Outcome = Improved and then R.Accepted_Steps > 0 and then After < Before, "genuine DLT noisy improvement");
+            end if;
+            if R.Accepted_Steps = 0 then Assert (R.Point = Initial (1), "no drift without acceptance"); end if;
+            Projection := Independent_Projection (R.Point.Position_In_First_Camera, P);
+            if R.Outcome = Improved then
+               Assert (Near (R.Point.First_Normalized_Error, Math.Sqrt
+                 ((Projection (0) - A (4) (0)) ** 2 + (Projection (1) - A (4) (1)) ** 2), 1.0E-12) and then
+                 Near (R.Point.Second_Normalized_Error, Math.Sqrt
+                 ((Projection (2) - B (8) (0)) ** 2 + (Projection (3) - B (8) (1)) ** 2), 1.0E-12), "fixed-pose independent updated errors");
+            end if;
+            for Budget in 1 .. 20 loop
+               declare
+                  Bounded : constant Point_Refinement_Result_Array := Refine_Triangulated_Points
+                    (A, B, P, Initial, (Maximum_Iterations => Budget, others => <>));
+                  Objective : constant OpenCV.Float64_Value := Bounded (1).Final_Normalized_RMS;
+               begin
+                  Assert (Bounded (1).Accepted_Steps <= Budget and then Objective <= Previous, "bounded deterministic prefix monotonicity");
+                  if Bounded (1).Accepted_Steps > Budget - 1 then
+                     Assert (Objective < Previous, "every accepted prefix strictly improves");
+                  end if;
+                  Previous := Objective;
+               end;
+            end loop;
+            Ada.Text_IO.Put_Line ("Refinement fixture" & Integer'Image (Fixture_Index) & " " & Point_Refinement_Outcome'Image (R.Outcome) &
+              " steps=" & Natural'Image (R.Accepted_Steps) & " independent RMS before/after=" &
+              OpenCV.Float64_Value'Image (Before) & OpenCV.Float64_Value'Image (After));
+         end;
+      end loop;
+   end Refinement_Geometry;
+
+   procedure Refinement_Batch (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant Normalized_Image_Point_Array (4 .. 10) :=
+        [[0.4, 0.2], [0.4, 0.2], [0.0, 0.0], others => [0.0, 0.0]];
+      B : constant Normalized_Image_Point_Array (12 .. 18) :=
+        [[0.2, 0.2], [0.225, 0.16], [-1.0E-8, 0.0], others => [0.0, 0.0]];
+      Seed : constant Triangulated_Point_Array := Triangulate_Normalized (A, B, Stereo_Pose);
+      Initial : Triangulated_Point_Array (20 .. 26);
+   begin
+      Initial (20 .. 22) := Seed (1 .. 3);
+      Initial (23) := (Status => At_Infinity);
+      Initial (24) := (Status => Unrepresentable_Point);
+      Initial (25) := (Status => Non_Positive_Depth);
+      Initial (26) := (Status => Undefined_Reprojection);
+      declare
+         Copy : constant Triangulated_Point_Array := Initial;
+         Results : constant Point_Refinement_Result_Array := Refine_Triangulated_Points
+           (A, B, Stereo_Pose, Initial, (Minimum_Acute_Parallax_Radians => 1.0E-6, others => <>));
+         Default : constant Point_Refinement_Result_Array := Refine_Triangulated_Points (A, B, Stereo_Pose, Initial);
+      begin
+         Assert (Results'First = 1 and then Results'Length = 7 and then Initial = Copy, "mixed bounds ordering and immutable input");
+         Assert (Results (2).Outcome = Improved, "noisy point improves independently of difficult entries");
+         Assert (Seed (3).Status = Usable and then Results (3).Outcome = Skipped_Low_Parallax and then
+           Results (3).Point = Initial (22) and then Results (3).Accepted_Steps = 0 and then
+           not Results (3).Residuals_Evaluated, "caller low-parallax screening preserves usable value");
+         Assert (Default (3).Outcome /= Skipped_Low_Parallax, "zero minimum no hidden rejection");
+         for I in 4 .. 7 loop
+            Assert (Results (I).Outcome = Skipped_Unusable and then Results (I).Point = Initial (19 + I) and then
+              Results (I).Accepted_Steps = 0 and then not Results (I).Residuals_Evaluated and then
+              Results (I).Initial_Normalized_RMS = 0.0 and then Results (I).Final_Normalized_RMS = 0.0,
+              "nonusable exact preservation and no absent-field access");
+         end loop;
+         Ada.Text_IO.Put_Line ("Refinement low-parallax screened/default=" & Point_Refinement_Outcome'Image (Results (3).Outcome) &
+           " / " & Point_Refinement_Outcome'Image (Default (3).Outcome));
+      end;
+   end Refinement_Batch;
+
+   procedure Point_Refinement_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check); --  Deliberately inject IEEE nonfinite arguments.
+      Empty : constant Normalized_Image_Point_Array (1 .. 0) := [];
+      A : constant Normalized_Image_Point_Array := [[0.4, 0.2]];
+      B : constant Normalized_Image_Point_Array := [[0.2, 0.2]];
+      Good : constant Triangulated_Point_Array := Triangulate_Normalized (A, B, Stereo_Pose);
+      P : Relative_Camera_Pose;
+      Bad : Triangulated_Point_Array := Good;
+      Obs : Normalized_Image_Point_Array := A;
+      procedure Reject (First, Second : Normalized_Image_Point_Array;
+                        Pose : Relative_Camera_Pose; Points : Triangulated_Point_Array;
+                        Options : Triangulation_Refinement_Options := (others => <>)) is
+      begin
+         declare
+            R : constant Point_Refinement_Result_Array := Refine_Triangulated_Points (First, Second, Pose, Points, Options);
+         begin
+            Assert (R'Length = Natural'Last, "expected malformed refinement rejection");
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Reject;
+   begin
+      Assert (Refine_Triangulated_Points (Empty, Empty, Stereo_Pose, [1 .. 0 => <>])'Length = 0, "validated empty refinement");
+      declare
+         Exact : constant Triangulated_Point_Array := [(Usable, [2.0, 1.0, 5.0], 9.0, 8.0, 7.0, 6.0)];
+         R : constant Point_Refinement_Result_Array := Refine_Triangulated_Points (A, B, Stereo_Pose, Exact);
+      begin
+         Assert (R (1).Outcome = No_Improving_Step and then R (1).Point = Exact (1) and then
+           R (1).Accepted_Steps = 0 and then R (1).Residuals_Evaluated and then
+           R (1).Initial_Normalized_RMS = 0.0 and then R (1).Final_Normalized_RMS = 0.0,
+           "exact zero stops without drift; reported diagnostics are not objective");
+      end;
+      Reject (A, Empty, Stereo_Pose, Good);
+      Reject (A, B, Stereo_Pose, [1 .. 0 => <>]);
+      Reject (Empty, Empty, Stereo_Pose, [1 .. 0 => <>], (Maximum_Iterations => 101, others => <>));
+      Reject (A, B, Stereo_Pose, Good, (Minimum_Acute_Parallax_Radians => -0.01, others => <>));
+      Reject (A, B, Stereo_Pose, Good, (Minimum_Acute_Parallax_Radians => 2.0, others => <>));
+      for Kind in 0 .. 2 loop
+         declare
+            V : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Interfaces.Integer_32 (Kind)));
+         begin
+            Reject (A, B, Stereo_Pose, Good, (Minimum_Acute_Parallax_Radians => V, others => <>));
+            Obs := A; Obs (1) (0) := V; Reject (Obs, B, Stereo_Pose, Good);
+            Obs := B; Obs (1) (1) := V; Reject (A, Obs, Stereo_Pose, Good);
+            P := Stereo_Pose; P.Translation_Direction (0) := V; Reject (Empty, Empty, P, [1 .. 0 => <>]);
+            P := Stereo_Pose; P.Rotation_First_To_Second (0, 0) := V; Reject (A, B, P, Good);
+            Bad := Good; Bad (1).Position_In_First_Camera (0) := V; Reject (A, B, Stereo_Pose, Bad);
+            Bad := Good; Bad (1).First_Depth := V; Reject (A, B, Stereo_Pose, Bad);
+            Bad := Good; Bad (1).Second_Depth := V; Reject (A, B, Stereo_Pose, Bad);
+            Bad := Good; Bad (1).First_Normalized_Error := V; Reject (A, B, Stereo_Pose, Bad);
+            Bad := Good; Bad (1).Second_Normalized_Error := V; Reject (A, B, Stereo_Pose, Bad);
+         end;
+      end loop;
+      P := Stereo_Pose; P.Translation_Direction := [others => 0.0]; Reject (Empty, Empty, P, [1 .. 0 => <>]);
+      P := Stereo_Pose; P.Rotation_First_To_Second (0, 0) := 1.01; Reject (A, B, P, Good);
+      P := Stereo_Pose; P.Rotation_First_To_Second (0, 0) := -1.0; Reject (Empty, Empty, P, [1 .. 0 => <>]);
+      Bad := Good; Bad (1).Position_In_First_Camera (2) := -1.0; Reject (A, B, Stereo_Pose, Bad);
+      P := Stereo_Pose; P.Rotation_First_To_Second := [[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]];
+      Reject (A, B, P, Good);
+      Bad := Good; Bad (1).First_Depth := 0.0; Reject (A, B, Stereo_Pose, Bad);
+      Bad := Good; Bad (1).Second_Depth := -1.0; Reject (A, B, Stereo_Pose, Bad);
+      Bad := Good; Bad (1).First_Normalized_Error := -1.0; Reject (A, B, Stereo_Pose, Bad);
+      Bad := Good; Bad (1).Second_Normalized_Error := -1.0; Reject (A, B, Stereo_Pose, Bad);
+   end Point_Refinement_Invalid;
+
+   procedure Refinement_Extremes (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant Normalized_Image_Point_Array := [[0.0, 0.0]];
+      Initial : Triangulated_Point_Array := [(Usable, [0.0, 0.0, 1.0], 1.0, 1.0, 0.0, 0.0)];
+      Tiny : OpenCV.Float64_Value := OpenCV.Float64_Value'Model_Small;
+   begin
+      Tiny := Tiny / 100.0;
+      for Fixture_Index in 1 .. 3 loop
+         Initial (1).Position_In_First_Camera :=
+           (case Fixture_Index is
+             when 1 => [OpenCV.Float64_Value'Last, 0.0, 1.0E-300],
+             when 2 => [0.0, 0.0, Tiny],
+             when others => [0.0, 0.0, OpenCV.Float64_Value'Last]);
+         declare
+            R : constant Point_Refinement_Result_Array := Refine_Triangulated_Points (A, A, Stereo_Pose, Initial);
+         begin
+            Ada.Text_IO.Put_Line ("Refinement extreme" & Integer'Image (Fixture_Index) & " " & Point_Refinement_Outcome'Image (R (1).Outcome));
+            Assert (R (1).Outcome /= Skipped_Low_Parallax and then R (1).Outcome /= Skipped_Unusable,
+              "difficult finite geometry attempted without constraint error or coordinate clamps");
+            if R (1).Outcome = Improved then
+               Assert (R (1).Final_Normalized_RMS < R (1).Initial_Normalized_RMS, "extreme improvement strictly decreases");
+            else
+               Assert (R (1).Point = Initial (1) and then R (1).Accepted_Steps = 0, "extreme original preserved");
+            end if;
+         end;
+      end loop;
+   end Refinement_Extremes;
 
    procedure Quality_Boundaries (T : in out Fixture) is
       pragma Unreferenced (T);
@@ -2659,6 +2970,12 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("Quality_Low_Parallax", Quality_Low_Parallax'Access));
       Result.Add_Test (Caller.Create ("Quality_Noisy", Quality_Noisy'Access));
       Result.Add_Test (Caller.Create ("Quality_Invalid", Quality_Invalid'Access));
+      Result.Add_Test (Caller.Create ("refinement independent analytic Jacobian", Refinement_Jacobian'Access));
+      Result.Add_Test (Caller.Create ("refinement scaled damped solver and trial rejection", Refinement_Solver'Access));
+      Result.Add_Test (Caller.Create ("refinement clean noisy fixed pose and monotonicity", Refinement_Geometry'Access));
+      Result.Add_Test (Caller.Create ("refinement low parallax mixed batch preservation", Refinement_Batch'Access));
+      Result.Add_Test (Caller.Create ("refinement malformed input and empty validation", Point_Refinement_Invalid'Access));
+      Result.Add_Test (Caller.Create ("refinement extreme finite numerical preservation", Refinement_Extremes'Access));
       Result.Add_Test (Caller.Create ("Parallax_Large", Parallax_Large'Access));
       return Result;
    end Suite;

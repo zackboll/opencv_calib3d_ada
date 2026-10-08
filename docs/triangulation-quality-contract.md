@@ -57,3 +57,10 @@ requires measurement-noise, calibration, pose and baseline assumptions not
 provided here. No automatic rejection, refinement or correspondence removal
 is performed. Native C ABI remains 43 exports/imports; no new native call,
 handle, dependency or fault checkpoint is added.
+
+## Optional subsequent point refinement
+
+Task 009's [point-refinement API](triangulation-refinement-contract.md) is separate
+from this unchanged assessment API. It reuses acute parallax as caller policy,
+with zero default minimum, and never changes input statuses or arrays. Improved
+coordinates still have unknown metric scale and no covariance/depth guarantee.

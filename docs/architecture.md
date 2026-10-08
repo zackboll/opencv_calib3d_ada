@@ -91,3 +91,12 @@ two point-to-line errors and no upstream mask. Pure-Ada public diagnostics use
 scaled hypot and undefined geometry rather than epsilon/clamping. At least seven
 final-model inliers are required. Ada independently calculates its final public
 classification. Ownership/exception and macOS fault isolation remain unchanged.
+
+## Task 009 numerical kernel
+
+Point refinement is an implementation-only pure-Ada child package, separate from
+the native C ABI. The public wrapper reuses relative-pose validation and parallax
+measurement; the kernel implements analytic reprojection derivatives, maximum-entry
+Jacobian scaling and checked 3x3 Cholesky with bounded damping. Only point XYZ is
+optimized, at fixed first-camera/unit-baseline geometry. No native imports or
+exports were added (43 unchanged). See [contract](triangulation-refinement-contract.md).

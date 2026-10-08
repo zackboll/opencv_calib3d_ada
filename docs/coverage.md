@@ -175,3 +175,14 @@ qualification checks angular R error, R^T R/det, signed t dot/unit norm, and
 normalize(-R^T t) camera-center direction, not E coefficient equality.
 Ordinary Linux/macOS and manual pinned matrix now run all five examples.
 See `essential-validation.md` for executed evidence; inventory is not a pass claim.
+
+## Task 009 inventory
+
+80 AUnit registrations: six new numerical/refinement cases plus the extended
+40-point composition. Coverage includes all analytic Jacobian components against
+independent finite differences, scaled damped solve residual/sign, strict accepted
+prefix monotonicity, real-DLT clean and genuinely noisy seeds, nonidentity fixed
+pose, positive depths, low-parallax caller policy, mixed status preservation,
+malformed arguments and extreme finite arithmetic. Five existing examples and
+six C/C++ profile helpers remain; private native ABI is unchanged at 43.
+See [executed refinement evidence](triangulation-refinement-validation.md).
