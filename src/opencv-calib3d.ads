@@ -149,7 +149,6 @@ package OpenCV.Calib3D is
       Rotation_First_To_Second : Rotation_Matrix;
       Translation_Direction : Camera_Direction;
    end record;
-   --  normalize(-R^T*t_hat): second-camera-center direction in first frame.
    type Triangulation_Status is
      (Usable, At_Infinity, Unrepresentable_Point, Non_Positive_Depth,
       Undefined_Reprojection);
@@ -179,6 +178,7 @@ package OpenCV.Calib3D is
      (First_Points, Second_Points : Normalized_Image_Point_Array;
       Pose : Relative_Camera_Pose) return Triangulated_Point_Array;
 
+   --  normalize(-R^T*t_hat): second-camera-center direction in first frame.
    function Second_Camera_Center_Direction_In_First
      (Pose : Relative_Camera_Pose) return Camera_Direction;
    type Essential_Estimate is limited private;

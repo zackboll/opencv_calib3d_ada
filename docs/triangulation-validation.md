@@ -58,6 +58,8 @@ evidence, not Task 007 triangulation evidence. Windows stays post-merge-only.
   not exact zero W. This is not forced into At_Infinity by an epsilon.
 * Local maximum coordinate errors: nonidentity 7.10542735760100e-15;
   inverse 1.06581410364015e-14. Raw Euclidean errors: 8.31408e-15/1.07983e-14.
+* Rectified absolute X/Y/Z errors: 2.22044604925031e-16,
+  2.22044604925031e-16, 8.88178419700125e-16.
 
 ## Remote gates
 
