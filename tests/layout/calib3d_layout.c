@@ -172,3 +172,31 @@ int32_t calib3d_test_essential_options_layout(int32_t field) {
 void calib3d_test_fill_essential_options(opencv_calib3d_essential_options *v) {
     *v = (opencv_calib3d_essential_options){0.001,0.999};
 }
+
+int32_t calib3d_test_planar_layout(int32_t field) {
+    const size_t values[] = {sizeof(opencv_calib3d_planar_motion), _Alignof(opencv_calib3d_planar_motion),
+        offsetof(opencv_calib3d_planar_motion,r00),
+        offsetof(opencv_calib3d_planar_motion,r01),
+        offsetof(opencv_calib3d_planar_motion,r02),
+        offsetof(opencv_calib3d_planar_motion,r10),
+        offsetof(opencv_calib3d_planar_motion,r11),
+        offsetof(opencv_calib3d_planar_motion,r12),
+        offsetof(opencv_calib3d_planar_motion,r20),
+        offsetof(opencv_calib3d_planar_motion,r21),
+        offsetof(opencv_calib3d_planar_motion,r22),
+        offsetof(opencv_calib3d_planar_motion,tx),
+        offsetof(opencv_calib3d_planar_motion,ty),
+        offsetof(opencv_calib3d_planar_motion,tz),
+        offsetof(opencv_calib3d_planar_motion,nx),
+        offsetof(opencv_calib3d_planar_motion,ny),
+        offsetof(opencv_calib3d_planar_motion,nz),
+        sizeof(opencv_calib3d_planar_decomposition), _Alignof(opencv_calib3d_planar_decomposition),
+        offsetof(opencv_calib3d_planar_decomposition,count), offsetof(opencv_calib3d_planar_decomposition,candidates),
+        sizeof(opencv_calib3d_planar_motion),
+        offsetof(opencv_calib3d_planar_decomposition,candidates[0]), offsetof(opencv_calib3d_planar_decomposition,candidates[1]), offsetof(opencv_calib3d_planar_decomposition,candidates[2]), offsetof(opencv_calib3d_planar_decomposition,candidates[3])};
+    return field >= 0 && field < 26 ? (int32_t)values[field] : -1;
+}
+void calib3d_test_fill_planar(opencv_calib3d_planar_decomposition *v) {
+    v->count=4;
+    for (int i=0;i<4;++i) v->candidates[i]=(opencv_calib3d_planar_motion){1+i*100,2+i*100,3+i*100,4+i*100,5+i*100,6+i*100,7+i*100,8+i*100,9+i*100,10+i*100,11+i*100,12+i*100,13+i*100,14+i*100,15+i*100};
+}

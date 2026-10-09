@@ -32,6 +32,48 @@ procedure Run_Refinement_Faults is
       end if;
    end Check;
 begin
+   declare
+      H : constant Homography_Matrix := [[1.0, 0.0, -0.12], [0.0, 1.0, 0.04], [0.0, 0.0, 1.08]];
+      Identity : constant Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);
+      procedure Control (Mode : Interfaces.C.int)
+        with Import, Convention => C, External_Name => "opencv_calib3d_test_planar_control";
+   begin
+      for Stage in Interfaces.C.int range 42 .. 45 loop
+         for Kind in Interfaces.C.int range 1 .. 5 loop
+            Fail (Stage, Kind);
+            begin
+               declare
+                  V : constant Planar_Motion_Hypothesis_Array := Decompose_Calibrated_Homography (H, Identity);
+                  pragma Unreferenced (V);
+               begin
+                  raise Program_Error with "planar injection accepted";
+               end;
+            exception
+               when OpenCV.OpenCV_Error => null;
+            end;
+         end loop;
+      end loop;
+      Control (1);
+      declare
+         V : constant Planar_Motion_Hypothesis_Array := Decompose_Calibrated_Homography (H, Identity);
+      begin
+         Check (V'First = 1 and then V'Length = 0, "test-only post-native zero result");
+      end;
+      for Mode in Interfaces.C.int range 2 .. 4 loop
+         Control (Mode);
+         begin
+            declare
+               V : constant Planar_Motion_Hypothesis_Array := Decompose_Calibrated_Homography (H, Identity);
+               pragma Unreferenced (V);
+            begin
+               raise Program_Error with "malformed native planar accepted";
+            end;
+         exception
+            when OpenCV.OpenCV_Error => null;
+         end;
+      end loop;
+      Ada.Text_IO.Put_Line ("PASS: Ada planar 20 exceptions + test-only post-native zero/malformed controls");
+   end;
    Return_False;
    Refine_Pose_Iterative (World, Images, K, Pose => P, Refined => Refined);
    Check (not Refined and then P = Initial, "false result changed Ada pose/flag");

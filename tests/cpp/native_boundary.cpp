@@ -22,6 +22,7 @@ extern "C" void opencv_calib3d_test_essential_no_pose(void);
 extern "C" void opencv_calib3d_test_triangulation_h(double,double,double,double);
 extern "C" void opencv_calib3d_test_triangulation_unknown(void);
 extern "C" int opencv_calib3d_test_triangulation_live(void);
+extern "C" void opencv_calib3d_test_planar_control(int);
 #endif
 
 namespace {
@@ -1220,10 +1221,58 @@ void triangulation_boundary() {
     std::cout << "PASS: Float64 triangulation rectified/behind, real strided Regions, typed empty, raw negatives/faults\n";
 }
 
+void planar_boundary() {
+    const double c=std::cos(.08),s=std::sin(.08);
+    const opencv_calib3d_homography h{c,0,s-.12,0,1,.04,-s,0,c+.08};
+    const opencv_calib3d_camera_intrinsics k{1,1,0,0};
+    opencv_calib3d_planar_decomposition out{};
+    auto zero=[&] {
+        check(out.count==0,"planar failure count");
+        for (const auto &v:out.candidates) {
+            const double fields[]={v.r00,v.r01,v.r02,v.r10,v.r11,v.r12,v.r20,v.r21,v.r22,
+                v.tx,v.ty,v.tz,v.nx,v.ny,v.nz};
+            for (double f:fields) check(f==0,"planar failure all fields zero");
+        }
+    };
+    auto dirty=[&] { out.count=99; for (auto &v:out.candidates) v={1,2,3,4,5,6,7,8,9,10,11,12,13,14,15}; };
+    check(opencv_calib3d_decompose_homography(&h,&k,&out)==0 && out.count==4,"raw general decomposition");
+    for (const auto &v:out.candidates) {
+        const cv::Matx33d rotation(v.r00,v.r01,v.r02,v.r10,v.r11,v.r12,v.r20,v.r21,v.r22);
+        check(cv::norm(rotation.t()*rotation-cv::Matx33d::eye())<1e-9 &&
+              std::abs(cv::determinant(rotation)-1)<1e-9,"proper raw planar rotation");
+    }
+    for (int mode=0;mode<6;++mode) {
+        auto invalid=h; auto bad=k;
+        if (mode==0) invalid={};
+        if (mode==1) invalid={1,0,0,0,1,0,0,0,0};
+        if (mode==2) invalid.h00=std::numeric_limits<double>::quiet_NaN();
+        if (mode==3) bad.focal_x=0;
+        if (mode==4) bad.center_y=std::numeric_limits<double>::infinity();
+        dirty();
+        check(opencv_calib3d_decompose_homography(mode==5 ? nullptr : &invalid,&bad,&out)!=0,"raw invalid planar");
+        zero();
+    }
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+    for (int stage=42;stage<=45;++stage) for (int kind=1;kind<=5;++kind) {
+        dirty(); opencv_calib3d_test_fail(stage,kind);
+        check(opencv_calib3d_decompose_homography(&h,&k,&out)!=0,"raw planar injected exception");
+        zero();
+    }
+    for (int mode=1;mode<=4;++mode) {
+        dirty(); opencv_calib3d_test_planar_control(mode);
+        const auto status=opencv_calib3d_decompose_homography(&h,&k,&out);
+        check(mode==1 ? status==0 : status!=0,"test-only post-native zero/malformed controls");
+        zero();
+    }
+#endif
+    std::cout << "PASS: raw planar production/fault atomicity and candidate rotations\n";
+}
+
 int main() {
     try {
         run();
         triangulation_boundary();
+        planar_boundary();
         return 0;
     } catch (const std::exception &error) {
         std::cerr << "FAIL: " << error.what() << '\n';

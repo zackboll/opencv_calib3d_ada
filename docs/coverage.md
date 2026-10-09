@@ -1,5 +1,15 @@
 # Coverage
 
+## Task 010 calibrated homography decomposition
+
+83 AUnit registrations and 44 private ABI imports/exports. New cases cover
+independent pure/general calibrated motions, five signed projective scales,
+known-motion representation, translation magnitude, sign pairs, reconstruction,
+invalid inputs, and compiler-derived fifteen-field/aggregate interchange.
+Raw/Ada fault coverage uses stages 42..45 and explicitly labeled post-native
+zero/malformed controls. All five existing examples remain required.
+See [validation](planar-motion-validation.md).
+
 Task 008 registers **74 AUnit cases**, preserving all 64 Task 007 cases and
 adding ten focused cases: analytic rectified angle, tiny/zero angle, transpose
 quarter-turn, antiparallel rays, inverse-frame/translation-scale invariance,

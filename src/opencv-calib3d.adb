@@ -291,6 +291,58 @@ package body OpenCV.Calib3D is
      (Interfaces.C.double (Value.Focal_X), Interfaces.C.double (Value.Focal_Y),
       Interfaces.C.double (Value.Center_X), Interfaces.C.double (Value.Center_Y));
 
+   function Decompose_Calibrated_Homography
+     (Matrix : Homography_Matrix; Intrinsics : Camera_Intrinsics)
+      return Planar_Motion_Hypothesis_Array
+   is
+      H : aliased C.C_Homography :=
+        (Interfaces.C.double (Matrix (0, 0)), Interfaces.C.double (Matrix (0, 1)),
+         Interfaces.C.double (Matrix (0, 2)), Interfaces.C.double (Matrix (1, 0)),
+         Interfaces.C.double (Matrix (1, 1)), Interfaces.C.double (Matrix (1, 2)),
+         Interfaces.C.double (Matrix (2, 0)), Interfaces.C.double (Matrix (2, 1)),
+         Interfaces.C.double (Matrix (2, 2)));
+      K : aliased C.C_Camera_Intrinsics := To_C (Intrinsics);
+      Native : aliased C.C_Planar_Decomposition;
+   begin
+      Validate (Intrinsics);
+      C.Check (C.Decompose_Homography (H'Access, K'Access, Native'Access),
+               "Decompose_Calibrated_Homography");
+      if Native.Count < 0 or else Native.Count > 4 then
+         raise OpenCV.OpenCV_Error with "Malformed planar hypothesis count";
+      end if;
+      return Result : Planar_Motion_Hypothesis_Array (1 .. Natural (Native.Count)) do
+         for I in Result'Range loop
+            declare
+               V : constant C.C_Planar_Motion := Native.Candidates (I);
+               Values : constant array (Positive range 1 .. 15) of Interfaces.C.double :=
+                 [V.R00, V.R01, V.R02, V.R10, V.R11, V.R12, V.R20, V.R21, V.R22,
+                  V.TX, V.TY, V.TZ, V.NX, V.NY, V.NZ];
+            begin
+               for X of Values loop
+                  if not Is_Finite (OpenCV.Float64_Value (X)) then
+                     raise OpenCV.OpenCV_Error with "Nonfinite planar hypothesis";
+                  end if;
+               end loop;
+               for Row in 0 .. 2 loop
+                  for Col in 0 .. 2 loop
+                     Result (I).Rotation_First_To_Second (Row, Col) :=
+                       OpenCV.Float64_Value (Values (Row * 3 + Col + 1));
+                  end loop;
+                  Result (I).Translation_Over_Plane_Distance (Row) :=
+                    OpenCV.Float64_Value (Values (10 + Row));
+                  Result (I).Plane_Normal_In_First (Row) :=
+                    OpenCV.Float64_Value (Values (13 + Row));
+               end loop;
+               Result (I).Pure_Rotation :=
+                 (for all J in 10 .. 15 => OpenCV.Float64_Value (Values (J)) = 0.0);
+            end;
+         end loop;
+      end return;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Unrepresentable planar decomposition";
+   end Decompose_Calibrated_Homography;
+
    function To_C (Value : Distortion_Coefficients) return C.C_Distortion5 is
      (Interfaces.C.double (Value.K1), Interfaces.C.double (Value.K2),
       Interfaces.C.double (Value.P1), Interfaces.C.double (Value.P2),

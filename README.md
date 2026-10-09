@@ -1,5 +1,17 @@
 # OpenCV Calib3D for Ada
 
+## Task 010: calibrated planar motion
+
+`OpenCV.Calib3D.Decompose_Calibrated_Homography` returns all native motion
+hypotheses as owned Ada values, including pure rotation. It requires an
+undistorted pinhole homography and shared intrinsics; identity K supports
+normalized-coordinate homographies. Translation is relative to unknown plane
+distance, not metric translation. No physical hypothesis is selected.
+See [contract](docs/planar-motion-contract.md),
+[source review](docs/planar-motion-source-review.md), and
+[validation](docs/planar-motion-validation.md). The existing
+`homography_synthetic` example demonstrates both pure and general motion.
+
 Pure-Ada `Measure_Stereo_Parallax` and `Assess_Triangulation` expose directed
 ray angles (0..pi), acute line angles (0..pi/2), and caller-selected inclusive
 parallax/residual quality flags. Numerically `Usable` does not mean geometrically
