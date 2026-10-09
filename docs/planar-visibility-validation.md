@@ -64,3 +64,9 @@ nonzero-to-zero underflow and accept finite subnormal/large Float32 values.
 
 Ordinary PR CI and pinned compatibility matrix results are pending execution;
 local evidence does not establish those gates.
+
+First PR run `37878854248` macOS: 93/93 AUnit PASS, followed by a deterministic
+native-fixture compile failure: OpenCV 5.0 deprecates Mat comma initializers and
+`-Werror` rejects them. Exact job `113653615390` log inspected. Corrective change
+uses explicit matrix element writes in fixtures and fault-only index controls;
+no warning suppression, weakened test, or blind rerun.

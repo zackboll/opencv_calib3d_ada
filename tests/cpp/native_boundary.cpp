@@ -1331,11 +1331,14 @@ void visibility_boundary() {
     std::vector<cv::Mat> rotations, normals;
     for (int i=0;i<4;++i) {
         rotations.push_back(cv::Mat::eye(3,3,CV_64F));
-        normals.push_back((cv::Mat_<double>(3,1)<< (i%2 ? -1 : 1),0,0));
+        cv::Mat normal=cv::Mat::zeros(3,1,CV_64F);
+        normal.at<double>(0,0)=i%2 ? -1 : 1;
+        normals.push_back(normal);
     }
     cv::Mat full_a(3,1,CV_32FC2,cv::Scalar(.2,.1)),full_b(3,1,CV_32FC2,cv::Scalar(.25,.1));
     full_a.at<cv::Vec2f>(1,0)[0]=-1;
-    cv::Mat mask=(cv::Mat_<unsigned char>(3,1)<<255,0,255);
+    cv::Mat mask(3,1,CV_8UC1,cv::Scalar(255));
+    mask.at<unsigned char>(1,0)=0;
     cv::Mat compact_a(2,1,CV_32FC2),compact_b(2,1,CV_32FC2),selected,masked;
     for (int i=0;i<2;++i) { compact_a.at<cv::Vec2f>(i)=full_a.at<cv::Vec2f>(2*i);
         compact_b.at<cv::Vec2f>(i)=full_b.at<cv::Vec2f>(2*i); }

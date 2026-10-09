@@ -424,10 +424,12 @@ opencv_calib3d_status opencv_calib3d_filter_planar_visibility(
         const int control=visibility_control;
         visibility_control=0;
         if (control==1) possible=cv::Mat::ones(1,1,CV_64F);
-        if (control==2) possible=(cv::Mat_<int>(2,1)<<0,0);
-        if (control==3) possible=(cv::Mat_<int>(2,1)<<1,0);
-        if (control==4) possible=(cv::Mat_<int>(1,1)<<hypotheses->count);
-        if (control==5) possible=(cv::Mat_<int>(1,1)<<-1);
+        if (control>=2 && control<=5) {
+            possible=cv::Mat::zeros(control<=3 ? 2 : 1,1,CV_32SC1);
+            if (control==3) possible.at<int>(0,0)=1;
+            if (control==4) possible.at<int>(0,0)=hypotheses->count;
+            if (control==5) possible.at<int>(0,0)=-1;
+        }
 #endif
         opencv_calib3d_planar_visibility local{};
         local.count=hypotheses->count;
