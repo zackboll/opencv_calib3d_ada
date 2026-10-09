@@ -9,7 +9,7 @@ procedure Triangulation_Synthetic is
    use type OpenCV.Float64_Value;
    Pose : constant Relative_Camera_Pose :=
      ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [-1.0, 0.0, 0.0]);
-   Known : constant Object_Point_Array := [[2.0, 1.0, 5.0], [0.0, 0.0, 1.0E8], [2.0, 1.0, -5.0]];
+   Known : constant Object_Point_Array := [[2.0, 1.0, 5.0], [2.0, 1.0, 5.0], [0.0, 0.0, 1.0E8], [2.0, 1.0, -5.0]];
    First, Second : Normalized_Image_Point_Array (Known'Range);
    Center : constant Camera_Direction := Second_Camera_Center_Direction_In_First (Pose);
    Policy : constant Triangulation_Quality_Options :=
@@ -22,6 +22,10 @@ begin
    Put_Line ("These are not georeferenced navigation coordinates.");
    Put_Line ("A numerically usable 3-D point can still have poor triangulation geometry.");
    Put_Line ("Parallax-based screening is caller policy.");
+   Put_Line ("The camera pose remains fixed during point-only nonlinear refinement.");
+   Put_Line ("Refinement minimizes geometric reprojection residual, not 3-D position error.");
+   Put_Line ("Reduced residual does not guarantee correct physical correspondence.");
+   Put_Line ("Scale is still unknown; coordinates remain first-camera, unit-baseline coordinates.");
    for Row in 0 .. 2 loop
       Put ("Relative rotation row:");
       for Col in 0 .. 2 loop
@@ -38,13 +42,24 @@ begin
       First (I) := [Known (I) (0) / Known (I) (2), Known (I) (1) / Known (I) (2)];
       Second (I) := [(Known (I) (0) - 1.0) / Known (I) (2), Known (I) (1) / Known (I) (2)];
    end loop;
+   Second (2) := [0.225, 0.16]; --  Deterministic noisy correspondence.
    declare
       Points : constant Triangulated_Point_Array := Triangulate_Normalized (First, Second, Pose);
       Quality : constant Triangulation_Quality_Array :=
         Assess_Triangulation (First, Second, Pose, Points, Policy);
+      Refined : constant Point_Refinement_Result_Array := Refine_Triangulated_Points
+        (First, Second, Pose, Points, (Minimum_Acute_Parallax_Radians => Policy.Minimum_Acute_Parallax_Radians, others => <>));
    begin
       for I in Points'Range loop
          Put_Line ("Correspondence" & Positive'Image (I) & " " & Triangulation_Status'Image (Points (I).Status));
+         Put_Line ("Refinement outcome: " & Point_Refinement_Outcome'Image (Refined (I).Outcome));
+         Put_Line ("Accepted steps:" & Natural'Image (Refined (I).Accepted_Steps));
+         if Refined (I).Residuals_Evaluated then
+            Put_Line ("Initial/final normalized RMS:" & OpenCV.Float64_Value'Image (Refined (I).Initial_Normalized_RMS) &
+              OpenCV.Float64_Value'Image (Refined (I).Final_Normalized_RMS));
+         else
+            Put_Line ("Normalized RMS: not evaluated.");
+         end if;
          Put_Line ("Forward ray angle, degrees:" & OpenCV.Float64_Value'Image
            (Quality (I).Parallax.Forward_Ray_Angle_Radians * Degrees));
          Put_Line ("Acute parallax angle, degrees:" & OpenCV.Float64_Value'Image
@@ -59,6 +74,14 @@ begin
               OpenCV.Float64_Value'Image (Second (I) (Axis)));
          end loop;
          if Points (I).Status = Usable then
+            for Axis in 0 .. 2 loop
+               Put_Line ("Initial/refined XYZ component:" & OpenCV.Float64_Value'Image (Points (I).Position_In_First_Camera (Axis)) &
+                 OpenCV.Float64_Value'Image (Refined (I).Point.Position_In_First_Camera (Axis)));
+            end loop;
+            Put_Line ("Refined first/second depths:" & OpenCV.Float64_Value'Image (Refined (I).Point.First_Depth) &
+              OpenCV.Float64_Value'Image (Refined (I).Point.Second_Depth));
+            Put_Line ("Refined per-camera normalized errors:" & OpenCV.Float64_Value'Image (Refined (I).Point.First_Normalized_Error) &
+              OpenCV.Float64_Value'Image (Refined (I).Point.Second_Normalized_Error));
             for Axis in 0 .. 2 loop
                Put_Line ("First-frame reconstructed / known / difference:" &
                  OpenCV.Float64_Value'Image (Points (I).Position_In_First_Camera (Axis)) &

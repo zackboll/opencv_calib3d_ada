@@ -7,6 +7,7 @@ with OpenCV.Core.Float64_Vec2_Access;
 with OpenCV.Core.Float64_Vec3_Access;
 with OpenCV.Core.Module_Interop;
 with OpenCV.Calib3D.Internal.C_API;
+with OpenCV.Calib3D.Internal.Point_Refinement;
 with System;
 
 package body OpenCV.Calib3D is
@@ -1491,6 +1492,76 @@ package body OpenCV.Calib3D is
       when Constraint_Error =>
          raise OpenCV.OpenCV_Error with "Assessment exceeds representable range";
    end Assess_Triangulation;
+
+   function Refine_Triangulated_Points
+     (First_Points, Second_Points : Normalized_Image_Point_Array;
+      Pose : Relative_Camera_Pose;
+      Initial : Triangulated_Point_Array;
+      Options : Triangulation_Refinement_Options := (others => <>))
+      return Point_Refinement_Result_Array
+   is
+      package Kernel renames OpenCV.Calib3D.Internal.Point_Refinement;
+      Angles : constant Stereo_Parallax_Array :=
+        Measure_Stereo_Parallax (First_Points, Second_Points, Pose);
+      Fixed : constant Relative_Camera_Pose :=
+        (Pose.Rotation_First_To_Second,
+         Camera_Direction (Unit_Vector (Object_Point (Pose.Translation_Direction))));
+   begin
+      if Initial'Length /= First_Points'Length then
+         raise OpenCV.OpenCV_Error with "Refinement requires equal point counts";
+      end if;
+      if Options.Maximum_Iterations > 100 or else
+        not Is_Finite (Options.Minimum_Acute_Parallax_Radians) or else
+        Options.Minimum_Acute_Parallax_Radians < 0.0 or else
+        Options.Minimum_Acute_Parallax_Radians > Math.Arctan (1.0, 0.0)
+      then
+         raise OpenCV.OpenCV_Error with "Invalid refinement options";
+      end if;
+      return Result : Point_Refinement_Result_Array (1 .. Initial'Length) do
+         for I in Result'Range loop
+            declare
+               P : Triangulated_Point renames Initial (Initial'First + I - 1);
+               Depth_Available : Boolean := True;
+               Q : Object_Point;
+            begin
+               Result (I) := (Outcome => Skipped_Unusable, Point => P, others => <>);
+               if P.Status = Usable then
+                  Validate_Vector (P.Position_In_First_Camera);
+                  if not Is_Finite (P.First_Depth) or else P.First_Depth <= 0.0 or else
+                    not Is_Finite (P.Second_Depth) or else P.Second_Depth <= 0.0 or else
+                    not Is_Finite (P.First_Normalized_Error) or else P.First_Normalized_Error < 0.0 or else
+                    not Is_Finite (P.Second_Normalized_Error) or else P.Second_Normalized_Error < 0.0
+                  then
+                     raise OpenCV.OpenCV_Error with "Invalid manually constructed usable point";
+                  end if;
+                  if P.Position_In_First_Camera (2) <= 0.0 then
+                     raise OpenCV.OpenCV_Error with "Usable point has nonpositive actual first depth";
+                  end if;
+                  begin
+                     Q := Kernel.Second_Position (P.Position_In_First_Camera, Fixed);
+                     if Q (2) <= 0.0 then
+                        raise OpenCV.OpenCV_Error with "Usable point has nonpositive actual second depth";
+                     end if;
+                  exception
+                     when Constraint_Error => Depth_Available := False;
+                  end;
+                  if not Depth_Available then
+                     Result (I).Outcome := Numerically_Unavailable;
+                  elsif Options.Minimum_Acute_Parallax_Radians > 0.0 and then
+                    Angles (I).Acute_Line_Angle_Radians < Options.Minimum_Acute_Parallax_Radians
+                  then
+                     Result (I).Outcome := Skipped_Low_Parallax;
+                  else
+                     Result (I) := Kernel.Refine (P,
+                       First_Points (First_Points'First + I - 1),
+                       Second_Points (Second_Points'First + I - 1), Fixed,
+                       Options.Maximum_Iterations);
+                  end if;
+               end if;
+            end;
+         end loop;
+      end return;
+   end Refine_Triangulated_Points;
 
    function Triangulate_Normalized
      (First_Points, Second_Points : Normalized_Image_Point_Array;

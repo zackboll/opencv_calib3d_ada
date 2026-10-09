@@ -220,6 +220,37 @@ package OpenCV.Calib3D is
       Options : Triangulation_Quality_Options := (others => <>))
       return Triangulation_Quality_Array;
 
+   type Point_Refinement_Outcome is
+     (Skipped_Unusable, Skipped_Low_Parallax, No_Improving_Step,
+      Improved, Numerically_Unavailable);
+   type Point_Refinement_Result is record
+      Outcome : Point_Refinement_Outcome;
+      Point : Triangulated_Point;
+      Accepted_Steps : Natural := 0;
+      Residuals_Evaluated : Boolean := False;
+      Initial_Normalized_RMS : OpenCV.Float64_Value := 0.0;
+      Final_Normalized_RMS : OpenCV.Float64_Value := 0.0;
+   end record;
+   type Point_Refinement_Result_Array is
+     array (Positive range <>) of Point_Refinement_Result;
+   type Triangulation_Refinement_Options is record
+      Maximum_Iterations : Positive := 20;
+      Minimum_Acute_Parallax_Radians : OpenCV.Float64_Value := 0.0;
+   end record;
+   --  Pure Ada, fixed-pose point-only normalized reprojection refinement.
+   --  Iterations 1..100; finite minimum angle 0..pi/2 (zero disables screening).
+   --  Equal counts paired by iteration order; one-based output, including empty.
+   --  Only Improved publishes new coordinates/diagnostics. Other outcomes retain
+   --  the exact input point. RMS fields are meaningful only when evaluated.
+   --  Strictly decreasing accepted residual norm, positive depths in both cameras.
+   --  First-camera unit-baseline coordinates, not metric accuracy/covariance.
+   function Refine_Triangulated_Points
+     (First_Points, Second_Points : Normalized_Image_Point_Array;
+      Pose : Relative_Camera_Pose;
+      Initial : Triangulated_Point_Array;
+      Options : Triangulation_Refinement_Options := (others => <>))
+      return Point_Refinement_Result_Array;
+
    --  normalize(-R^T*t_hat): second-camera-center direction in first frame.
    function Second_Camera_Center_Direction_In_First
      (Pose : Relative_Camera_Pose) return Camera_Direction;
