@@ -173,6 +173,21 @@ void calib3d_test_fill_essential_options(opencv_calib3d_essential_options *v) {
     *v = (opencv_calib3d_essential_options){0.001,0.999};
 }
 
+int32_t calib3d_test_visibility_layout(int32_t field) {
+    const size_t values[] = {sizeof(opencv_calib3d_planar_visibility),
+        _Alignof(opencv_calib3d_planar_visibility),
+        offsetof(opencv_calib3d_planar_visibility,count),
+        offsetof(opencv_calib3d_planar_visibility,accepted),
+        offsetof(opencv_calib3d_planar_visibility,accepted[0]),
+        offsetof(opencv_calib3d_planar_visibility,accepted[1]),
+        offsetof(opencv_calib3d_planar_visibility,accepted[2]),
+        offsetof(opencv_calib3d_planar_visibility,accepted[3])};
+    return field>=0 && field<8 ? (int32_t)values[field] : -1;
+}
+void calib3d_test_fill_visibility(opencv_calib3d_planar_visibility *v) {
+    *v=(opencv_calib3d_planar_visibility){4,{1,0,1,0}};
+}
+
 int32_t calib3d_test_planar_layout(int32_t field) {
     const size_t values[] = {sizeof(opencv_calib3d_planar_motion), _Alignof(opencv_calib3d_planar_motion),
         offsetof(opencv_calib3d_planar_motion,r00),

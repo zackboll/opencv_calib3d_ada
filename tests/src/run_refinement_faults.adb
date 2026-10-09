@@ -418,4 +418,51 @@ begin
       Check (Live = 0, "unknown-status rejection leaked handle");
       Ada.Text_IO.Put_Line ("PASS: Ada triangulation 25 faults, all five status mappings, mixed batches, unknown-status rejection; live handles=0");
    end;
+   declare
+      Candidate : constant Planar_Motion_Hypothesis :=
+        ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+         [0.1, 0.0, 0.0], [0.0, 0.0, 1.0], False);
+   begin
+      Fail (46, 3);
+      declare
+         Pure : constant Planar_Motion_Hypothesis :=
+           (Candidate.Rotation_First_To_Second, [others => 0.0], [others => 0.0], True);
+         Values : constant Planar_Hypothesis_Visibility_Array :=
+           Assess_Planar_Visibility ([Pure], [[0.2, 0.1]], [[0.25, 0.1]]);
+         None : constant Planar_Hypothesis_Visibility_Array :=
+           Assess_Planar_Visibility ([Candidate], [[0.2, 0.1]], [[0.25, 0.1]], []);
+      begin
+         Check (Values (1).Disposition = Not_Applicable_Pure_Rotation and then
+           None (1).Disposition = No_Selected_References, "visibility special cases");
+      end;
+      begin
+         declare
+            Values : constant Planar_Hypothesis_Visibility_Array :=
+              Assess_Planar_Visibility ([Candidate], [[0.2, 0.1]], [[0.25, 0.1]]);
+            pragma Unreferenced (Values);
+         begin
+            raise Program_Error with "special cases consumed armed checkpoint";
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+      Ada.Text_IO.Put_Line ("PASS: visibility pure/no-reference cases preserve armed native checkpoint");
+      for Stage in Interfaces.C.int range 46 .. 49 loop
+         for Kind in Interfaces.C.int range 1 .. 5 loop
+            Fail (Stage, Kind);
+            begin
+               declare
+                  Values : constant Planar_Hypothesis_Visibility_Array :=
+                    Assess_Planar_Visibility ([Candidate], [[0.2, 0.1]], [[0.25, 0.1]]);
+                  pragma Unreferenced (Values);
+               begin
+                  raise Program_Error with "visibility fault not translated";
+               end;
+            exception
+               when OpenCV.OpenCV_Error => null;
+            end;
+         end loop;
+      end loop;
+      Ada.Text_IO.Put_Line ("PASS: Ada visibility 20 exception translation scenarios");
+   end;
 end Run_Refinement_Faults;

@@ -1,5 +1,16 @@
 # Architecture
 
+## Task 011 visibility boundary
+
+One additional guarded C operation brings the private ABI to 45 operations.
+Existing candidate records are reused; the new caller-owned count/four-byte
+result is cleared and atomically published. Ada validates all hypotheses and
+observations, handles pure/near rotation and no-reference dispositions without
+native entry, and compacts selected correspondence positions into Core-owned
+Float64 C2 Mats. Borrowed callbacks permit private continuous Float32 snapshots.
+Native filtering uses no mask. Public output preserves all candidate positions.
+See [visibility contract](planar-visibility-contract.md).
+
 ## Task 010 fixed-value decomposition
 
 Calibrated homography decomposition adds one guarded private C call (44 total

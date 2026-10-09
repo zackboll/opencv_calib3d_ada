@@ -343,6 +343,186 @@ package body OpenCV.Calib3D is
          raise OpenCV.OpenCV_Error with "Unrepresentable planar decomposition";
    end Decompose_Calibrated_Homography;
 
+   procedure Validate_Planar_Hypothesis
+     (Value : Planar_Motion_Hypothesis; Count : Natural)
+   is
+      R : constant Rotation_Matrix := Value.Rotation_First_To_Second;
+      T : constant Translation_Vector := Value.Translation_Over_Plane_Distance;
+      N : constant Camera_Direction := Value.Plane_Normal_In_First;
+      Tolerance : constant OpenCV.Float64_Value :=
+        (if Value.Pure_Rotation then 0.001 else 1.0E-9);
+      Norm_Squared : OpenCV.Float64_Value := 0.0;
+      Determinant : OpenCV.Float64_Value;
+   begin
+      for X of R loop
+         if not Is_Finite (X) or else abs X > 2.0 then
+            raise OpenCV.OpenCV_Error with "Invalid planar rotation";
+         end if;
+      end loop;
+      for I in 0 .. 2 loop
+         if not Is_Finite (T (I)) or else not Is_Finite (N (I)) or else abs N (I) > 2.0 then
+            raise OpenCV.OpenCV_Error with "Invalid planar translation/normal";
+         end if;
+         Norm_Squared := Norm_Squared + N (I) * N (I);
+         for J in 0 .. 2 loop
+            declare
+               Dot : OpenCV.Float64_Value := 0.0;
+            begin
+               for K in 0 .. 2 loop
+                  Dot := Dot + R (K, I) * R (K, J);
+               end loop;
+               if abs (Dot - (if I = J then 1.0 else 0.0)) > Tolerance then
+                  raise OpenCV.OpenCV_Error with "Invalid planar rotation orthogonality";
+               end if;
+            end;
+         end loop;
+      end loop;
+      Determinant := R (0, 0) * (R (1, 1) * R (2, 2) - R (1, 2) * R (2, 1))
+        - R (0, 1) * (R (1, 0) * R (2, 2) - R (1, 2) * R (2, 0))
+        + R (0, 2) * (R (1, 0) * R (2, 1) - R (1, 1) * R (2, 0));
+      if abs (Determinant - 1.0) > Tolerance then
+         raise OpenCV.OpenCV_Error with "Invalid planar rotation determinant";
+      end if;
+      if Value.Pure_Rotation then
+         if Count /= 1 or else (for some X of T => X /= 0.0) or else
+           (for some X of N => X /= 0.0)
+         then
+            raise OpenCV.OpenCV_Error with "Contradictory pure-rotation hypothesis";
+         end if;
+      elsif (for all X of T => X = 0.0) or else abs (Math.Sqrt (Norm_Squared) - 1.0) > 1.0E-9 then
+         raise OpenCV.OpenCV_Error with "Invalid general planar hypothesis";
+      end if;
+   end Validate_Planar_Hypothesis;
+
+   function Assess_Planar_Visibility
+     (Hypotheses : Planar_Motion_Hypothesis_Array;
+      First_Points, Second_Points : Normalized_Image_Point_Array;
+      Selected_Indices : Inlier_Index_Array)
+      return Planar_Hypothesis_Visibility_Array
+   is
+      Native : aliased C.C_Planar_Decomposition :=
+        (Count => 0, Candidates => [others => (others => 0.0)]);
+      Output : aliased C.C_Planar_Visibility;
+      First, Second : OpenCV.Core.Mat;
+      Code : C.Status := C.Success;
+      Previous : Natural := 0;
+      Position : Natural := 0;
+      procedure Validate_Points (Points : Normalized_Image_Point_Array) is
+      begin
+         for P of Points loop
+            for X of P loop
+               if not Is_Finite (X) then
+                  raise OpenCV.OpenCV_Error with "Nonfinite visibility observation";
+               end if;
+            end loop;
+         end loop;
+      end Validate_Points;
+      procedure First_Callback (A : Bridge.Input_Mat_Handle) is
+         procedure Second_Callback (B : Bridge.Input_Mat_Handle) is
+         begin
+            Code := C.Filter_Planar_Visibility (Native'Access, A, B, Output'Access);
+         end Second_Callback;
+      begin
+         Bridge.With_Input_Handle (Second, Second_Callback'Access);
+      end First_Callback;
+   begin
+      if Hypotheses'Length > 4 or else First_Points'Length /= Second_Points'Length or else
+        First_Points'Length > Natural (Interfaces.Integer_32'Last)
+      then
+         raise OpenCV.OpenCV_Error with "Invalid visibility collection lengths";
+      end if;
+      Validate_Points (First_Points);
+      Validate_Points (Second_Points);
+      for Index of Selected_Indices loop
+         if Index > First_Points'Length or else Index <= Previous then
+            raise OpenCV.OpenCV_Error with "Invalid visibility selected position/order";
+         end if;
+         Previous := Index;
+      end loop;
+      for V of Hypotheses loop
+         Validate_Planar_Hypothesis (V, Hypotheses'Length);
+         Position := Position + 1;
+         declare
+            R : constant Rotation_Matrix := V.Rotation_First_To_Second;
+            T : constant Translation_Vector := V.Translation_Over_Plane_Distance;
+            N : constant Camera_Direction := V.Plane_Normal_In_First;
+         begin
+            Native.Candidates (Position) :=
+              (Interfaces.C.double (R (0, 0)), Interfaces.C.double (R (0, 1)), Interfaces.C.double (R (0, 2)),
+               Interfaces.C.double (R (1, 0)), Interfaces.C.double (R (1, 1)), Interfaces.C.double (R (1, 2)),
+               Interfaces.C.double (R (2, 0)), Interfaces.C.double (R (2, 1)), Interfaces.C.double (R (2, 2)),
+               Interfaces.C.double (T (0)), Interfaces.C.double (T (1)), Interfaces.C.double (T (2)),
+               Interfaces.C.double (N (0)), Interfaces.C.double (N (1)), Interfaces.C.double (N (2)));
+         end;
+      end loop;
+      Native.Count := Interfaces.Integer_32 (Hypotheses'Length);
+      return Results : Planar_Hypothesis_Visibility_Array (1 .. Hypotheses'Length) do
+         if Hypotheses'Length = 1 and then Hypotheses (Hypotheses'First).Pure_Rotation then
+            Results (1).Disposition := Not_Applicable_Pure_Rotation;
+         elsif Selected_Indices'Length = 0 then
+            Results := [others => (Disposition => No_Selected_References)];
+         elsif Hypotheses'Length /= 0 then
+            First := OpenCV.Core.Create (Selected_Indices'Length, 1, (OpenCV.Core.Float64, 2));
+            Second := OpenCV.Core.Create (Selected_Indices'Length, 1, (OpenCV.Core.Float64, 2));
+            Position := 0;
+            for Index of Selected_Indices loop
+               Vec2_Access.Set (First, Position, 0, Image_Point (First_Points (First_Points'First + (Index - 1))));
+               Vec2_Access.Set (Second, Position, 0, Image_Point (Second_Points (Second_Points'First + (Index - 1))));
+               Position := Position + 1;
+            end loop;
+            Bridge.With_Input_Handle (First, First_Callback'Access);
+            C.Check (Code, "Assess_Planar_Visibility");
+            if Output.Count /= Native.Count then
+               raise OpenCV.OpenCV_Error with "Malformed visibility result count";
+            end if;
+            for I in Results'Range loop
+               if Output.Accepted (I) > 1 then
+                  raise OpenCV.OpenCV_Error with "Malformed visibility flag";
+               end if;
+               Results (I).Disposition :=
+                 (if Output.Accepted (I) = 1 then Passes_Visibility else Rejected_By_Visibility);
+            end loop;
+         end if;
+      end return;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Unrepresentable visibility input";
+   end Assess_Planar_Visibility;
+
+   function Assess_Planar_Visibility
+     (Hypotheses : Planar_Motion_Hypothesis_Array;
+      First_Points, Second_Points : Normalized_Image_Point_Array)
+      return Planar_Hypothesis_Visibility_Array
+   is
+   begin
+      if First_Points'Length > Natural (Interfaces.Integer_32'Last) then
+         raise OpenCV.OpenCV_Error with "Visibility point count exceeds INT32";
+      end if;
+      declare
+         Selected : Inlier_Index_Array (1 .. First_Points'Length);
+      begin
+         for I in Selected'Range loop
+            Selected (I) := I;
+         end loop;
+         return Assess_Planar_Visibility (Hypotheses, First_Points, Second_Points, Selected);
+      end;
+   end Assess_Planar_Visibility;
+
+   function Visibility_Passing_Hypothesis_Indices
+     (Results : Planar_Hypothesis_Visibility_Array) return Inlier_Index_Array
+   is
+      Indices : Inlier_Index_Array (1 .. Results'Length);
+      Count : Natural := 0;
+   begin
+      for I in Results'Range loop
+         if Results (I).Disposition = Passes_Visibility then
+            Count := Count + 1;
+            Indices (Count) := I - Results'First + 1;
+         end if;
+      end loop;
+      return Indices (1 .. Count);
+   end Visibility_Passing_Hypothesis_Indices;
+
    function To_C (Value : Distortion_Coefficients) return C.C_Distortion5 is
      (Interfaces.C.double (Value.K1), Interfaces.C.double (Value.K2),
       Interfaces.C.double (Value.P1), Interfaces.C.double (Value.P2),

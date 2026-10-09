@@ -2895,6 +2895,352 @@ package body Calib3D_Tests is
         "extreme finite bearings do not square unscaled coordinates");
    end Parallax_Large;
 
+   function Visibility_Candidate (Normal : Camera_Direction := [0.0, 0.0, 1.0])
+     return Planar_Motion_Hypothesis is
+     ([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+      [0.1, 0.0, 0.0], Normal, False);
+
+   function Visibility_Oracle
+     (V : Planar_Motion_Hypothesis; A, B : Normalized_Image_Point_Array;
+      Selected : Inlier_Index_Array) return Boolean
+   is
+      RN : Camera_Direction := [others => 0.0];
+   begin
+      for I in 0 .. 2 loop
+         for J in 0 .. 2 loop
+            RN (I) := RN (I) + V.Rotation_First_To_Second (I, J) * V.Plane_Normal_In_First (J);
+         end loop;
+      end loop;
+      for Index of Selected loop
+         declare
+            P : constant Normalized_Image_Point := A (A'First + Index - 1);
+            Q : constant Normalized_Image_Point := B (B'First + Index - 1);
+            X1 : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Interfaces.C.C_float (P (0)));
+            Y1 : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Interfaces.C.C_float (P (1)));
+            X2 : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Interfaces.C.C_float (Q (0)));
+            Y2 : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Interfaces.C.C_float (Q (1)));
+            First : constant OpenCV.Float64_Value := V.Plane_Normal_In_First (0) * X1 +
+              V.Plane_Normal_In_First (1) * Y1 + V.Plane_Normal_In_First (2);
+            Second : constant OpenCV.Float64_Value := RN (0) * X2 + RN (1) * Y2 + RN (2);
+         begin
+            if First <= 0.0 or else Second <= 0.0 then
+               return False;
+            end if;
+         end;
+      end loop;
+      return True;
+   end Visibility_Oracle;
+
+   procedure Visibility_Signs (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Positive_Normal : constant Planar_Motion_Hypothesis := Visibility_Candidate;
+      Negative_Normal : Planar_Motion_Hypothesis := Visibility_Candidate ([0.0, 0.0, -1.0]);
+   begin
+      Negative_Normal.Translation_Over_Plane_Distance := [-0.1, 0.0, 0.0];
+      declare
+         Results : constant Planar_Hypothesis_Visibility_Array := Assess_Planar_Visibility
+           ([Positive_Normal, Negative_Normal], [[0.2, 0.1]], [[0.25, 0.1]]);
+      begin
+         Assert (Results (1).Disposition = Passes_Visibility and then
+           Results (2).Disposition = Rejected_By_Visibility, "independent +/-1 normal signs");
+         Assert (Visibility_Passing_Hypothesis_Indices (Results) = [1], "passing positions only");
+         Ada.Text_IO.Put_Line ("Visibility normal-sign oracle: (+1,+1) passes; (-1,-1) rejects; survivors [1]");
+      end;
+   end Visibility_Signs;
+
+   procedure Visibility_Zero (T : in out Fixture) is
+      pragma Unreferenced (T);
+      V : constant Planar_Motion_Hypothesis := Visibility_Candidate ([1.0, 0.0, 0.0]);
+   begin
+      for X of Translation_Vector'([0.0, 0.25, -0.25]) loop
+         declare
+            Results : constant Planar_Hypothesis_Visibility_Array :=
+              Assess_Planar_Visibility ([V], [[X, 0.0]], [[0.25, 0.0]]);
+         begin
+            Assert ((Results (1).Disposition = Passes_Visibility) = (X > 0.0), "strict >0, no epsilon");
+         end;
+      end loop;
+      Ada.Text_IO.Put_Line ("Visibility strict boundary: first=0/.25/-.25 second=.25; rejected/passes/rejected");
+   end Visibility_Zero;
+
+   procedure Visibility_Frame (T : in out Fixture) is
+      pragma Unreferenced (T);
+      V : Planar_Motion_Hypothesis := Visibility_Candidate ([0.6, 0.0, 0.8]);
+      C : constant OpenCV.Float64_Value := Math.Cos (0.2);
+      S : constant OpenCV.Float64_Value := Math.Sin (0.2);
+      A : constant Normalized_Image_Point_Array := [[0.0, 0.0]];
+      B : constant Normalized_Image_Point_Array := [[-1.2, 0.0]];
+      Correct : constant OpenCV.Float64_Value := (C * 0.6 + S * 0.8) * (-1.2) - S * 0.6 + C * 0.8;
+      Inverted : constant OpenCV.Float64_Value := (C * 0.6 - S * 0.8) * (-1.2) + S * 0.6 + C * 0.8;
+   begin
+      V.Rotation_First_To_Second := [[C, 0.0, S], [0.0, 1.0, 0.0], [-S, 0.0, C]];
+      Assert (Correct < 0.0 and then Inverted > 0.0, "frame fixture discriminates transpose");
+      declare
+         Results : constant Planar_Hypothesis_Visibility_Array := Assess_Planar_Visibility ([V], A, B);
+      begin
+         Assert (Results (1).Disposition = Rejected_By_Visibility and then
+           not Visibility_Oracle (V, A, B, [1]), "native uses R*n not R^T*n");
+      end;
+      Ada.Text_IO.Put_Line ("Visibility frame: first=.8 R*n second=" & OpenCV.Float64_Value'Image (Correct) &
+        " R^T*n second=" & OpenCV.Float64_Value'Image (Inverted));
+   end Visibility_Frame;
+
+   procedure Visibility_Composition (T : in out Fixture) is
+      pragma Unreferenced (T);
+      C : constant OpenCV.Float64_Value := Math.Cos (0.08);
+      S : constant OpenCV.Float64_Value := Math.Sin (0.08);
+      H : constant Homography_Matrix := [[C, 0.0, S - 0.12], [0.0, 1.0, 0.04], [-S, 0.0, C + 0.08]];
+      V : constant Planar_Motion_Hypothesis_Array := Decompose_Calibrated_Homography (H, (1.0, 1.0, 0.0, 0.0));
+      A, B : Normalized_Image_Point_Array (1 .. 12);
+      Selected : Inlier_Index_Array (1 .. 12);
+      Known : Boolean := False;
+   begin
+      Assert (V'Length = 4, "four general decomposition candidates");
+      for I in A'Range loop
+         A (I) := [OpenCV.Float64_Value (I mod 4) * 0.1, OpenCV.Float64_Value (I / 4) * 0.1];
+         --  Independent plane Z=1, X_second=R*X_first+t/d.
+         declare
+            Z : constant OpenCV.Float64_Value := -S * A (I) (0) + C + 0.08;
+         begin
+            B (I) := [(C * A (I) (0) + S - 0.12) / Z, (A (I) (1) + 0.04) / Z];
+         end;
+         Selected (I) := I;
+      end loop;
+      declare
+         Results : constant Planar_Hypothesis_Visibility_Array := Assess_Planar_Visibility (V, A, B);
+      begin
+         Assert (Results'Length = V'Length, "preserve all hypotheses");
+         for I in V'Range loop
+            Assert ((Results (I).Disposition = Passes_Visibility) = Visibility_Oracle (V (I), A, B, Selected),
+              "decomposition composition Float32 independent signs");
+            if abs (V (I).Plane_Normal_In_First (2) - 1.0) < 1.0E-8 then
+               Known := True;
+               Assert (Results (I).Disposition = Passes_Visibility, "known consistent candidate passes");
+            elsif abs (V (I).Plane_Normal_In_First (2) + 1.0) < 1.0E-8 then
+               Assert (Results (I).Disposition = Rejected_By_Visibility, "sign opposite rejects");
+            end if;
+            Ada.Text_IO.Put_Line ("Visibility composition candidate" & Positive'Image (I) & " " &
+              Planar_Visibility_Disposition'Image (Results (I).Disposition));
+         end loop;
+         Assert (Known and then Visibility_Passing_Hypothesis_Indices (Results)'Length > 1,
+           "known candidate, remaining multiple-motion ambiguity");
+      end;
+   end Visibility_Composition;
+
+   procedure Visibility_Selected (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A, B : Image_Point_Array (1 .. 24);
+      N1, N2 : Normalized_Image_Point_Array (1 .. 24);
+      V : constant Planar_Motion_Hypothesis := Visibility_Candidate ([1.0, 0.0, 0.0]);
+      C : constant OpenCV.Float64_Value := Math.Cos (0.08);
+      S : constant OpenCV.Float64_Value := Math.Sin (0.08);
+      H : constant Homography_Matrix := [[C, 0.0, S - 0.12], [0.0, 1.0, 0.04], [-S, 0.0, C + 0.08]];
+      Hypotheses : constant Planar_Motion_Hypothesis_Array :=
+        Decompose_Calibrated_Homography (H, (1.0, 1.0, 0.0, 0.0));
+   begin
+      for I in A'Range loop
+         A (I) := [OpenCV.Float64_Value (I mod 6) * 40.0 + 50.0,
+                   OpenCV.Float64_Value (I / 6) * 30.0 + 10.0];
+         --  Same Z=1, known R/t/d/n fixture as decomposition composition.
+         declare
+            X : constant OpenCV.Float64_Value := A (I) (0) / 800.0;
+            Y : constant OpenCV.Float64_Value := A (I) (1) / 820.0;
+            Z : constant OpenCV.Float64_Value := -S * X + C + 0.08;
+         begin
+            B (I) := [800.0 * (C * X + S - 0.12) / Z, 820.0 * (Y + 0.04) / Z];
+         end;
+      end loop;
+      A (2) := [-400.0, 100.0]; B (2) := [-4_000.0, 5_000.0];
+      B (7) := [5_000.0, -4_000.0]; B (15) := [-6_000.0, 3_000.0];
+      N1 := Undistort_To_Normalized (A, (800.0, 820.0, 0.0, 0.0));
+      N2 := Undistort_To_Normalized (B, (800.0, 820.0, 0.0, 0.0));
+      declare
+         Estimate : constant Homography_Estimate := Estimate_Homography_RANSAC (A, B, (2_000, 0.1, 0.999));
+         Selected : constant Inlier_Index_Array := Inliers (Estimate);
+         All_Results : constant Planar_Hypothesis_Visibility_Array := Assess_Planar_Visibility ([V], N1, N2);
+         Subset : constant Planar_Hypothesis_Visibility_Array := Assess_Planar_Visibility ([V], N1, N2, Selected);
+         Composed : constant Planar_Hypothesis_Visibility_Array :=
+           Assess_Planar_Visibility (Hypotheses, N1, N2, Selected);
+      begin
+         Assert (Found (Estimate) and then Selected'Length = 21, "robust homography 21 selected inliers");
+         for Index of Selected loop
+            Assert (Index /= 2 and then Index /= 7 and then Index /= 15, "outliers excluded");
+         end loop;
+         Assert (All_Results (1).Disposition = Rejected_By_Visibility and then
+           Subset (1).Disposition = Passes_Visibility and then Visibility_Oracle (V, N1, N2, Selected),
+           "selection excludes contradictory reference");
+         for I in Hypotheses'Range loop
+            Assert ((Composed (I).Disposition = Passes_Visibility) =
+              Visibility_Oracle (Hypotheses (I), N1, N2, Selected),
+              "same planar decomposition / robust homography selected signs");
+         end loop;
+         Ada.Text_IO.Put_Line ("Visibility selected-inlier composition: supplied=24 selected=21; all rejected, selected passes");
+      end;
+   end Visibility_Selected;
+
+   procedure Visibility_Pure (T : in out Fixture) is
+      pragma Unreferenced (T);
+   begin
+      for Perturbation of Image_Point'([0.0, 0.0001]) loop
+         declare
+            V : constant Planar_Motion_Hypothesis_Array := Decompose_Calibrated_Homography
+              ([[1.0, Perturbation, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], (1.0, 1.0, 0.0, 0.0));
+            Empty : constant Planar_Hypothesis_Visibility_Array := Assess_Planar_Visibility (V, [], []);
+            Full : constant Planar_Hypothesis_Visibility_Array := Assess_Planar_Visibility (V, [[0.2, 0.1]], [[0.25, 0.1]]);
+         begin
+            Assert (V'Length = 1 and then V (1).Pure_Rotation, "native pure/near rotation");
+            Assert (Empty (1).Disposition = Not_Applicable_Pure_Rotation and then
+              Full (1).Disposition = Not_Applicable_Pure_Rotation and then
+              Visibility_Passing_Hypothesis_Indices (Full)'Length = 0, "pure not physically rejected/passing");
+         end;
+      end loop;
+      declare
+         C : constant OpenCV.Float64_Value := Math.Cos (0.12);
+         S : constant OpenCV.Float64_Value := Math.Sin (0.12);
+         V : constant Planar_Motion_Hypothesis_Array := Decompose_Calibrated_Homography
+           ([[C, -S, 0.0], [S, C, 0.0], [0.0, 0.0, 1.0]], (1.0, 1.0, 0.0, 0.0));
+      begin
+         Assert (V'Length = 1 and then V (1).Pure_Rotation and then
+           Assess_Planar_Visibility (V, [[0.2, 0.1]], [[0.18, 0.12]]) (1).Disposition =
+             Not_Applicable_Pure_Rotation, "known nonidentity pure rotation");
+      end;
+   end Visibility_Pure;
+
+   procedure Visibility_Empty (T : in out Fixture) is
+      pragma Unreferenced (T);
+      H : Planar_Motion_Hypothesis_Array (7 .. 7) := [7 => Visibility_Candidate];
+      A : constant Normalized_Image_Point_Array (5 .. 5) := [5 => [0.2, 0.1]];
+      B : constant Normalized_Image_Point_Array (9 .. 9) := [9 => [0.25, 0.1]];
+   begin
+      declare
+         E : constant Planar_Hypothesis_Visibility_Array := Assess_Planar_Visibility ([], A, B);
+         N : constant Planar_Hypothesis_Visibility_Array := Assess_Planar_Visibility (H, [], []);
+         S : constant Planar_Hypothesis_Visibility_Array := Assess_Planar_Visibility (H, A, B, []);
+         F : constant Planar_Hypothesis_Visibility_Array := Assess_Planar_Visibility (H, A, B, [8 => 1]);
+      begin
+         Assert (E'First = 1 and then E'Length = 0 and then N (1).Disposition = No_Selected_References and then
+           S (1).Disposition = No_Selected_References and then F'First = 1 and then
+           F (1).Disposition = Passes_Visibility, "empty/no-selected/nondefault bounds");
+      end;
+      H (7).Plane_Normal_In_First := [0.0, 0.0, -1.0];
+      Assert (Visibility_Passing_Hypothesis_Indices (Assess_Planar_Visibility (H, A, B))'Length = 0,
+        "zero native survivors is successful");
+      declare
+         Results : constant Planar_Hypothesis_Visibility_Array (8 .. 10) :=
+           [8 => (Disposition => Passes_Visibility),
+            9 => (Disposition => Not_Applicable_Pure_Rotation),
+            10 => (Disposition => No_Selected_References)];
+      begin
+         Assert (Visibility_Passing_Hypothesis_Indices (Results) = [1], "helper positions independent of bounds");
+      end;
+   end Visibility_Empty;
+
+   procedure Visibility_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check); -- Deliberate IEEE nonfinite inputs.
+      V : Planar_Motion_Hypothesis;
+      A : Normalized_Image_Point_Array (1 .. 2);
+      procedure Reject (H : Planar_Motion_Hypothesis_Array;
+                        P, Q : Normalized_Image_Point_Array; S : Inlier_Index_Array) is
+      begin
+         declare
+            Results : constant Planar_Hypothesis_Visibility_Array := Assess_Planar_Visibility (H, P, Q, S);
+            pragma Unreferenced (Results);
+         begin
+            Assert (False, "invalid visibility accepted");
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Reject;
+   begin
+      A := [others => [0.2, 0.1]];
+      Reject ([Visibility_Candidate], A, A, [1, 1]);
+      Reject ([Visibility_Candidate], A, A, [2, 1]);
+      Reject ([Visibility_Candidate], A, A, [3]);
+      Reject ([Visibility_Candidate], A, A (1 .. 1), []);
+      Reject ([1 .. 5 => Visibility_Candidate], A, A, []);
+      for Mode in 1 .. 9 loop
+         V := Visibility_Candidate;
+         case Mode is
+            when 1 => V.Rotation_First_To_Second (0, 0) := 2.0;
+            when 2 => V.Translation_Over_Plane_Distance := [others => 0.0];
+            when 3 => V.Translation_Over_Plane_Distance (0) := OpenCV.Float64_Value (Nonfinite (0));
+            when 4 => V.Plane_Normal_In_First := [0.0, 0.0, 2.0];
+            when 5 => V.Plane_Normal_In_First (0) := OpenCV.Float64_Value (Nonfinite (1));
+            when 6 => V.Pure_Rotation := True;
+            when 7 => V.Plane_Normal_In_First := [others => 0.0];
+            when 8 => V.Rotation_First_To_Second (0, 0) := -1.0;
+            when 9 => V.Rotation_First_To_Second (0, 0) := OpenCV.Float64_Value (Nonfinite (0));
+         end case;
+         Reject ([V], A, A, []);
+      end loop;
+      A (2) (0) := OpenCV.Float64_Value (Nonfinite (0));
+      Reject ([], A, A, []);
+      Reject ([Visibility_Candidate], A, A, [1]);
+   end Visibility_Invalid;
+
+   procedure Visibility_Float32 (T : in out Fixture) is
+      pragma Unreferenced (T);
+   begin
+      for X of Image_Point'([1.0E100, 1.0E-100]) loop
+         begin
+            declare
+               Results : constant Planar_Hypothesis_Visibility_Array :=
+                 Assess_Planar_Visibility ([Visibility_Candidate], [[X, 0.0]], [[0.25, 0.0]]);
+               pragma Unreferenced (Results);
+            begin
+               Assert (False, "Float32 unrepresentable accepted");
+            end;
+         exception
+            when OpenCV.OpenCV_Error => null;
+         end;
+      end loop;
+      declare
+         Results : constant Planar_Hypothesis_Visibility_Array := Assess_Planar_Visibility
+           ([Visibility_Candidate], [[1.0E-40, 0.0]], [[3.0E38, 0.0]]);
+      begin
+         Assert (Results (1).Disposition = Passes_Visibility, "finite Float32 subnormal/large accepted");
+      end;
+      declare
+         V : constant Planar_Motion_Hypothesis :=
+           Visibility_Candidate ([Math.Sqrt (0.5), 0.0, -Math.Sqrt (0.5)]);
+         Results : constant Planar_Hypothesis_Visibility_Array := Assess_Planar_Visibility
+           ([V], [[1.0 + 2.0**(-30), 0.0]], [[2.0, 0.0]]);
+      begin
+         Assert (V.Plane_Normal_In_First (0) * (1.0 + 2.0**(-30)) +
+           V.Plane_Normal_In_First (2) > 0.0, "Float64 boundary expression positive");
+         Assert (Results (1).Disposition = Rejected_By_Visibility,
+           "native Float32 rounds first X to 1, expression exactly zero");
+         Ada.Text_IO.Put_Line ("Visibility Float32 sign boundary: Float64 positive, native rounded zero rejects");
+      end;
+   end Visibility_Float32;
+
+   procedure Visibility_Layout (T : in out Fixture) is
+      pragma Unreferenced (T);
+      function Layout (Field : Interfaces.Integer_32) return Interfaces.Integer_32
+        with Import, Convention => C, External_Name => "calib3d_test_visibility_layout";
+      procedure Fill (V : access ABI.C_Planar_Visibility)
+        with Import, Convention => C, External_Name => "calib3d_test_fill_visibility";
+      V : aliased ABI.C_Planar_Visibility;
+      use type Interfaces.Unsigned_8;
+   begin
+      Ada.Text_IO.Put_Line ("Visibility layout observed Ada size/type-alignment=" & Natural'Image (V'Size) &
+        "/" & Natural'Image (ABI.C_Planar_Visibility'Alignment) & " C=" & Interfaces.Integer_32'Image (Layout (0)) &
+        "/" & Interfaces.Integer_32'Image (Layout (1)) & " positions=" & Natural'Image (V.Count'Position) &
+        "/" & Natural'Image (V.Accepted'Position));
+      Assert (V'Size = Natural (Layout (0)) * System.Storage_Unit and then
+        ABI.C_Planar_Visibility'Alignment = Natural (Layout (1)) and then V.Count'Position = Natural (Layout (2)) and then
+        V.Accepted'Position = Natural (Layout (3)), "compiler visibility layout");
+      for I in 1 .. 4 loop
+         Assert (V.Accepted'Position + I - 1 = Natural (Layout (Interfaces.Integer_32 (I + 3))), "flag offset");
+      end loop;
+      Fill (V'Access);
+      Assert (V.Count = 4 and then V.Accepted (1) = 1 and then V.Accepted (2) = 0 and then
+        V.Accepted (3) = 1 and then V.Accepted (4) = 0, "C-written/Ada-read full visibility result");
+      Ada.Text_IO.Put_Line ("Visibility compiler size/alignment=" & Interfaces.Integer_32'Image (Layout (0)) &
+        "/" & Interfaces.Integer_32'Image (Layout (1)) & " count/array/four offsets interchange PASS");
+   end Visibility_Layout;
+
    procedure Planar_Layout (T : in out Fixture) is
       pragma Unreferenced (T);
       function Layout (Field : Interfaces.Integer_32) return Interfaces.Integer_32
@@ -3100,6 +3446,16 @@ package body Calib3D_Tests is
    begin
       Result.Add_Test (Caller.Create ("compiler-derived fundamental/options layouts", Fundamental_Layout'Access));
       Result.Add_Test (Caller.Create ("planar pure/general/scale independent oracle", Planar_Oracle'Access));
+      Result.Add_Test (Caller.Create ("visibility independent normal-sign oracle", Visibility_Signs'Access));
+      Result.Add_Test (Caller.Create ("visibility strict zero boundary", Visibility_Zero'Access));
+      Result.Add_Test (Caller.Create ("visibility R*n frame oracle", Visibility_Frame'Access));
+      Result.Add_Test (Caller.Create ("visibility decomposition composition", Visibility_Composition'Access));
+      Result.Add_Test (Caller.Create ("visibility robust selected-inlier composition", Visibility_Selected'Access));
+      Result.Add_Test (Caller.Create ("visibility pure/near rotation not applicable", Visibility_Pure'Access));
+      Result.Add_Test (Caller.Create ("visibility empty/no-reference and array bounds", Visibility_Empty'Access));
+      Result.Add_Test (Caller.Create ("visibility invalid hypotheses and selection", Visibility_Invalid'Access));
+      Result.Add_Test (Caller.Create ("visibility Float32 overflow/underflow boundary", Visibility_Float32'Access));
+      Result.Add_Test (Caller.Create ("visibility compiler result layout", Visibility_Layout'Access));
       Result.Add_Test (Caller.Create ("planar compiler layout/interchange", Planar_Layout'Access));
       Result.Add_Test (Caller.Create ("planar invalid inputs", Planar_Invalid'Access));
       Result.Add_Test (Caller.Create ("independent known-F epipolar/scale oracle", Fundamental_Oracle'Access));

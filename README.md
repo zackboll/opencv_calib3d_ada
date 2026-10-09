@@ -1,5 +1,17 @@
 # OpenCV Calib3D for Ada
 
+## Task 011: calibrated homography visibility
+
+`Assess_Planar_Visibility` returns a disposition for every original motion
+hypothesis. Omitted selection tests all references; explicitly empty selection
+tests none. Pure/near rotation is not applicable, and zero survivors is valid.
+Strict signs are `n dot p1 > 0` and `(R*n) dot p2 > 0`, evaluated using checked
+native Float32 observations. Passing is not full cheirality or unique camera
+motion selection; multiple candidates may remain. No metric scale is recovered.
+See [contract](docs/planar-visibility-contract.md),
+[immutable source review](docs/planar-visibility-source-review.md), and
+[qualification](docs/planar-visibility-validation.md).
+
 ## Task 010: calibrated planar motion
 
 `OpenCV.Calib3D.Decompose_Calibrated_Homography` returns all native motion
