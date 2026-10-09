@@ -104,6 +104,7 @@ thread_local bool essential_no_pose = false;
 thread_local bool triangulation_override = false, triangulation_unknown = false;
 thread_local double triangulation_h[4]{};
 thread_local int planar_control = 0;
+thread_local int visibility_control = 0;
 void checkpoint(int stage) {
     if (failure_stage != stage) return;
     const int kind = failure_kind;
@@ -282,6 +283,7 @@ void opencv_calib3d_test_refinement_false(void) {
 const char *opencv_calib3d_last_error(void) { return error_text; }
 #ifdef OPENCV_CALIB3D_TEST_HOOKS
 void opencv_calib3d_test_planar_control(int mode) { planar_control = mode; }
+void opencv_calib3d_test_visibility_control(int mode) { visibility_control = mode; }
 #endif
 const char *opencv_calib3d_native_version(void) { return CV_VERSION; }
 const char *opencv_calib3d_native_backend(void) {
@@ -371,6 +373,78 @@ opencv_calib3d_status opencv_calib3d_decompose_homography(
                 n.at<double>(0),n.at<double>(1),n.at<double>(2)};
         }
         checkpoint(45);
+        *result=local;
+    });
+}
+
+opencv_calib3d_status opencv_calib3d_filter_planar_visibility(
+    const opencv_calib3d_planar_decomposition *hypotheses,
+    const opencv_core_mat_handle *first, const opencv_core_mat_handle *second,
+    opencv_calib3d_planar_visibility *result) {
+    if (result) *result = {};
+    return guarded([&] {
+        require(hypotheses && result, "null visibility argument");
+        require(hypotheses->count > 0 && hypotheses->count <= 4,
+                "visibility requires one to four general candidates");
+        std::vector<cv::Mat> rotations, normals;
+        for (int i=0; i<hypotheses->count; ++i) {
+            const auto &v=hypotheses->candidates[i];
+            const double fields[]={v.r00,v.r01,v.r02,v.r10,v.r11,v.r12,
+                v.r20,v.r21,v.r22,v.tx,v.ty,v.tz,v.nx,v.ny,v.nz};
+            for (double x:fields) require(std::isfinite(x), "nonfinite visibility candidate");
+            cv::Mat r=double_matrix(3,3,{v.r00,v.r01,v.r02,v.r10,v.r11,v.r12,v.r20,v.r21,v.r22});
+            cv::Mat n=double_matrix(3,1,{v.nx,v.ny,v.nz});
+            require((v.tx!=0 || v.ty!=0 || v.tz!=0) &&
+                std::abs(std::hypot(v.nx,v.ny,v.nz)-1)<=1e-9 &&
+                cv::norm(r.t()*r-cv::Mat::eye(3,3,CV_64F),cv::NORM_INF)<=1e-9 &&
+                std::abs(cv::determinant(r)-1)<=1e-9, "invalid visibility candidate geometry");
+            rotations.push_back(r); normals.push_back(n);
+        }
+        const auto &a=resolve_input(first), &b=resolve_input(second);
+        const int count=validate_image_points(a,false);
+        require(count==validate_image_points(b,false), "visibility point counts differ");
+        auto snapshot=[&](const cv::Mat &source) {
+            cv::Mat target(count,1,CV_32FC2);
+            for (int i=0;i<count;++i) for (int j=0;j<2;++j) {
+                const double x=source.at<cv::Vec2d>(i,0)[j];
+                require(std::isfinite(x) && std::abs(x)<=std::numeric_limits<float>::max(),
+                        "visibility Float32 observation overflow/nonfinite");
+                const float y=static_cast<float>(x);
+                require(std::isfinite(y) && (x==0 || y!=0), "visibility Float32 observation underflow");
+                target.at<cv::Vec2f>(i,0)[j]=y;
+            }
+            return target;
+        };
+        const cv::Mat af=snapshot(a), bf=snapshot(b);
+        cv::Mat possible;
+        checkpoint(46);
+        cv::filterHomographyDecompByVisibleRefpoints(rotations,normals,af,bf,possible,cv::noArray());
+        checkpoint(47);
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+        const int control=visibility_control;
+        visibility_control=0;
+        if (control==1) possible=cv::Mat::ones(1,1,CV_64F);
+        if (control==2) possible=(cv::Mat_<int>(2,1)<<0,0);
+        if (control==3) possible=(cv::Mat_<int>(2,1)<<1,0);
+        if (control==4) possible=(cv::Mat_<int>(1,1)<<hypotheses->count);
+        if (control==5) possible=(cv::Mat_<int>(1,1)<<-1);
+#endif
+        opencv_calib3d_planar_visibility local{};
+        local.count=hypotheses->count;
+        checkpoint(48);
+        if (!possible.empty()) {
+            const int survivors=possible.checkVector(1,CV_32S);
+            require(possible.type()==CV_32SC1 && survivors>0 && survivors<=local.count,
+                    "invalid native visibility index schema");
+            const cv::Mat flat=possible.reshape(1,survivors);
+            int previous=-1;
+            for (int i=0;i<survivors;++i) {
+                const int index=flat.at<int>(i,0);
+                require(index>previous && index<local.count, "invalid native visibility index");
+                local.accepted[index]=1; previous=index;
+            }
+        }
+        checkpoint(49);
         *result=local;
     });
 }

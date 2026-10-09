@@ -154,6 +154,21 @@ package OpenCV.Calib3D.Internal.C_API is
      with Import, Convention => C,
        External_Name => "opencv_calib3d_decompose_homography";
 
+   type C_Visibility_Flags is array (Positive range 1 .. 4) of Interfaces.Unsigned_8
+     with Convention => C;
+   type C_Planar_Visibility is record
+      Count : Interfaces.Integer_32;
+      Accepted : C_Visibility_Flags;
+   end record with Convention => C, Alignment => 4;
+   --  Explicit ABI alignment qualified against C _Alignof on each target.
+   --  A standalone Ada object may be more aligned than its record type.
+   function Filter_Planar_Visibility
+     (Hypotheses : access constant C_Planar_Decomposition;
+      First, Second : OpenCV.Core.Module_Interop.Input_Mat_Handle;
+      Result : access C_Planar_Visibility) return Status
+     with Import, Convention => C,
+       External_Name => "opencv_calib3d_filter_planar_visibility";
+
    type C_Distortion5 is record
       K1, K2, P1, P2, K3 : Interfaces.C.double;
    end record with Convention => C;

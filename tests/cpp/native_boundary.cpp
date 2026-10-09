@@ -8,6 +8,11 @@
 
 #include <opencv2/core.hpp>
 #include <opencv2/core/version.hpp>
+#if CV_VERSION_MAJOR == 4
+#include <opencv2/calib3d.hpp>
+#else
+#include <opencv2/geometry/3d.hpp>
+#endif
 #include <cmath>
 #include <iostream>
 #include <memory>
@@ -23,6 +28,7 @@ extern "C" void opencv_calib3d_test_triangulation_h(double,double,double,double)
 extern "C" void opencv_calib3d_test_triangulation_unknown(void);
 extern "C" int opencv_calib3d_test_triangulation_live(void);
 extern "C" void opencv_calib3d_test_planar_control(int);
+extern "C" void opencv_calib3d_test_visibility_control(int);
 #endif
 
 namespace {
@@ -1268,11 +1274,97 @@ void planar_boundary() {
     std::cout << "PASS: raw planar production/fault atomicity and candidate rotations\n";
 }
 
+void visibility_boundary() {
+    opencv_calib3d_planar_decomposition hypotheses{};
+    hypotheses.count=4;
+    for (int i=0;i<4;++i) {
+        const double sign=i%2 ? -1 : 1;
+        hypotheses.candidates[i]={1,0,0,0,1,0,0,0,1,sign*.1,0,0,0,0,sign};
+    }
+    auto a=matrix(3,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    auto b=matrix(3,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    output(a.get()).setTo(cv::Scalar(.2,.1));
+    output(b.get()).setTo(cv::Scalar(.25,.1));
+    opencv_calib3d_planar_visibility result{};
+    auto call=[&] { return opencv_calib3d_filter_planar_visibility(&hypotheses,a.get(),b.get(),&result); };
+    auto cleared=[&] {
+        check(result.count==0,"visibility failure count");
+        for (auto x:result.accepted) check(x==0,"visibility failure flags");
+    };
+    check(call()==0 && result.count==4 && result.accepted[0]==1 &&
+          result.accepted[1]==0 && result.accepted[2]==1 && result.accepted[3]==0,
+          "visibility sign-pair multiple survivors");
+    for (auto &v:hypotheses.candidates) { v.nx=1; v.nz=0; }
+    output(a.get()).at<cv::Vec2d>(0,0)[0]=0;
+    check(call()==0 && result.count==4,"visibility zero-survivor success");
+    for (auto x:result.accepted) check(x==0,"strict zero rejected");
+    output(a.get()).at<cv::Vec2d>(0,0)[0]=.2;
+    for (double bad:{std::numeric_limits<double>::infinity(),1e100,1e-100}) {
+        output(a.get()).at<cv::Vec2d>(0,0)[0]=bad;
+        result={99,{9,9,9,9}};
+        check(call()!=0,"visibility conversion invalid"); cleared();
+    }
+    output(a.get()).at<cv::Vec2d>(0,0)[0]=.2;
+    auto wrong=matrix(3,1,OPENCV_CORE_DEPTH_FLOAT32,2);
+    auto unequal=matrix(2,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    auto empty=matrix(0,1,OPENCV_CORE_DEPTH_FLOAT64,2);
+    for (const auto *bad:{wrong.get(),unequal.get(),empty.get()}) {
+        result={99,{9,9,9,9}};
+        check(opencv_calib3d_filter_planar_visibility(&hypotheses,a.get(),bad,&result)!=0,
+              "visibility invalid raw points"); cleared();
+    }
+    for (int mode=0;mode<5;++mode) {
+        const auto saved=hypotheses;
+        if (mode==0) hypotheses.count=0;
+        if (mode==1) hypotheses.count=5;
+        if (mode==2) hypotheses.candidates[0].r00=2;
+        if (mode==3) hypotheses.candidates[0].tx=0;
+        if (mode==4) hypotheses.candidates[0].nx=2;
+        result={99,{9,9,9,9}};
+        check(call()!=0,"visibility invalid raw candidate"); cleared(); hypotheses=saved;
+    }
+    // Real Core ROI headers, not fake handles: source rows have a stride.
+    auto large=matrix(3,2,OPENCV_CORE_DEPTH_FLOAT64,2);
+    output(large.get()).setTo(cv::Scalar(.2,.1));
+    output(a.get())=output(large.get()).col(0);
+    check(!output(a.get()).isContinuous() && call()==0,"visibility strided Core region");
+    std::vector<cv::Mat> rotations, normals;
+    for (int i=0;i<4;++i) {
+        rotations.push_back(cv::Mat::eye(3,3,CV_64F));
+        normals.push_back((cv::Mat_<double>(3,1)<< (i%2 ? -1 : 1),0,0));
+    }
+    cv::Mat full_a(3,1,CV_32FC2,cv::Scalar(.2,.1)),full_b(3,1,CV_32FC2,cv::Scalar(.25,.1));
+    full_a.at<cv::Vec2f>(1,0)[0]=-1;
+    cv::Mat mask=(cv::Mat_<unsigned char>(3,1)<<255,0,255);
+    cv::Mat compact_a(2,1,CV_32FC2),compact_b(2,1,CV_32FC2),selected,masked;
+    for (int i=0;i<2;++i) { compact_a.at<cv::Vec2f>(i)=full_a.at<cv::Vec2f>(2*i);
+        compact_b.at<cv::Vec2f>(i)=full_b.at<cv::Vec2f>(2*i); }
+    cv::filterHomographyDecompByVisibleRefpoints(rotations,normals,compact_a,compact_b,selected,cv::noArray());
+    cv::filterHomographyDecompByVisibleRefpoints(rotations,normals,full_a,full_b,masked,mask);
+    check(selected.total()==2 && cv::norm(selected,masked,cv::NORM_INF)==0,
+          "native compact/CV_8U mask equivalence");
+    std::cout << "PASS: native mask equivalence survivors [0,2]; signs first=.2 second=.25\n";
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+    for (int stage=46;stage<=49;++stage) for (int kind=1;kind<=5;++kind) {
+        result={99,{9,9,9,9}}; opencv_calib3d_test_fail(stage,kind);
+        check(call()!=0,"visibility injected exception"); cleared();
+    }
+    std::cout << "PASS: raw visibility 20 fault scenarios, cleared output\n";
+    for (int mode=1;mode<=5;++mode) {
+        result={99,{9,9,9,9}}; opencv_calib3d_test_visibility_control(mode);
+        check(call()!=0,"visibility malformed native indices"); cleared();
+    }
+    std::cout << "PASS: visibility five post-native malformed index controls\n";
+#endif
+    std::cout << "PASS: visibility raw production, multiple/zero survivors, conversion, strided Core handles\n";
+}
+
 int main() {
     try {
         run();
         triangulation_boundary();
         planar_boundary();
+        visibility_boundary();
         return 0;
     } catch (const std::exception &error) {
         std::cerr << "FAIL: " << error.what() << '\n';
