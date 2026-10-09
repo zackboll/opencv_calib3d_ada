@@ -8,6 +8,103 @@ procedure Homography_Synthetic is
    package Math is new Ada.Numerics.Generic_Elementary_Functions (OpenCV.Float64_Value);
    Source, Destination : Image_Point_Array (1 .. 24);
    Sample : constant Image_Point := [35.0, 25.0];
+   procedure Demonstrate_Planar (Pure : Boolean) is
+      K : constant Camera_Intrinsics := (800.0, 820.0, 640.0, 360.0);
+      type Matrix is array (Natural range 0 .. 2, Natural range 0 .. 2) of OpenCV.Float64_Value;
+      Camera : constant Matrix := [[800.0, 0.0, 640.0], [0.0, 820.0, 360.0], [0.0, 0.0, 1.0]];
+      Inverse : constant Matrix := [[1.0 / 800.0, 0.0, -0.8],
+        [0.0, 1.0 / 820.0, -360.0 / 820.0], [0.0, 0.0, 1.0]];
+      function Product (A, B : Matrix) return Matrix is
+         C : Matrix := [others => [others => 0.0]];
+      begin
+         for I in 0 .. 2 loop
+            for J in 0 .. 2 loop
+               for L in 0 .. 2 loop
+                  C (I, J) := C (I, J) + A (I, L) * B (L, J);
+               end loop;
+            end loop;
+         end loop;
+         return C;
+      end Product;
+      procedure Print (Label : String; M : Matrix) is
+      begin
+         Ada.Text_IO.Put_Line (Label);
+         for I in 0 .. 2 loop
+            for J in 0 .. 2 loop
+               Ada.Text_IO.Put (OpenCV.Float64_Value'Image (M (I, J)) & " ");
+            end loop;
+            Ada.Text_IO.New_Line;
+         end loop;
+      end Print;
+      Angle : constant OpenCV.Float64_Value := (if Pure then 0.12 else 0.08);
+      C : constant OpenCV.Float64_Value := Math.Cos (Angle);
+      S : constant OpenCV.Float64_Value := Math.Sin (Angle);
+      Normalized : constant Matrix := (if Pure then [[C, -S, 0.0], [S, C, 0.0], [0.0, 0.0, 1.0]]
+        else [[C, 0.0, S - 0.12], [0.0, 1.0, 0.04], [-S, 0.0, C + 0.08]]);
+      H : constant Homography_Matrix := Homography_Matrix (Product (Product (Camera, Normalized), Inverse));
+      Candidates : constant Planar_Motion_Hypothesis_Array := Decompose_Calibrated_Homography (H, K);
+   begin
+      Print ("Shared intrinsics:", Camera);
+      declare
+         Input : Matrix;
+      begin
+         for I in 0 .. 2 loop
+            for J in 0 .. 2 loop
+               Input (I, J) := H (I, J);
+            end loop;
+         end loop;
+         Print ("Input homography:", Input);
+      end;
+      Ada.Text_IO.Put_Line ("Hypothesis count:" & Natural'Image (Candidates'Length));
+      for V of Candidates loop
+         declare
+            Rotation : Matrix;
+         begin
+            for I in 0 .. 2 loop
+               for J in 0 .. 2 loop
+                  Rotation (I, J) := V.Rotation_First_To_Second (I, J);
+               end loop;
+            end loop;
+            Print ("Candidate first-to-second rotation:", Rotation);
+         end;
+         Ada.Text_IO.Put_Line ("Translation over UNKNOWN plane distance (not metric translation):");
+         for X of V.Translation_Over_Plane_Distance loop
+            Ada.Text_IO.Put (OpenCV.Float64_Value'Image (X) & " ");
+         end loop;
+         Ada.Text_IO.New_Line;
+         Ada.Text_IO.Put_Line ("Plane normal in first camera:");
+         for X of V.Plane_Normal_In_First loop
+            Ada.Text_IO.Put (OpenCV.Float64_Value'Image (X) & " ");
+         end loop;
+         Ada.Text_IO.New_Line;
+         Ada.Text_IO.Put_Line ("Pure rotation: " & Boolean'Image (V.Pure_Rotation));
+         declare
+            Implied : Matrix;
+            Dot, Norm, Factor, Error : OpenCV.Float64_Value := 0.0;
+         begin
+            for I in 0 .. 2 loop
+               for J in 0 .. 2 loop
+                  Implied (I, J) := V.Rotation_First_To_Second (I, J) +
+                    V.Translation_Over_Plane_Distance (I) * V.Plane_Normal_In_First (J);
+                  Dot := Dot + Implied (I, J) * Normalized (I, J);
+                  Norm := Norm + Implied (I, J)**2;
+               end loop;
+            end loop;
+            Factor := Dot / Norm;
+            for I in 0 .. 2 loop
+               for J in 0 .. 2 loop
+                  Error := OpenCV.Float64_Value'Max (Error, abs (Factor * Implied (I, J) - Normalized (I, J)));
+               end loop;
+            end loop;
+            Ada.Text_IO.Put_Line ("Projective reconstruction error:" & OpenCV.Float64_Value'Image (Error));
+            if Error > 1.0E-10 then
+               raise Program_Error with "planar reconstruction failed";
+            end if;
+         end;
+      end loop;
+      Ada.Text_IO.Put_Line ("Alternative mathematical hypotheses; none automatically selected as physical motion.");
+   end Demonstrate_Planar;
+
    function Truth (P : Image_Point) return Image_Point is
       W : constant OpenCV.Float64_Value := 0.001 * P (0) - 0.002 * P (1) + 1.0;
    begin
@@ -74,4 +171,6 @@ begin
          end if;
       end;
    end;
+   Demonstrate_Planar (True);
+   Demonstrate_Planar (False);
 end Homography_Synthetic;

@@ -1,5 +1,13 @@
 # Roadmap
 
+## Task 010 approved scope
+
+Calibrated homography motion decomposition only: all native hypotheses,
+shared calibration, translation over unknown plane distance, pure rotation,
+signed projective-scale handling, fixed C/Ada storage, and independent oracles.
+No visibility filtering, automatic pose selection, metric translation,
+different-intrinsics overload, or Task 011 work is included.
+
 Task 008 adds pure-Ada triangulation parallax and caller-selected quality
 diagnostics, without changing reconstruction or Usable status. See
 [contract](triangulation-quality-contract.md) and

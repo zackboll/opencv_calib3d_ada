@@ -15,6 +15,15 @@
 extern "C" {
 #endif
 
+typedef struct opencv_calib3d_planar_motion {
+    double r00, r01, r02, r10, r11, r12, r20, r21, r22;
+    double tx, ty, tz, nx, ny, nz;
+} opencv_calib3d_planar_motion;
+typedef struct opencv_calib3d_planar_decomposition {
+    int32_t count;
+    opencv_calib3d_planar_motion candidates[4];
+} opencv_calib3d_planar_decomposition;
+
 typedef struct opencv_core_mat_handle opencv_core_mat_handle;
 typedef struct opencv_calib3d_pose_result_handle opencv_calib3d_pose_result_handle;
 typedef struct opencv_calib3d_homography_result_handle opencv_calib3d_homography_result_handle;
@@ -197,6 +206,10 @@ OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_undistort_normalized(
     opencv_core_mat_handle *normalized_points);
 
 OPENCV_CALIB3D_API const char *opencv_calib3d_last_error(void);
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_decompose_homography(
+    const opencv_calib3d_homography *matrix,
+    const opencv_calib3d_camera_intrinsics *intrinsics,
+    opencv_calib3d_planar_decomposition *result);
 OPENCV_CALIB3D_API const char *opencv_calib3d_native_version(void);
 OPENCV_CALIB3D_API const char *opencv_calib3d_native_backend(void);
 

@@ -17,6 +17,7 @@ package body Calib3D_Tests is
    use type OpenCV.Float64_Value;
    use type Interfaces.Integer_32;
    use type Interfaces.C.double;
+   use type Translation_Vector;
 
    package ABI renames OpenCV.Calib3D.Internal.C_API;
    package Math is new Ada.Numerics.Generic_Elementary_Functions
@@ -2894,10 +2895,213 @@ package body Calib3D_Tests is
         "extreme finite bearings do not square unscaled coordinates");
    end Parallax_Large;
 
+   procedure Planar_Layout (T : in out Fixture) is
+      pragma Unreferenced (T);
+      function Layout (Field : Interfaces.Integer_32) return Interfaces.Integer_32
+        with Import, Convention => C, External_Name => "calib3d_test_planar_layout";
+      procedure Fill (V : access ABI.C_Planar_Decomposition)
+        with Import, Convention => C, External_Name => "calib3d_test_fill_planar";
+      V : aliased ABI.C_Planar_Decomposition;
+      X : ABI.C_Planar_Motion;
+      Offsets : constant array (Natural range 0 .. 14) of Natural :=
+        [X.R00'Position, X.R01'Position, X.R02'Position, X.R10'Position, X.R11'Position, X.R12'Position, X.R20'Position, X.R21'Position, X.R22'Position, X.TX'Position, X.TY'Position, X.TZ'Position, X.NX'Position, X.NY'Position, X.NZ'Position];
+   begin
+      Assert (X'Size = Natural (Layout (0)) * System.Storage_Unit and then
+        X'Alignment = Natural (Layout (1)), "candidate compiler layout");
+      for I in Offsets'Range loop
+         Assert (Offsets (I) = Natural (Layout (Interfaces.Integer_32 (I + 2))), "candidate field offset");
+      end loop;
+      Assert (V'Size = Natural (Layout (17)) * System.Storage_Unit and then
+        V'Alignment = Natural (Layout (18)), "aggregate compiler layout");
+      Assert (V.Count'Position = Natural (Layout (19)) and then
+        V.Candidates'Position = Natural (Layout (20)), "aggregate offsets");
+      Fill (V'Access);
+      Assert (V.Count = 4, "C-written aggregate count");
+      for I in 1 .. 4 loop
+         Assert (V.Candidates'Position + (I - 1) * X'Size / System.Storage_Unit =
+           Natural (Layout (Interfaces.Integer_32 (21 + I))), "four element locations");
+         Assert (X'Size / System.Storage_Unit = Natural (Layout (21)), "candidate stride");
+         X := V.Candidates (I);
+         declare
+            Values : constant array (Positive range 1 .. 15) of Interfaces.C.double :=
+              [X.R00, X.R01, X.R02, X.R10, X.R11, X.R12, X.R20, X.R21, X.R22, X.TX, X.TY, X.TZ, X.NX, X.NY, X.NZ];
+         begin
+            for J in Values'Range loop
+               Assert (Values (J) = Interfaces.C.double (J + (I - 1) * 100), "full-record interchange");
+            end loop;
+         end;
+      end loop;
+      Ada.Text_IO.Put_Line ("Planar layout candidate size/alignment=" & Interfaces.Integer_32'Image (Layout (0)) &
+        "/" & Interfaces.Integer_32'Image (Layout (1)) & " aggregate=" & Interfaces.Integer_32'Image (Layout (17)) &
+        "/" & Interfaces.Integer_32'Image (Layout (18)) & "; 15 offsets, stride, four locations/interchange PASS");
+   end Planar_Layout;
+
+   procedure Planar_Oracle (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Calibration : constant Camera_Intrinsics := (800.0, 820.0, 640.0, 360.0);
+      type Matrix is array (Natural range 0 .. 2, Natural range 0 .. 2) of OpenCV.Float64_Value;
+      Camera : constant Matrix := [[800.0, 0.0, 640.0], [0.0, 820.0, 360.0], [0.0, 0.0, 1.0]];
+      Inverse : constant Matrix := [[1.0 / 800.0, 0.0, -640.0 / 800.0],
+        [0.0, 1.0 / 820.0, -360.0 / 820.0], [0.0, 0.0, 1.0]];
+      function Product (A, B : Matrix) return Matrix is
+         C : Matrix := [others => [others => 0.0]];
+      begin
+         for I in 0 .. 2 loop
+            for J in 0 .. 2 loop
+               for L in 0 .. 2 loop
+                  C (I, J) := C (I, J) + A (I, L) * B (L, J);
+               end loop;
+            end loop;
+         end loop;
+         return C;
+      end Product;
+      Translation : constant Translation_Vector := [-0.12, 0.04, 0.08];
+   begin
+      for Pure in Boolean loop
+         declare
+            Angle : constant OpenCV.Float64_Value := (if Pure then 0.12 else 0.08);
+            C : constant OpenCV.Float64_Value := Math.Cos (Angle);
+            S : constant OpenCV.Float64_Value := Math.Sin (Angle);
+            Rotation : constant Matrix := (if Pure then
+              [[C, -S, 0.0], [S, C, 0.0], [0.0, 0.0, 1.0]] else
+              [[C, 0.0, S], [0.0, 1.0, 0.0], [-S, 0.0, C]]);
+            Normalized : Matrix := Rotation;
+            H : Homography_Matrix;
+         begin
+            if not Pure then
+               for I in 0 .. 2 loop
+                  Normalized (I, 2) := Normalized (I, 2) + Translation (I);
+               end loop;
+            end if;
+            H := Homography_Matrix (Product (Product (Camera, Normalized), Inverse));
+            for Scale of Reprojection_Error_Array'[1.0, 7.0, -7.0, 1.0E-6, 1.0E6] loop
+               declare
+                  Scaled : Homography_Matrix := H;
+                  Known : Boolean := False;
+                  Maximum : OpenCV.Float64_Value := 0.0;
+               begin
+                  for I in 0 .. 2 loop
+                     for J in 0 .. 2 loop
+                        Scaled (I, J) := H (I, J) * Scale;
+                     end loop;
+                  end loop;
+                  declare
+                     Candidates : constant Planar_Motion_Hypothesis_Array :=
+                       Decompose_Calibrated_Homography (Scaled, Calibration);
+                  begin
+                     Assert (Candidates'First = 1 and then Candidates'Length = (if Pure then 1 else 4),
+                       "native planar count / one based");
+                     for V of Candidates loop
+                        declare
+                           Implied : Matrix;
+                           Dot, Norm, Factor, Error, Motion_Error : OpenCV.Float64_Value := 0.0;
+                           Paired : Boolean := Pure;
+                        begin
+                           Assert (V.Pure_Rotation = Pure, "pure flag");
+                           for I in 0 .. 2 loop
+                              for J in 0 .. 2 loop
+                                 Implied (I, J) := V.Rotation_First_To_Second (I, J) +
+                                   V.Translation_Over_Plane_Distance (I) * V.Plane_Normal_In_First (J);
+                                 Dot := Dot + Implied (I, J) * Normalized (I, J);
+                                 Norm := Norm + Implied (I, J)**2;
+                                 Motion_Error := OpenCV.Float64_Value'Max (Motion_Error,
+                                   abs (V.Rotation_First_To_Second (I, J) - Rotation (I, J)));
+                              end loop;
+                           end loop;
+                           Factor := Dot / Norm;
+                           for I in 0 .. 2 loop
+                              for J in 0 .. 2 loop
+                                 Error := OpenCV.Float64_Value'Max (Error,
+                                   abs (Factor * Implied (I, J) - Normalized (I, J)));
+                              end loop;
+                           end loop;
+                           Maximum := OpenCV.Float64_Value'Max (Maximum, Error);
+                           Assert (Error < 1.0E-10, "projective reconstruction");
+                           if Pure then
+                              Assert (V.Translation_Over_Plane_Distance = Translation_Vector'[0.0, 0.0, 0.0]
+                                and then V.Plane_Normal_In_First = Camera_Direction'[0.0, 0.0, 0.0], "pure zeros");
+                              Known := Motion_Error < 1.0E-10;
+                           else
+                              Assert (Near (Math.Sqrt (V.Translation_Over_Plane_Distance (0)**2 +
+                                V.Translation_Over_Plane_Distance (1)**2 +
+                                V.Translation_Over_Plane_Distance (2)**2), Math.Sqrt (0.0224), 1.0E-10),
+                                "translation magnitude not normalized");
+                              Known := Known or else (Motion_Error < 1.0E-10 and then
+                                abs (V.Translation_Over_Plane_Distance (0) * V.Plane_Normal_In_First (2) + 0.12) < 1.0E-10);
+                              for W of Candidates loop
+                                 declare
+                                    Difference : OpenCV.Float64_Value := 0.0;
+                                 begin
+                                    for I in 0 .. 2 loop
+                                       Difference := Difference + abs (V.Translation_Over_Plane_Distance (I) +
+                                         W.Translation_Over_Plane_Distance (I)) +
+                                         abs (V.Plane_Normal_In_First (I) + W.Plane_Normal_In_First (I));
+                                       for J in 0 .. 2 loop
+                                          Difference := Difference + abs (V.Rotation_First_To_Second (I, J) -
+                                            W.Rotation_First_To_Second (I, J));
+                                       end loop;
+                                    end loop;
+                                    Paired := Paired or else Difference < 1.0E-10;
+                                 end;
+                              end loop;
+                           end if;
+                           Assert (Paired, "simultaneous t/n sign pair");
+                        end;
+                     end loop;
+                     Assert (Known, "known first-to-second motion represented");
+                     Ada.Text_IO.Put_Line ("Planar pure=" & Boolean'Image (Pure) & " scale=" &
+                       OpenCV.Float64_Value'Image (Scale) & " reconstruction=" & OpenCV.Float64_Value'Image (Maximum));
+                  end;
+               end;
+            end loop;
+         end;
+      end loop;
+   end Planar_Oracle;
+
+   procedure Planar_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      Identity : constant Homography_Matrix := [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+      procedure Reject (H : Homography_Matrix; Calibration : Camera_Intrinsics := K) is
+      begin
+         declare
+            V : constant Planar_Motion_Hypothesis_Array := Decompose_Calibrated_Homography (H, Calibration);
+         begin
+            Assert (False, "invalid homography accepted" & Natural'Image (V'Length));
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Reject;
+      H : Homography_Matrix := Identity;
+   begin
+      declare
+         V : constant Planar_Motion_Hypothesis_Array := Decompose_Calibrated_Homography
+           ([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [-1.0, 0.0, 0.0]], (1.0, 1.0, 0.0, 0.0));
+      begin
+         Assert (V'Length = 1 and then V (1).Pure_Rotation, "valid zero h22 is not rejected");
+      end;
+      Reject ([others => [others => 0.0]]);
+      H (2, 2) := 0.0;
+      Reject (H);
+      H := Identity;
+      H (0, 0) := OpenCV.Float64_Value (Nonfinite (0));
+      Reject (H);
+      Reject (Identity, (0.0, 820.0, 640.0, 360.0));
+      Reject (Identity, (800.0, -1.0, 640.0, 360.0));
+      Reject (Identity, (800.0, 820.0, OpenCV.Float64_Value (Nonfinite (1)), 360.0));
+      H := Identity;
+      H (0, 0) := OpenCV.Float64_Value'Last;
+      H (1, 1) := 1.0E-300;
+      Reject (H);
+   end Planar_Invalid;
+
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
       Result.Add_Test (Caller.Create ("compiler-derived fundamental/options layouts", Fundamental_Layout'Access));
+      Result.Add_Test (Caller.Create ("planar pure/general/scale independent oracle", Planar_Oracle'Access));
+      Result.Add_Test (Caller.Create ("planar compiler layout/interchange", Planar_Layout'Access));
+      Result.Add_Test (Caller.Create ("planar invalid inputs", Planar_Invalid'Access));
       Result.Add_Test (Caller.Create ("independent known-F epipolar/scale oracle", Fundamental_Oracle'Access));
       Result.Add_Test (Caller.Create ("epipolar error finite range/invalid inputs", Fundamental_Range'Access));
       Result.Add_Test (Caller.Create ("clean noncoplanar stereo fundamental RANSAC", Fundamental_Clean'Access));

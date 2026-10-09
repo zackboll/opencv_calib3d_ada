@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <initializer_list>
+#include <limits>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -102,6 +103,7 @@ thread_local bool essential_no_model = false;
 thread_local bool essential_no_pose = false;
 thread_local bool triangulation_override = false, triangulation_unknown = false;
 thread_local double triangulation_h[4]{};
+thread_local int planar_control = 0;
 void checkpoint(int stage) {
     if (failure_stage != stage) return;
     const int kind = failure_kind;
@@ -278,6 +280,9 @@ void opencv_calib3d_test_refinement_false(void) {
 #endif
 
 const char *opencv_calib3d_last_error(void) { return error_text; }
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+void opencv_calib3d_test_planar_control(int mode) { planar_control = mode; }
+#endif
 const char *opencv_calib3d_native_version(void) { return CV_VERSION; }
 const char *opencv_calib3d_native_backend(void) {
 #if CV_VERSION_MAJOR == 4
@@ -285,6 +290,89 @@ const char *opencv_calib3d_native_backend(void) {
 #else
     return "geometry";
 #endif
+}
+
+opencv_calib3d_status opencv_calib3d_decompose_homography(
+    const opencv_calib3d_homography *matrix,
+    const opencv_calib3d_camera_intrinsics *intrinsics,
+    opencv_calib3d_planar_decomposition *result) {
+    if (result) *result = {};
+    return guarded([&] {
+        require(matrix && result, "null homography decomposition argument");
+        validate_intrinsics(intrinsics);
+        const double entries[] = {matrix->h00,matrix->h01,matrix->h02,
+            matrix->h10,matrix->h11,matrix->h12,matrix->h20,matrix->h21,matrix->h22};
+        double scale = 0;
+        for (double v : entries) {
+            require(std::isfinite(v), "nonfinite homography");
+            scale = std::max(scale,std::abs(v));
+        }
+        require(scale > 0, "zero homography");
+        cv::Mat h(3,3,CV_64FC1);
+        for (int i=0;i<9;++i) {
+            const double v = entries[i]/scale;
+            require(std::isfinite(v) && (entries[i]==0 || v!=0),
+                    "unrepresentable homography canonicalization");
+            h.at<double>(i/3,i%3) = v;
+        }
+        // Determinant orientation removes negative projective scale without
+        // relying on h22. Long double avoids double product underflow here.
+        const long double a=h.at<double>(0,0),b=h.at<double>(0,1),c=h.at<double>(0,2);
+        const long double d=h.at<double>(1,0),e=h.at<double>(1,1),f=h.at<double>(1,2);
+        const long double g=h.at<double>(2,0),j=h.at<double>(2,1),k=h.at<double>(2,2);
+        const long double determinant=a*(e*k-f*j)-b*(d*k-f*g)+c*(d*j-e*g);
+        require(std::isfinite(determinant) && determinant!=0, "singular homography");
+        if (determinant<0) h *= -1;
+        const cv::Mat camera = camera_matrix(*intrinsics);
+        const cv::Mat normalized = camera.inv()*h*camera;
+        require(cv::checkRange(normalized), "unrepresentable calibrated homography");
+        cv::SVD singular(normalized,cv::SVD::NO_UV);
+        require(singular.w.at<double>(1)>0 && singular.w.at<double>(2)>0,
+                "singular calibrated homography");
+        std::vector<cv::Mat> rotations, translations, normals;
+        checkpoint(42);
+        int count=cv::decomposeHomographyMat(h,camera,rotations,translations,normals);
+        checkpoint(43);
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+        // Explicit controls AFTER a real native call; not degenerate-input behavior.
+        const int control=planar_control;
+        planar_control=0;
+        if (control==1) { count=0; rotations.clear(); translations.clear(); normals.clear(); }
+        if (control==2) rotations[0]=cv::Mat::zeros(2,2,CV_32F);
+        if (control==3) count=5;
+        if (control==4) translations[0].at<double>(0)=std::numeric_limits<double>::infinity();
+#endif
+        if (count<0 || count>4 || rotations.size()!=static_cast<std::size_t>(count) ||
+            translations.size()!=rotations.size() || normals.size()!=rotations.size())
+            throw std::runtime_error("malformed decomposition count");
+        opencv_calib3d_planar_decomposition local{};
+        local.count=count;
+        for (int i=0;i<count;++i) {
+            checkpoint(44);
+            const auto &r=rotations[i], &t=translations[i], &n=normals[i];
+            if (r.rows!=3 || r.cols!=3 || r.type()!=CV_64FC1 ||
+                t.rows!=3 || t.cols!=1 || t.type()!=CV_64FC1 ||
+                n.rows!=3 || n.cols!=1 || n.type()!=CV_64FC1 ||
+                !cv::checkRange(r) || !cv::checkRange(t) || !cv::checkRange(n))
+                throw std::runtime_error("malformed decomposition candidate");
+            // Native near-rotation branch returns Hnorm directly, not an SO(3)
+            // projection. Preserve its documented tolerance, without modifying R.
+            const bool pure=cv::norm(t)==0 && cv::norm(n)==0;
+            const double tolerance=pure ? 0.001 : 1e-9;
+            if ((pure && count!=1) || (!pure && count!=4) ||
+                cv::norm(r.t()*r-cv::Mat::eye(3,3,CV_64F),cv::NORM_INF)>tolerance ||
+                std::abs(cv::determinant(r)-1)>tolerance ||
+                (!pure && (cv::norm(t)==0 || std::abs(cv::norm(n)-1)>1e-9)))
+                throw std::runtime_error("invalid decomposition geometry");
+            local.candidates[i]={r.at<double>(0,0),r.at<double>(0,1),r.at<double>(0,2),
+                r.at<double>(1,0),r.at<double>(1,1),r.at<double>(1,2),
+                r.at<double>(2,0),r.at<double>(2,1),r.at<double>(2,2),
+                t.at<double>(0),t.at<double>(1),t.at<double>(2),
+                n.at<double>(0),n.at<double>(1),n.at<double>(2)};
+        }
+        checkpoint(45);
+        *result=local;
+    });
 }
 
 opencv_calib3d_status opencv_calib3d_find_homography_ransac(

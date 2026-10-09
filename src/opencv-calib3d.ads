@@ -371,6 +371,23 @@ package OpenCV.Calib3D is
       Distortion : Distortion_Coefficients; Pose : World_To_Camera_Pose)
       return World_Ray_Array;
 
+   type Planar_Motion_Hypothesis is record
+      Rotation_First_To_Second : Rotation_Matrix;
+      Translation_Over_Plane_Distance : Translation_Vector;
+      Plane_Normal_In_First : Camera_Direction;
+      Pure_Rotation : Boolean;
+   end record;
+   type Planar_Motion_Hypothesis_Array is
+     array (Positive range <>) of Planar_Motion_Hypothesis;
+   --  Undistorted pinhole homography; same K in both views. Identity K for
+   --  normalized coordinates. K^-1 H K ~ R+(t/d)n^T, first to second camera.
+   --  All native hypotheses, no physical selection or visibility filtering.
+   --  t/d preserves magnitude, NOT metric translation. Simultaneous negation
+   --  of t/d and n preserves geometry. Native near-rotation tolerance: 0.001.
+   function Decompose_Calibrated_Homography
+     (Matrix : Homography_Matrix; Intrinsics : Camera_Intrinsics)
+      return Planar_Motion_Hypothesis_Array;
+
    function Project_Points
      (Points     : Object_Point_Array;
       Intrinsics : Camera_Intrinsics;

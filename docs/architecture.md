@@ -1,5 +1,14 @@
 # Architecture
 
+## Task 010 fixed-value decomposition
+
+Calibrated homography decomposition adds one guarded private C call (44 total
+imports/exports), with caller-owned storage for count and four fifteen-double
+candidates. Output is zeroed before validation and published only after every
+candidate passes. Public hypotheses are Ada values, not handles. Core ownership
+and callback-scoped Mat borrowing remain unchanged.
+See [planar contract](planar-motion-contract.md).
+
 Task 008 adds a pure-Ada bearing/quality layer above normalized observations,
 relative pose and public triangulation values. It shares Task 007 SO(3)
 validation and scaled normalization, uses R^T to compare first-frame bearings,

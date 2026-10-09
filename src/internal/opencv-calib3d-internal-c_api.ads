@@ -137,6 +137,23 @@ package OpenCV.Calib3D.Internal.C_API is
       Focal_X, Focal_Y, Center_X, Center_Y : Interfaces.C.double;
    end record with Convention => C;
 
+   type C_Planar_Motion is record
+      R00, R01, R02, R10, R11, R12, R20, R21, R22 : Interfaces.C.double;
+      TX, TY, TZ, NX, NY, NZ : Interfaces.C.double;
+   end record with Convention => C;
+   type C_Planar_Motion_Array is array (Positive range 1 .. 4) of C_Planar_Motion
+     with Convention => C;
+   type C_Planar_Decomposition is record
+      Count : Interfaces.Integer_32;
+      Candidates : C_Planar_Motion_Array;
+   end record with Convention => C;
+   function Decompose_Homography
+     (Matrix : access constant C_Homography;
+      Intrinsics : access constant C_Camera_Intrinsics;
+      Result : access C_Planar_Decomposition) return Status
+     with Import, Convention => C,
+       External_Name => "opencv_calib3d_decompose_homography";
+
    type C_Distortion5 is record
       K1, K2, P1, P2, K3 : Interfaces.C.double;
    end record with Convention => C;
