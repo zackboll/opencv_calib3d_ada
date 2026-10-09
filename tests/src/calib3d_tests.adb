@@ -3032,11 +3032,23 @@ package body Calib3D_Tests is
       A, B : Image_Point_Array (1 .. 24);
       N1, N2 : Normalized_Image_Point_Array (1 .. 24);
       V : constant Planar_Motion_Hypothesis := Visibility_Candidate ([1.0, 0.0, 0.0]);
+      C : constant OpenCV.Float64_Value := Math.Cos (0.08);
+      S : constant OpenCV.Float64_Value := Math.Sin (0.08);
+      H : constant Homography_Matrix := [[C, 0.0, S - 0.12], [0.0, 1.0, 0.04], [-S, 0.0, C + 0.08]];
+      Hypotheses : constant Planar_Motion_Hypothesis_Array :=
+        Decompose_Calibrated_Homography (H, (1.0, 1.0, 0.0, 0.0));
    begin
       for I in A'Range loop
          A (I) := [OpenCV.Float64_Value (I mod 6) * 40.0 + 50.0,
                    OpenCV.Float64_Value (I / 6) * 30.0 + 10.0];
-         B (I) := [A (I) (0) + 20.0, A (I) (1) + 10.0];
+         --  Same Z=1, known R/t/d/n fixture as decomposition composition.
+         declare
+            X : constant OpenCV.Float64_Value := A (I) (0) / 800.0;
+            Y : constant OpenCV.Float64_Value := A (I) (1) / 820.0;
+            Z : constant OpenCV.Float64_Value := -S * X + C + 0.08;
+         begin
+            B (I) := [800.0 * (C * X + S - 0.12) / Z, 820.0 * (Y + 0.04) / Z];
+         end;
       end loop;
       A (2) := [-400.0, 100.0]; B (2) := [-4_000.0, 5_000.0];
       B (7) := [5_000.0, -4_000.0]; B (15) := [-6_000.0, 3_000.0];
@@ -3047,6 +3059,8 @@ package body Calib3D_Tests is
          Selected : constant Inlier_Index_Array := Inliers (Estimate);
          All_Results : constant Planar_Hypothesis_Visibility_Array := Assess_Planar_Visibility ([V], N1, N2);
          Subset : constant Planar_Hypothesis_Visibility_Array := Assess_Planar_Visibility ([V], N1, N2, Selected);
+         Composed : constant Planar_Hypothesis_Visibility_Array :=
+           Assess_Planar_Visibility (Hypotheses, N1, N2, Selected);
       begin
          Assert (Found (Estimate) and then Selected'Length = 21, "robust homography 21 selected inliers");
          for Index of Selected loop
@@ -3055,6 +3069,11 @@ package body Calib3D_Tests is
          Assert (All_Results (1).Disposition = Rejected_By_Visibility and then
            Subset (1).Disposition = Passes_Visibility and then Visibility_Oracle (V, N1, N2, Selected),
            "selection excludes contradictory reference");
+         for I in Hypotheses'Range loop
+            Assert ((Composed (I).Disposition = Passes_Visibility) =
+              Visibility_Oracle (Hypotheses (I), N1, N2, Selected),
+              "same planar decomposition / robust homography selected signs");
+         end loop;
          Ada.Text_IO.Put_Line ("Visibility selected-inlier composition: supplied=24 selected=21; all rejected, selected passes");
       end;
    end Visibility_Selected;
