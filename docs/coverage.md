@@ -1,5 +1,16 @@
 # Coverage
 
+## Task 011 calibrated homography visibility
+
+93 registrations preserve all 83 previous cases and add ten focused visibility
+cases. There are 45 matching private ABI declarations/imports. Coverage includes
+independent normal-sign, zero boundary, R*n frame, decomposition and robust-inlier
+composition, pure/near rotation, empty/lower bounds, invalid schemas, Float32
+range/underflow and C/Ada layout. Actual-shim production/fault campaigns include
+compact/CV_8U mask equivalence, real strided Core headers and stages 46..49
+(20 raw and 20 Ada exception scenarios). Inventory is not a claim of success;
+see [executed evidence](planar-visibility-validation.md).
+
 ## Task 010 calibrated homography decomposition
 
 83 AUnit registrations and 44 private ABI imports/exports. New cases cover

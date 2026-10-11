@@ -295,6 +295,17 @@
     "relative_frame": "X_second = R X_first + lambda*t_hat; unknown positive lambda; center direction normalize(-R^T*t_hat)",
     "matrix_policy": "3x3 CV_64FC1 finite nonzero; arbitrary scale/sign; no singular-value rejection threshold"
   },
+  "task_011_review": {
+    "verification": "all three immutable homography_decomp.cpp and corresponding public header SHA-256 hashes reverified; see planar-visibility-source-review.md",
+    "native_call": "filterHomographyDecompByVisibleRefpoints(rotations,normals,first_float32,second_float32,possible_solutions,noArray())",
+    "observations": "compact continuous Nx1 CV_32FC2 snapshots from borrowed Core Float64 C2; reject overflow/nonzero-to-zero underflow",
+    "visibility": "n dot (x1,y1,1)>0 AND (R*n) dot (x2,y2,1)>0 for every selected correspondence",
+    "translation": "validated semantically but not used by native visibility arithmetic",
+    "mask_difference": "5.0 initial assertion additionally mentions CV_8S/CV_Bool, but checkVector(1,CV_8U) remains; portable probe uses CV_8UC1 only",
+    "survivors": "zero-based ascending unique candidate positions; empty surviving set is valid",
+    "pure_rotation": "Ada Not_Applicable_Pure_Rotation, no native entry",
+    "no_references": "Ada No_Selected_References for general candidates, no native entry"
+  },
   "task_010_review": {
     "native_call": "decomposeHomographyMat(H,K,rotations,translations,normals)",
     "normalization": "K^-1 H K; divide by middle singular value",

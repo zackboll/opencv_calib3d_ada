@@ -2,7 +2,8 @@
 
 `Decompose_Calibrated_Homography (Matrix, Intrinsics)` returns owned,
 one-based `Planar_Motion_Hypothesis_Array` values in native order. No hypothesis
-is selected automatically. Visibility filtering is not implemented.
+is selected automatically. Task 011 adds separate visibility assessment; see
+[visibility contract](planar-visibility-contract.md).
 
 For an undistorted pinhole-image homography with the same intrinsics in both
 views, `K = [fx,0,cx; 0,fy,cy; 0,0,1]`, the relationship is

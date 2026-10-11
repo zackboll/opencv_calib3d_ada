@@ -43,6 +43,13 @@ procedure Homography_Synthetic is
         else [[C, 0.0, S - 0.12], [0.0, 1.0, 0.04], [-S, 0.0, C + 0.08]]);
       H : constant Homography_Matrix := Homography_Matrix (Product (Product (Camera, Normalized), Inverse));
       Candidates : constant Planar_Motion_Hypothesis_Array := Decompose_Calibrated_Homography (H, K);
+      First : constant Normalized_Image_Point_Array := [[0.1, 0.1], [0.2, 0.1], [-100.0, 0.0]];
+      Second : constant Normalized_Image_Point_Array := [[0.08, 0.13], [0.17, 0.13], [-100.0, 0.0]];
+      Visibility : constant Planar_Hypothesis_Visibility_Array :=
+        Assess_Planar_Visibility (Candidates, First, Second, [1, 2]);
+      All_Visibility : constant Planar_Hypothesis_Visibility_Array :=
+        Assess_Planar_Visibility (Candidates, First, Second);
+      Candidate_Index : Natural := 0;
    begin
       Print ("Shared intrinsics:", Camera);
       declare
@@ -57,6 +64,12 @@ procedure Homography_Synthetic is
       end;
       Ada.Text_IO.Put_Line ("Hypothesis count:" & Natural'Image (Candidates'Length));
       for V of Candidates loop
+         Candidate_Index := Candidate_Index + 1;
+         Ada.Text_IO.Put_Line ("Candidate index:" & Natural'Image (Candidate_Index));
+         Ada.Text_IO.Put_Line ("Selected visibility: " &
+           Planar_Visibility_Disposition'Image (Visibility (Candidate_Index).Disposition));
+         Ada.Text_IO.Put_Line ("All-reference visibility: " &
+           Planar_Visibility_Disposition'Image (All_Visibility (Candidate_Index).Disposition));
          declare
             Rotation : Matrix;
          begin
@@ -103,6 +116,15 @@ procedure Homography_Synthetic is
          end;
       end loop;
       Ada.Text_IO.Put_Line ("Alternative mathematical hypotheses; none automatically selected as physical motion.");
+      Ada.Text_IO.Put_Line ("Supplied references: 3; selected references: 2 (contradictory third excluded)");
+      Ada.Text_IO.Put ("Passing candidate indices:");
+      for Index of Visibility_Passing_Hypothesis_Indices (Visibility) loop
+         Ada.Text_IO.Put (Positive'Image (Index));
+      end loop;
+      Ada.Text_IO.New_Line;
+      Ada.Text_IO.Put_Line ("Visibility filtering applies source-defined plane-normal sign constraints.");
+      Ada.Text_IO.Put_Line ("It is not a full cheirality proof. More than one motion hypothesis may remain.");
+      Ada.Text_IO.Put_Line ("No metric translation or navigation position is recovered.");
    end Demonstrate_Planar;
 
    function Truth (P : Image_Point) return Image_Point is

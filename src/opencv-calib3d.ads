@@ -388,6 +388,36 @@ package OpenCV.Calib3D is
      (Matrix : Homography_Matrix; Intrinsics : Camera_Intrinsics)
       return Planar_Motion_Hypothesis_Array;
 
+   type Planar_Visibility_Disposition is
+     (Passes_Visibility, Rejected_By_Visibility,
+      Not_Applicable_Pure_Rotation, No_Selected_References);
+   type Planar_Hypothesis_Visibility is record
+      Disposition : Planar_Visibility_Disposition;
+   end record;
+   type Planar_Hypothesis_Visibility_Array is
+     array (Positive range <>) of Planar_Hypothesis_Visibility;
+   --  Source-defined strict signs: n.p1 > 0 and (R*n).p2 > 0 for ALL
+   --  selected references. Not full cheirality or unique motion selection.
+   --  Public Float64 observations are checked then rounded to native Float32;
+   --  signs near zero may differ. Overflow/nonzero-to-zero underflow raises
+   --  OpenCV_Error. All supplied observations must be finite, even unselected.
+   --  Result bounds 1 .. Hypotheses'Length, preserving candidate order.
+   function Assess_Planar_Visibility
+     (Hypotheses : Planar_Motion_Hypothesis_Array;
+      First_Points, Second_Points : Normalized_Image_Point_Array)
+      return Planar_Hypothesis_Visibility_Array;
+   --  One-based correspondence POSITIONS, unique and strictly ascending.
+   --  Omitted selection means all; explicitly empty means none. Pure/near
+   --  rotation is not applicable, including when no references are selected.
+   function Assess_Planar_Visibility
+     (Hypotheses : Planar_Motion_Hypothesis_Array;
+      First_Points, Second_Points : Normalized_Image_Point_Array;
+      Selected_Indices : Inlier_Index_Array)
+      return Planar_Hypothesis_Visibility_Array;
+   --  One-based hypothesis positions, not correspondence positions.
+   function Visibility_Passing_Hypothesis_Indices
+     (Results : Planar_Hypothesis_Visibility_Array) return Inlier_Index_Array;
+
    function Project_Points
      (Points     : Object_Point_Array;
       Intrinsics : Camera_Intrinsics;

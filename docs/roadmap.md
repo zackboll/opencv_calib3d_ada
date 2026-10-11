@@ -1,5 +1,13 @@
 # Roadmap
 
+## Task 011 approved scope
+
+Calibrated homography plane-visibility assessment only, preserving all original
+hypotheses with explicit dispositions. Compact selected-reference filtering and
+pure/near-rotation special handling do not select a physical pose, prove full
+cheirality, recover metric scale or add navigation. See
+[contract](planar-visibility-contract.md). Task 010's decomposition is unchanged.
+
 ## Task 010 approved scope
 
 Calibrated homography motion decomposition only: all native hypotheses,

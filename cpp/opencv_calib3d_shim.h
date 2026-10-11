@@ -23,12 +23,21 @@ typedef struct opencv_calib3d_planar_decomposition {
     int32_t count;
     opencv_calib3d_planar_motion candidates[4];
 } opencv_calib3d_planar_decomposition;
+typedef struct opencv_calib3d_planar_visibility {
+    int32_t count;
+    uint8_t accepted[4];
+} opencv_calib3d_planar_visibility;
 
 typedef struct opencv_core_mat_handle opencv_core_mat_handle;
 typedef struct opencv_calib3d_pose_result_handle opencv_calib3d_pose_result_handle;
 typedef struct opencv_calib3d_homography_result_handle opencv_calib3d_homography_result_handle;
 typedef struct opencv_calib3d_fundamental_result_handle opencv_calib3d_fundamental_result_handle;
 typedef int32_t opencv_calib3d_status;
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_filter_planar_visibility(
+    const opencv_calib3d_planar_decomposition *hypotheses,
+    const opencv_core_mat_handle *first,
+    const opencv_core_mat_handle *second,
+    opencv_calib3d_planar_visibility *result);
 typedef struct opencv_calib3d_essential_result_handle opencv_calib3d_essential_result_handle;
 
 typedef struct opencv_calib3d_essential {
