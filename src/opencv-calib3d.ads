@@ -431,6 +431,24 @@ package OpenCV.Calib3D is
       Distortion    : Distortion_Coefficients := No_Distortion;
       Options       : RANSAC_Options := (others => <>)) return Pose_Estimate;
 
+
+    --  Exactly three pixel correspondences, fixed SOLVEPNP_AP3P. Every native
+    --  hypothesis is retained; nothing selects a unique physical pose. Native
+    --  order is version-specific. A real zero-solution result is 1 .. 0.
+    type AP3P_Pose_Hypothesis is record
+       Pose : World_To_Camera_Pose;
+    end record;
+    type AP3P_Pose_Hypothesis_Array is
+      array (Positive range <>) of AP3P_Pose_Hypothesis;
+
+    function Solve_AP3P_Hypotheses
+      (Object_Points : Object_Point_Array;
+       Image_Points  : Image_Point_Array;
+       Intrinsics    : Camera_Intrinsics;
+       Distortion    : Distortion_Coefficients := No_Distortion)
+       return AP3P_Pose_Hypothesis_Array;
+
+
    --  Euclidean pixel errors, one-based in correspondence order. Equal counts
    --  are required; empty/empty returns 1 .. 0. These diagnostics are not pose
    --  uncertainty and do not establish globally correct localization.

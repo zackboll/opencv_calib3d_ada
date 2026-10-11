@@ -1,5 +1,15 @@
 # Architecture
 
+## Task 012 AP3P boundary
+
+One additional guarded C operation brings the private ABI to 46 operations.
+The caller-owned result reuses the six-double pose record four times. It is
+zeroed on entry and published only after every candidate is finite and a
+proper rotation. Ada rejects every correspondence count other than three
+before borrowing Core Mats. Pixel observations, K, and five distortion
+coefficients are passed through; native `solveP3P` undistorts. No candidate
+is selected. See [AP3P contract](ap3p-contract.md).
+
 ## Task 011 visibility boundary
 
 One additional guarded C operation brings the private ABI to 45 operations.

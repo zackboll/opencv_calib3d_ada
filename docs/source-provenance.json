@@ -73,6 +73,18 @@
           "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/homography_decomp.cpp",
           "sha256": "5f2faba2adc6baaa9d617d48b88b2b23091143e487bde36cbea4e0cd9909601a",
           "git_blob_sha1": "3bfb62ec2c75a21b80cc8709e9b77adad2517a8f"
+        },
+        {
+          "path": "modules/calib3d/src/ap3p.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/ap3p.cpp",
+          "sha256": "f30e8494831303d711d6c3bdfd43fb6f0cafdd40a93110a9f25aafe5989b8c2e",
+          "git_blob_sha1": "7b86834db85a82aca899f796312bb743f19d7c54"
+        },
+        {
+          "path": "modules/calib3d/src/ap3p.h",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/ap3p.h",
+          "sha256": "14e10e2b19973ea743ace73eb5c4bcef692c7b6a8832a60b0fc200ec16c57493",
+          "git_blob_sha1": "df441981153e6d5a165454ce755f00e1e7370484"
         }
       ]
     },
@@ -148,6 +160,24 @@
           "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/homography_decomp.cpp",
           "sha256": "5f2faba2adc6baaa9d617d48b88b2b23091143e487bde36cbea4e0cd9909601a",
           "git_blob_sha1": "3bfb62ec2c75a21b80cc8709e9b77adad2517a8f"
+        },
+        {
+          "path": "modules/calib3d/src/ap3p.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/ap3p.cpp",
+          "sha256": "3e0026cd37961f07b230ff9d7bfacb7cf5006c8982b881711d94df055371327b",
+          "git_blob_sha1": "79da0f13a75db222deffcae91d6afeee74f96e02"
+        },
+        {
+          "path": "modules/calib3d/src/ap3p.h",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/ap3p.h",
+          "sha256": "f40de1d63aee2ffbe8d43f6e548a41c30d84955b7385a74673da3da228fccb8b",
+          "git_blob_sha1": "c044c6fd32a91305a70b89fdc45803152ad807d4"
+        },
+        {
+          "path": "modules/calib3d/src/polynom_solver.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/polynom_solver.cpp",
+          "sha256": "9f31565d3c9b9de9cc87ef04ec3a16cb5d7ea79c076f95e5c3ae628ed837dfeb",
+          "git_blob_sha1": "5025199dd3ea7619ed412f734c308621464f37e7"
         }
       ]
     },
@@ -223,6 +253,24 @@
           "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/homography_decomp.cpp",
           "sha256": "dcdaacb7ad796751e284ba80e4782d550c9aed17f0d67af91997b5fa1b0d6e52",
           "git_blob_sha1": "36b697e394f18c25592a731f0e26a32966ac6919"
+        },
+        {
+          "path": "modules/geometry/src/ap3p.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/ap3p.cpp",
+          "sha256": "3e0026cd37961f07b230ff9d7bfacb7cf5006c8982b881711d94df055371327b",
+          "git_blob_sha1": "79da0f13a75db222deffcae91d6afeee74f96e02"
+        },
+        {
+          "path": "modules/geometry/src/ap3p.h",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/ap3p.h",
+          "sha256": "f40de1d63aee2ffbe8d43f6e548a41c30d84955b7385a74673da3da228fccb8b",
+          "git_blob_sha1": "c044c6fd32a91305a70b89fdc45803152ad807d4"
+        },
+        {
+          "path": "modules/geometry/src/polynom_solver.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/polynom_solver.cpp",
+          "sha256": "a860c367db3a29ff219c93af320bb9904b7810a4bc0e60610b3b490cd767e259",
+          "git_blob_sha1": "48aa1f12b31ab9155f5b834c3bf2fd9e711b0d72"
         }
       ]
     }

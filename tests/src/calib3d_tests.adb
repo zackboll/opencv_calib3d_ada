@@ -54,6 +54,9 @@ package body Calib3D_Tests is
       [0 => -0.2, 1 =>  1.5, 2 => 1.8],
       [0 =>  0.8, 1 =>  1.4, 2 => 2.4]];
 
+   function Finite (Value : OpenCV.Float64_Value) return Boolean is
+      (Value = Value and then Value < OpenCV.Float64_Value'Last and then Value > OpenCV.Float64_Value'First);
+
    function Near (Left, Right : OpenCV.Float64_Value;
                   Epsilon : OpenCV.Float64_Value := 1.0E-9) return Boolean is
      (abs (Left - Right) <= Epsilon);
@@ -3441,6 +3444,284 @@ package body Calib3D_Tests is
       Reject (H);
    end Planar_Invalid;
 
+   procedure AP3P_Known_Pose (T : in out Fixture) is
+      pragma Unreferenced (T);
+      function Rotation_Y (Angle : OpenCV.Float64_Value) return Rotation_Matrix is
+         C : constant OpenCV.Float64_Value := Math.Cos (Angle);
+         S : constant OpenCV.Float64_Value := Math.Sin (Angle);
+      begin
+         return [[C, 0.0, S], [0.0, 1.0, 0.0], [-S, 0.0, C]];
+      end Rotation_Y;
+      function Rotation_Z (Angle : OpenCV.Float64_Value) return Rotation_Matrix is
+         C : constant OpenCV.Float64_Value := Math.Cos (Angle);
+         S : constant OpenCV.Float64_Value := Math.Sin (Angle);
+      begin
+         return [[C, -S, 0.0], [S, C, 0.0], [0.0, 0.0, 1.0]];
+      end Rotation_Z;
+      function Multiply (Left, Right : Rotation_Matrix) return Rotation_Matrix is
+         Result : Rotation_Matrix := [others => [others => 0.0]];
+      begin
+         for Row in 0 .. 2 loop
+            for Column in 0 .. 2 loop
+               for K in 0 .. 2 loop
+                  Result (Row, Column) := Result (Row, Column) + Left (Row, K) * Right (K, Column);
+               end loop;
+            end loop;
+         end loop;
+         return Result;
+      end Multiply;
+      function Apply (Matrix : Rotation_Matrix; Point : Object_Point) return Object_Point is
+         ([Matrix (0, 0) * Point (0) + Matrix (0, 1) * Point (1) + Matrix (0, 2) * Point (2),
+          Matrix (1, 0) * Point (0) + Matrix (1, 1) * Point (1) + Matrix (1, 2) * Point (2),
+          Matrix (2, 0) * Point (0) + Matrix (2, 1) * Point (1) + Matrix (2, 2) * Point (2)]);
+      function Transpose (Matrix : Rotation_Matrix) return Rotation_Matrix is
+         ([[Matrix (0, 0), Matrix (1, 0), Matrix (2, 0)],
+           [Matrix (0, 1), Matrix (1, 1), Matrix (2, 1)],
+           [Matrix (0, 2), Matrix (1, 2), Matrix (2, 2)]]);
+      Truth_R : constant Rotation_Matrix := Multiply (Rotation_Z (0.22), Rotation_Y (0.35));
+      Truth_T : constant Translation_Vector := [0.2, -0.3, 0.8];
+      Calibration : constant Camera_Intrinsics := (800.0, 820.0, 640.0, 360.0);
+      Landmarks : constant Object_Point_Array := [[0.3, -0.2, 3.5], [1.4, 0.1, 4.0], [-0.5, 1.2, 5.3]];
+      Fourth : constant Object_Point := [0.7, -0.8, 6.1];
+      function Project (Point : Object_Point; Distortion : Distortion_Coefficients) return Image_Point is
+         Camera : constant Object_Point :=
+           [Apply (Truth_R, Point) (0) + Truth_T (0), Apply (Truth_R, Point) (1) + Truth_T (1),
+            Apply (Truth_R, Point) (2) + Truth_T (2)];
+         X : constant OpenCV.Float64_Value := Camera (0) / Camera (2);
+         Y : constant OpenCV.Float64_Value := Camera (1) / Camera (2);
+         R2 : constant OpenCV.Float64_Value := X * X + Y * Y;
+         Radial : constant OpenCV.Float64_Value :=
+           1.0 + Distortion.K1 * R2 + Distortion.K2 * R2 * R2 + Distortion.K3 * R2 * R2 * R2;
+      begin
+         return [Calibration.Focal_X * (X * Radial + 2.0 * Distortion.P1 * X * Y +
+                   Distortion.P2 * (R2 + 2.0 * X * X)) + Calibration.Center_X,
+                 Calibration.Focal_Y * (Y * Radial + Distortion.P1 * (R2 + 2.0 * Y * Y) +
+                   2.0 * Distortion.P2 * X * Y) + Calibration.Center_Y];
+      end Project;
+      procedure Qualify (Distortion : Distortion_Coefficients; Label : String) is
+         Pixels : Image_Point_Array (1 .. 3);
+         Fourth_Pixel : constant Image_Point := Project (Fourth, Distortion);
+         Count : Natural := 0;
+         Matched : Boolean := False;
+         Best_Angle : OpenCV.Float64_Value := OpenCV.Float64_Value'Last;
+         Best_Translation, Best_Center, Best_Pixels, Best_Fourth : OpenCV.Float64_Value := 0.0;
+      begin
+         for I in Landmarks'Range loop
+            Pixels (I) := Project (Landmarks (I), Distortion);
+            Assert (Apply (Truth_R, Landmarks (I)) (2) + Truth_T (2) > 0.0, "positive known depth");
+         end loop;
+         declare
+            Found : constant AP3P_Pose_Hypothesis_Array :=
+              Solve_AP3P_Hypotheses (Landmarks, Pixels, Calibration, Distortion);
+         begin
+            Count := Found'Length;
+            Assert (Found'First = 1 and then Count in 1 .. 4, "AP3P one-based bounded hypotheses");
+            for Candidate of Found loop
+               declare
+                  R : constant Rotation_Matrix := Rotation_Matrix_Of (Candidate.Pose);
+                  Trace : OpenCV.Float64_Value := 0.0;
+                  Center : constant Object_Point := Camera_Center (Candidate.Pose);
+                  Expected : constant Object_Point :=
+                    [-Apply (Transpose (Truth_R), Truth_T) (0), -Apply (Transpose (Truth_R), Truth_T) (1),
+                     -Apply (Transpose (Truth_R), Truth_T) (2)];
+                  Angle, Translation_Error, Center_Error, Pixel_Error, Fourth_Error : OpenCV.Float64_Value;
+                  function Residual (Observed : Image_Point; Point : Object_Point) return OpenCV.Float64_Value is
+                     Camera : constant Object_Point :=
+                       [Apply (R, Point) (0) + Candidate.Pose.Translation (0),
+                        Apply (R, Point) (1) + Candidate.Pose.Translation (1),
+                        Apply (R, Point) (2) + Candidate.Pose.Translation (2)];
+                     X : constant OpenCV.Float64_Value := Camera (0) / Camera (2);
+                     Y : constant OpenCV.Float64_Value := Camera (1) / Camera (2);
+                     R2 : constant OpenCV.Float64_Value := X * X + Y * Y;
+                     Radial : constant OpenCV.Float64_Value :=
+                       1.0 + Distortion.K1 * R2 + Distortion.K2 * R2 * R2 + Distortion.K3 * R2 * R2 * R2;
+                     Predicted : constant Image_Point :=
+                       [Calibration.Focal_X * (X * Radial + 2.0 * Distortion.P1 * X * Y +
+                          Distortion.P2 * (R2 + 2.0 * X * X)) + Calibration.Center_X,
+                        Calibration.Focal_Y * (Y * Radial + Distortion.P1 * (R2 + 2.0 * Y * Y) +
+                          2.0 * Distortion.P2 * X * Y) + Calibration.Center_Y];
+                  begin
+                     return Math.Sqrt ((Predicted (0) - Observed (0)) ** 2 + (Predicted (1) - Observed (1)) ** 2);
+                  end Residual;
+               begin
+                  for I in 0 .. 2 loop
+                     Trace := Trace + R (0, I) * Truth_R (0, I) + R (1, I) * Truth_R (1, I) + R (2, I) * Truth_R (2, I);
+                  end loop;
+                  Angle := Math.Arccos (OpenCV.Float64_Value'Max (-1.0, OpenCV.Float64_Value'Min (1.0, (Trace - 1.0) / 2.0)));
+                  Translation_Error := Math.Sqrt ((Candidate.Pose.Translation (0) - Truth_T (0)) ** 2 +
+                    (Candidate.Pose.Translation (1) - Truth_T (1)) ** 2 + (Candidate.Pose.Translation (2) - Truth_T (2)) ** 2);
+                  Center_Error := Math.Sqrt ((Center (0) - Expected (0)) ** 2 + (Center (1) - Expected (1)) ** 2 +
+                    (Center (2) - Expected (2)) ** 2);
+                  Pixel_Error := 0.0;
+                  for I in Landmarks'Range loop
+                     Pixel_Error := OpenCV.Float64_Value'Max (Pixel_Error, Residual (Pixels (I), Landmarks (I)));
+                  end loop;
+                  Fourth_Error := Residual (Fourth_Pixel, Fourth);
+                  if Angle < Best_Angle then
+                     Best_Angle := Angle; Best_Translation := Translation_Error; Best_Center := Center_Error;
+                     Best_Pixels := Pixel_Error; Best_Fourth := Fourth_Error;
+                  end if;
+                  Matched := Matched or else (Angle < 1.0E-4 and then Translation_Error < 1.0E-4 and then
+                    Center_Error < 1.0E-4 and then Pixel_Error < 1.0E-3 and then Fourth_Error < 1.0E-3);
+               end;
+            end loop;
+         end;
+         Assert (Matched, "known AP3P pose represented");
+         Ada.Text_IO.Put_Line (Label & " hypotheses=" & Natural'Image (Count) & " angle=" &
+           OpenCV.Float64_Value'Image (Best_Angle) & " translation=" & OpenCV.Float64_Value'Image (Best_Translation) &
+           " center=" & OpenCV.Float64_Value'Image (Best_Center) & " pixels=" & OpenCV.Float64_Value'Image (Best_Pixels) &
+           " fourth=" & OpenCV.Float64_Value'Image (Best_Fourth));
+      end Qualify;
+      Distortion : constant Distortion_Coefficients := (-0.12, 0.02, 0.001, -0.0015, 0.01);
+   begin
+      Qualify (No_Distortion, "AP3P zero distortion");
+      Qualify (Distortion, "AP3P five-coefficient distortion");
+   end AP3P_Known_Pose;
+
+   procedure AP3P_Multiple (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Calibration : constant Camera_Intrinsics := (800.0, 820.0, 640.0, 360.0);
+      World : constant Object_Point_Array := [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+      --  Identity pose, t=(0,0,5): u=fx*X/Z+cx. Front-parallel square admits multiple AP3P roots.
+      Pixels : constant Image_Point_Array := [[640.0, 360.0], [800.0, 360.0], [640.0, 524.0]];
+      Found : constant AP3P_Pose_Hypothesis_Array := Solve_AP3P_Hypotheses (World, Pixels, Calibration);
+   begin
+      Assert (Found'First = 1 and then Found'Length > 1 and then Found'Length <= 4,
+              "multiple native AP3P hypotheses retained without selection");
+      for Candidate of Found loop
+         declare
+            R : constant Rotation_Matrix := Rotation_Matrix_Of (Candidate.Pose);
+         begin
+            Assert ((for all Value of R => Finite (Value)), "finite multiple-solution rotation");
+            Assert ((for all Value of Candidate.Pose.Translation => Finite (Value)), "finite translation");
+         end;
+      end loop;
+      Ada.Text_IO.Put_Line ("AP3P multiple hypotheses=" & Natural'Image (Found'Length));
+   end AP3P_Multiple;
+
+   procedure AP3P_Reject (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      Calibration : constant Camera_Intrinsics := (800.0, 820.0, 640.0, 360.0);
+      World : constant Object_Point_Array := [[0.3, -0.2, 3.5], [1.4, 0.1, 4.0], [-0.5, 1.2, 5.3]];
+      Image : constant Image_Point_Array := [[700.0, 300.0], [900.0, 400.0], [500.0, 550.0]];
+      procedure Reject (Objects : Object_Point_Array; Pixels : Image_Point_Array;
+                        Camera : Camera_Intrinsics := Calibration;
+                        Distortion : Distortion_Coefficients := No_Distortion) is
+      begin
+         declare
+            Found : constant AP3P_Pose_Hypothesis_Array :=
+              Solve_AP3P_Hypotheses (Objects, Pixels, Camera, Distortion);
+         begin
+            Assert (False, "invalid AP3P accepted" & Natural'Image (Found'Length));
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Reject;
+   begin
+      Reject ([1 .. 0 => [0.0, 0.0, 0.0]], [1 .. 0 => [0.0, 0.0]]);
+      Reject (World (1 .. 1), Image (1 .. 1));
+      Reject (World (1 .. 2), Image (1 .. 2));
+      Reject ([World (1), World (2), World (3), [0.1, 0.2, 6.0]],
+              [Image (1), Image (2), Image (3), [1.0, 2.0]]);
+      Reject ([World (1), World (2), World (3), [0.1, 0.2, 6.0], [0.2, 0.3, 7.0]],
+              [Image (1), Image (2), Image (3), [1.0, 2.0], [3.0, 4.0]]);
+      Reject (World, Image (1 .. 2));
+      Reject ([World (1), World (1), World (3)], Image);
+      Reject ([[0.0, 0.0, 1.0], [1.0, 0.0, 2.0], [2.0, 0.0, 3.0]], Image);
+      Reject (World, [Image (1), Image (1), Image (3)]);
+      Reject (World, [[640.0, 360.0], [700.0, 360.0], [500.0, 360.0]]);
+      Reject ([[1.0E200, 0.0, 1.0E200], [0.0, 1.0E200, 1.0E200], [-1.0E200, -1.0E200, 2.0E200]], Image);
+      Reject (World, Image, (0.0, 820.0, 640.0, 360.0));
+      Reject (World, Image, (800.0, -1.0, 640.0, 360.0));
+      Reject (World, Image, (800.0, 820.0, OpenCV.Float64_Value (Nonfinite (0)), 360.0));
+      Reject (World, Image, Calibration, (OpenCV.Float64_Value (Nonfinite (1)), 0.0, 0.0, 0.0, 0.0));
+      declare
+         Bad_World : Object_Point_Array := World;
+         Bad_Image : Image_Point_Array := Image;
+      begin
+         Bad_World (1) (0) := OpenCV.Float64_Value (Nonfinite (0));
+         Reject (Bad_World, Image);
+         Bad_Image (2) (1) := OpenCV.Float64_Value (Nonfinite (1));
+         Reject (World, Bad_Image);
+      end;
+   end AP3P_Reject;
+
+   procedure AP3P_Zero (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Found : constant AP3P_Pose_Hypothesis_Array := Solve_AP3P_Hypotheses
+        ([[-0.39081598340561996, 0.32617277568950875, 4.0131477606213553],
+          [-1.6067503815809268, 0.73284013236088175, 2.4253925955828199],
+          [1.9483108946655348, -1.1457818430811084, 7.0007856567437514]],
+         [[118.67887557148487, 129.79777044444734],
+          [452.33705169300674, 427.73531562095332],
+          [690.96005298599528, 241.045602436595]],
+         (800.0, 820.0, 640.0, 360.0));
+   begin
+      Assert (Found'First = 1 and then Found'Last = 0, "valid native zero is an empty array");
+   end AP3P_Zero;
+
+   procedure AP3P_Frame (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Calibration : constant Camera_Intrinsics := (800.0, 820.0, 640.0, 360.0);
+      World : constant Object_Point_Array := [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
+      Pixels : constant Image_Point_Array := [[640.0, 360.0], [800.0, 360.0], [640.0, 524.0]];
+      Found : constant AP3P_Pose_Hypothesis_Array := Solve_AP3P_Hypotheses (World, Pixels, Calibration);
+      Matched : Boolean := False;
+   begin
+      for Candidate of Found loop
+         declare
+            R : constant Rotation_Matrix := Rotation_Matrix_Of (Candidate.Pose);
+            Camera : constant Object_Point :=
+              [R (0, 0) * World (1) (0) + R (0, 1) * World (1) (1) + R (0, 2) * World (1) (2) + Candidate.Pose.Translation (0),
+               R (1, 0) * World (1) (0) + R (1, 1) * World (1) (1) + R (1, 2) * World (1) (2) + Candidate.Pose.Translation (1),
+               R (2, 0) * World (1) (0) + R (2, 1) * World (1) (1) + R (2, 2) * World (1) (2) + Candidate.Pose.Translation (2)];
+            Center : constant Object_Point := Camera_Center (Candidate.Pose);
+            Depth : constant OpenCV.Float64_Value := Camera (2);
+         begin
+            if abs (Camera (0) - Candidate.Pose.Translation (0)) < 1.0E-9 and then
+              abs (Camera (1) - Candidate.Pose.Translation (1)) < 1.0E-9 and then Depth > 0.0 and then
+              abs (Calibration.Focal_X * Camera (0) / Depth + Calibration.Center_X - Pixels (1) (0)) < 1.0E-6 and then
+              abs (Center (0) + (R (0, 0) * Candidate.Pose.Translation (0) + R (1, 0) * Candidate.Pose.Translation (1) +
+                   R (2, 0) * Candidate.Pose.Translation (2))) < 1.0E-8
+            then
+               Matched := True;
+            end if;
+         end;
+      end loop;
+      Assert (Matched, "world-to-camera frame and camera center");
+   end AP3P_Frame;
+
+   procedure AP3P_Layout (T : in out Fixture) is
+      pragma Unreferenced (T);
+      function Field (Index : Interfaces.Integer_32) return Interfaces.Integer_32
+        with Import, Convention => C, External_Name => "calib3d_test_ap3p_layout";
+      procedure Fill (Value : access ABI.C_AP3P_Hypotheses)
+        with Import, Convention => C, External_Name => "calib3d_test_fill_ap3p";
+      Native : aliased ABI.C_AP3P_Hypotheses;
+   begin
+      Assert (ABI.C_AP3P_Hypotheses'Size = Natural (Field (0)) * System.Storage_Unit, "AP3P size");
+      Assert (ABI.C_AP3P_Hypotheses'Alignment = Natural (Field (1)), "AP3P alignment");
+      Assert (Native.Count'Position = Natural (Field (2)), "AP3P count position");
+      Assert (Native.Candidates'Position = Natural (Field (3)), "AP3P candidates position");
+      Assert (ABI.C_Pose'Size = Natural (Field (4)) * System.Storage_Unit, "reused pose stride");
+      Assert (Native.Candidates (1).RX'Position = 0, "candidate-relative first pose");
+      Assert (Field (5) = Field (3), "first C candidate location");
+      Assert (Field (6) - Field (5) = 48, "second C candidate stride");
+      Assert (Field (7) - Field (6) = 48, "third C candidate stride");
+      Assert (Field (8) - Field (7) = 48, "fourth C candidate stride");
+      Fill (Native'Access);
+      Assert (Native.Count = 4, "AP3P interchange count");
+      for I in 1 .. 4 loop
+         Assert (Native.Candidates (I).RX = Interfaces.C.double (I) and then
+                 Native.Candidates (I).RY = Interfaces.C.double (I + 1) and then
+                 Native.Candidates (I).RZ = Interfaces.C.double (I + 2) and then
+                 Native.Candidates (I).TX = Interfaces.C.double (I + 3) and then
+                 Native.Candidates (I).TY = Interfaces.C.double (I + 4) and then
+                 Native.Candidates (I).TZ = Interfaces.C.double (I + 5), "six-field interchange");
+      end loop;
+   end AP3P_Layout;
+
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
@@ -3537,6 +3818,12 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("refinement malformed input and empty validation", Point_Refinement_Invalid'Access));
       Result.Add_Test (Caller.Create ("refinement extreme finite numerical preservation", Refinement_Extremes'Access));
       Result.Add_Test (Caller.Create ("Parallax_Large", Parallax_Large'Access));
+      Result.Add_Test (Caller.Create ("AP3P known nonidentity pose and distortion", AP3P_Known_Pose'Access));
+      Result.Add_Test (Caller.Create ("AP3P multiple native hypotheses", AP3P_Multiple'Access));
+      Result.Add_Test (Caller.Create ("AP3P world-to-camera frame convention", AP3P_Frame'Access));
+      Result.Add_Test (Caller.Create ("AP3P count and degenerate rejection", AP3P_Reject'Access));
+      Result.Add_Test (Caller.Create ("AP3P valid native zero result", AP3P_Zero'Access));
+      Result.Add_Test (Caller.Create ("compiler-derived AP3P aggregate layout", AP3P_Layout'Access));
       return Result;
    end Suite;
 end Calib3D_Tests;

@@ -109,6 +109,43 @@ begin
                Put_Line ("World rays are metric-frame geometric rays only; no DTED/geodetic interpretation is performed.");
                Put_Line ("X_world(s) = C_world + s * direction, s > 0; s uses caller world-coordinate units.");
             end;
+             declare
+                Landmarks : constant Object_Point_Array :=
+                  [[0.3, -0.2, 3.5], [1.4, 0.1, 4.0], [-0.5, 1.2, 5.3]];
+                Fourth : constant Object_Point := [0.7, -0.8, 6.1];
+                Observations : constant Image_Point_Array :=
+                  Project_Points (Landmarks, Intrinsics, No_Distortion, Truth);
+                Reference : constant Image_Point_Array :=
+                  Project_Points ([Fourth], Intrinsics, No_Distortion, Truth);
+                Hypotheses : constant AP3P_Pose_Hypothesis_Array :=
+                  Solve_AP3P_Hypotheses (Landmarks, Observations, Intrinsics);
+             begin
+                Put_Line ("AP3P correspondences: 3");
+                Put_Line ("AP3P hypotheses:" & Natural'Image (Hypotheses'Length));
+                for I in Hypotheses'Range loop
+                   declare
+                      Candidate : constant World_To_Camera_Pose := Hypotheses (I).Pose;
+                      Three : constant Reprojection_Summary := Summarize_Reprojection
+                        (Reprojection_Errors (Landmarks, Observations, Intrinsics, No_Distortion, Candidate));
+                      Extra : constant Reprojection_Error_Array :=
+                        Reprojection_Errors ([Fourth], Reference, Intrinsics, No_Distortion, Candidate);
+                   begin
+                      Put_Line ("AP3P candidate" & Positive'Image (I));
+                      Put_Vector ("candidate rotation vector", Candidate.Rotation);
+                      Put_Vector ("candidate translation vector", Candidate.Translation);
+                      Put_Vector ("candidate camera center", Camera_Center (Candidate));
+                      Put_Line ("candidate three-point max pixels:" &
+                        OpenCV.Float64_Value'Image (Three.Maximum_Error_Pixels));
+                      Put_Line ("candidate independent fourth-point pixels:" &
+                        OpenCV.Float64_Value'Image (Extra (Extra'First)));
+                   end;
+                end loop;
+                Put_Line ("Three point correspondences may produce multiple mathematically valid poses.");
+                Put_Line ("A fourth independent observation can help discriminate between hypotheses.");
+                Put_Line ("No physical pose has been automatically selected by this binding.");
+                Put_Line ("World-point units determine translation scale. No geographic reference is inferred.");
+             end;
+
          end;
       end if;
    end;

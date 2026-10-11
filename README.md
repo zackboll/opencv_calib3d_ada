@@ -1,5 +1,15 @@
 # OpenCV Calib3D for Ada
 
+## Task 012: minimal AP3P pose hypotheses
+
+`Solve_AP3P_Hypotheses` returns every native `SOLVEPNP_AP3P` hypothesis for
+exactly three world points and three pixel observations. It does not select
+a pose. OpenCV 4.1 requires three points; later versions also allow four,
+but this API does not. Zero native solutions is an empty success. Translation
+uses world-point units and is not the camera position. See
+[contract](docs/ap3p-contract.md), [source review](docs/ap3p-source-review.md),
+and [qualification](docs/ap3p-validation.md).
+
 ## Task 011: calibrated homography visibility
 
 `Assess_Planar_Visibility` returns a disposition for every original motion
