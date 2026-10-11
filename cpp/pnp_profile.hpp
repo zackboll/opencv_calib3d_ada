@@ -7,6 +7,7 @@
 
 namespace opencv_calib3d_detail {
 inline bool finite(double value) noexcept { return std::isfinite(value); }
+inline double larger(double left, double right) noexcept { return left < right ? right : left; }
 inline bool intrinsics_fit(double fx, double fy, double cx, double cy) noexcept {
     return finite(fx) && finite(fy) && finite(cx) && finite(cy) && fx > 0.0 && fy > 0.0;
 }
@@ -17,7 +18,7 @@ inline bool distortion5_fit(double k1, double k2, double p1, double p2, double k
 inline bool ap3p_admissible(const double world[3][3], const double image[3][2],
                             double fx, double fy, double cx, double cy) noexcept {
     auto scaled_diff = [](double left, double right, double &delta) noexcept {
-        const double scale = std::max(std::abs(left), std::abs(right));
+        const double scale = larger(std::abs(left), std::abs(right));
         if (scale > 1.0 && std::abs(left) > std::numeric_limits<double>::max() - std::abs(right))
             return false;
         delta = left - right;
@@ -27,8 +28,8 @@ inline bool ap3p_admissible(const double world[3][3], const double image[3][2],
         double terms[3];
         for (int i = 0; i < 3; ++i) {
             const int j = (i + 1) % 3, k = (i + 2) % 3;
-            const double scale = std::max(std::max(std::abs(a[j]), std::abs(b[k])),
-                                          std::max(std::abs(a[k]), std::abs(b[j])));
+            const double scale = larger(larger(std::abs(a[j]), std::abs(b[k])),
+                                          larger(std::abs(a[k]), std::abs(b[j])));
             if (scale > 1.0 && std::abs(a[j]) > std::numeric_limits<double>::max() / scale)
                 return false;
             if (scale > 1.0 && std::abs(a[k]) > std::numeric_limits<double>::max() / scale)
