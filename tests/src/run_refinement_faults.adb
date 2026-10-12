@@ -465,4 +465,71 @@ begin
       end loop;
       Ada.Text_IO.Put_Line ("PASS: Ada visibility 20 exception translation scenarios");
    end;
+    declare
+       Calibration : constant Camera_Intrinsics := (800.0, 820.0, 640.0, 360.0);
+       World : constant Object_Point_Array := [[0.3, -0.2, 3.5], [1.4, 0.1, 4.0], [-0.5, 1.2, 5.3]];
+       Pixels : constant Image_Point_Array := [[700.0, 320.0], [910.0, 390.0], [520.0, 560.0]];
+       procedure Control (Mode : Interfaces.C.int)
+         with Import, Convention => C, External_Name => "opencv_calib3d_test_ap3p_control";
+    begin
+       Fail (50, 3);
+       begin
+          declare
+             Found : constant AP3P_Pose_Hypothesis_Array :=
+               Solve_AP3P_Hypotheses (World (1 .. 2), Pixels (1 .. 2), Calibration);
+             pragma Unreferenced (Found);
+          begin
+             raise Program_Error with "two correspondences reached AP3P";
+          end;
+       exception
+          when OpenCV.OpenCV_Error => null;
+       end;
+       begin
+          declare
+             Found : constant AP3P_Pose_Hypothesis_Array := Solve_AP3P_Hypotheses (World, Pixels, Calibration);
+             pragma Unreferenced (Found);
+          begin
+             raise Program_Error with "valid AP3P did not consume armed checkpoint";
+          end;
+       exception
+          when OpenCV.OpenCV_Error => null;
+       end;
+       for Stage in Interfaces.C.int range 50 .. 53 loop
+          for Kind in Interfaces.C.int range 1 .. 5 loop
+             Fail (Stage, Kind);
+             begin
+                declare
+                   Found : constant AP3P_Pose_Hypothesis_Array :=
+                     Solve_AP3P_Hypotheses (World, Pixels, Calibration);
+                   pragma Unreferenced (Found);
+                begin
+                   raise Program_Error with "AP3P fault not translated";
+                end;
+             exception
+                when OpenCV.OpenCV_Error => null;
+             end;
+          end loop;
+       end loop;
+       Control (1);
+       declare
+          Found : constant AP3P_Pose_Hypothesis_Array := Solve_AP3P_Hypotheses (World, Pixels, Calibration);
+       begin
+          Check (Found'First = 1 and then Found'Length = 0, "test-only post-native AP3P zero");
+       end;
+       for Mode in Interfaces.C.int range 2 .. 5 loop
+          Control (Mode);
+          begin
+             declare
+                Found : constant AP3P_Pose_Hypothesis_Array := Solve_AP3P_Hypotheses (World, Pixels, Calibration);
+                pragma Unreferenced (Found);
+             begin
+                raise Program_Error with "malformed AP3P native result accepted";
+             end;
+          exception
+             when OpenCV.OpenCV_Error => null;
+          end;
+       end loop;
+       Ada.Text_IO.Put_Line ("PASS: Ada AP3P 20 exception translations and post-native controls");
+    end;
+
 end Run_Refinement_Faults;

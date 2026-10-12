@@ -56,8 +56,8 @@ def main() -> None:
 
     tests = (ROOT / "tests/src/calib3d_tests.adb").read_text()
     registrations = re.findall(r"Result\.Add_Test\s*\(Caller\.Create", tests)
-    check(len(registrations) == 93, "update documented AUnit inventory when changing tests")
-    check(len(declared) == 45, "update private ABI inventory when changing exports")
+    check(len(registrations) == 99, "update documented AUnit inventory when changing tests")
+    check(len(declared) == 46, "update private ABI inventory when changing exports")
     layout = (ROOT / "tests/layout/calib3d_layout.c").read_text()
     check("calib3d_test_triangulation_layout" in layout and
           "calib3d_test_fill_triangulation" in tests and
@@ -104,6 +104,12 @@ def main() -> None:
     check("true, cv::SOLVEPNP_ITERATIVE" in cpp, "refinement must use the initial guess")
     check("solvePnPRefineLM(" not in cpp and "solvePnPRefineVVS(" not in cpp,
           "refinement must retain the common solvePnP path")
+    check("cv::SOLVEPNP_AP3P" in cpp and "opencv_calib3d_solve_ap3p_hypotheses" in declared,
+          "missing fixed AP3P hypothesis ABI")
+    check("ap3p_world_admissible" in (ROOT / "cpp/pnp_profile.hpp").read_text() and
+          "ap3p_bearings_admissible" in (ROOT / "cpp/pnp_profile.hpp").read_text() and
+          "cv::undistortPoints" in cpp,
+          "missing AP3P source-derived admissibility profile")
 
     configure = (ROOT / "scripts/configure_opencv.sh").read_text()
     check("backend=calib3d" in configure and "backend=geometry" in configure,

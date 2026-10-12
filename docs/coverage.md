@@ -1,5 +1,15 @@
 # Coverage
 
+## Task 012 minimal AP3P hypotheses
+
+99 registrations preserve all 93 Task 011 cases and add six AP3P cases:
+known pose with distortion, four retained hypotheses, frame convention,
+invalid counts and singular geometry, native zero result, and compiler
+layout. There are 46 matching private ABI declarations/imports. Raw and Ada
+fault coverage uses checkpoints 50..53 (20 scenarios each) plus post-native
+zero and malformed controls. Inventory is not a claim of success; see
+[executed evidence](ap3p-validation.md).
+
 ## Task 011 calibrated homography visibility
 
 93 registrations preserve all 83 previous cases and add ten focused visibility

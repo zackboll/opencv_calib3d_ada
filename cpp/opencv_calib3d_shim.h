@@ -137,6 +137,12 @@ typedef struct opencv_calib3d_pose {
     double rx, ry, rz, tx, ty, tz;
 } opencv_calib3d_pose;
 
+/* Caller-owned fixed capacity. count is 0..4; unused candidates stay zero. */
+typedef struct opencv_calib3d_ap3p_hypotheses {
+    int32_t count;
+    opencv_calib3d_pose candidates[4];
+} opencv_calib3d_ap3p_hypotheses;
+
 typedef struct opencv_calib3d_point3 {
     double x, y, z;
 } opencv_calib3d_point3;
@@ -242,6 +248,15 @@ OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_solve_pnp_ransac(
     double reprojection_error_pixels,
     double confidence,
     opencv_calib3d_pose_result_handle **result);
+
+/* Exactly three Nx1 observations. Pixel points, K and five-coefficient
+ * distortion are passed to solveP3P(SOLVEPNP_AP3P); native undistorts. */
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_solve_ap3p_hypotheses(
+    const opencv_core_mat_handle *object_points,
+    const opencv_core_mat_handle *image_points,
+    const opencv_calib3d_camera_intrinsics *intrinsics,
+    const opencv_calib3d_distortion5 *distortion,
+    opencv_calib3d_ap3p_hypotheses *result);
 
 OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_refine_pose_iterative(
     const opencv_core_mat_handle *object_points,

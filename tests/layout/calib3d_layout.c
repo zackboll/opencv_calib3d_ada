@@ -60,6 +60,25 @@ void calib3d_test_fill_pose(opencv_calib3d_pose *v) {
     *v = (opencv_calib3d_pose){0.1, 0.2, 0.3, 4.0, 5.0, 6.0};
 }
 
+int32_t calib3d_test_ap3p_layout(int32_t field) {
+    const size_t values[] = {
+        sizeof(opencv_calib3d_ap3p_hypotheses), _Alignof(opencv_calib3d_ap3p_hypotheses),
+        offsetof(opencv_calib3d_ap3p_hypotheses, count),
+        offsetof(opencv_calib3d_ap3p_hypotheses, candidates),
+        sizeof(opencv_calib3d_pose),
+        offsetof(opencv_calib3d_ap3p_hypotheses, candidates[0]),
+        offsetof(opencv_calib3d_ap3p_hypotheses, candidates[1]),
+        offsetof(opencv_calib3d_ap3p_hypotheses, candidates[2]),
+        offsetof(opencv_calib3d_ap3p_hypotheses, candidates[3])
+    };
+    return field >= 0 && field < 9 ? (int32_t)values[field] : -1;
+}
+void calib3d_test_fill_ap3p(opencv_calib3d_ap3p_hypotheses *v) {
+    v->count = 4;
+    for (int i = 0; i < 4; ++i)
+        v->candidates[i] = (opencv_calib3d_pose){1.0 + i, 2.0 + i, 3.0 + i, 4.0 + i, 5.0 + i, 6.0 + i};
+}
+
 int32_t calib3d_test_rotation_layout(int32_t field) {
     const size_t values[] = {
         sizeof(opencv_calib3d_rotation_matrix), _Alignof(opencv_calib3d_rotation_matrix),

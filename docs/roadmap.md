@@ -1,5 +1,11 @@
 # Roadmap
 
+## Task 012 approved scope
+
+Minimal AP3P camera-pose hypotheses only. Exactly three correspondences,
+fixed `SOLVEPNP_AP3P`, all native candidates retained. No automatic pose
+choice, fourth-point scoring API, RANSAC, refinement, or geographic frame.
+
 ## Task 011 approved scope
 
 Calibrated homography plane-visibility assessment only, preserving all original

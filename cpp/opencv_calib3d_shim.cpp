@@ -42,6 +42,8 @@ static_assert(std::is_standard_layout<opencv_calib3d_distortion5>::value,
               "distortion must have standard C layout");
 static_assert(std::is_standard_layout<opencv_calib3d_pose>::value,
               "pose must have standard C layout");
+static_assert(std::is_standard_layout<opencv_calib3d_ap3p_hypotheses>::value,
+              "AP3P hypotheses must have standard C layout");
 static_assert(std::is_standard_layout<opencv_calib3d_rotation_matrix>::value,
               "rotation matrix must have standard C layout");
 
@@ -105,6 +107,7 @@ thread_local bool triangulation_override = false, triangulation_unknown = false;
 thread_local double triangulation_h[4]{};
 thread_local int planar_control = 0;
 thread_local int visibility_control = 0;
+thread_local int ap3p_control = 0;
 void checkpoint(int stage) {
     if (failure_stage != stage) return;
     const int kind = failure_kind;
@@ -284,6 +287,7 @@ const char *opencv_calib3d_last_error(void) { return error_text; }
 #ifdef OPENCV_CALIB3D_TEST_HOOKS
 void opencv_calib3d_test_planar_control(int mode) { planar_control = mode; }
 void opencv_calib3d_test_visibility_control(int mode) { visibility_control = mode; }
+void opencv_calib3d_test_ap3p_control(int mode) { ap3p_control = mode; }
 #endif
 const char *opencv_calib3d_native_version(void) { return CV_VERSION; }
 const char *opencv_calib3d_native_backend(void) {
@@ -832,6 +836,117 @@ opencv_calib3d_status opencv_calib3d_solve_pnp_ransac(
         }
         checkpoint(7);
         *out_result = result.release();
+    });
+}
+
+opencv_calib3d_status opencv_calib3d_solve_ap3p_hypotheses(
+    const opencv_core_mat_handle *object_points,
+    const opencv_core_mat_handle *image_points,
+    const opencv_calib3d_camera_intrinsics *intrinsics,
+    const opencv_calib3d_distortion5 *distortion,
+    opencv_calib3d_ap3p_hypotheses *result) {
+    if (result) *result = {};
+    return guarded([&] {
+        require(result != nullptr, "null AP3P result");
+        validate_intrinsics(intrinsics);
+        validate_distortion(distortion);
+        const cv::Mat &objects = resolve_input(object_points);
+        const cv::Mat &images = resolve_input(image_points);
+        require(objects.dims == 2 && images.dims == 2, "AP3P points must be two-dimensional");
+        require(objects.type() == CV_64FC3 && objects.cols == 1 && objects.rows == 3,
+                "AP3P object points must be exactly 3x1 Float64 C3");
+        require(images.type() == CV_64FC2 && images.cols == 1 && images.rows == 3,
+                "AP3P image points must be exactly 3x1 Float64 C2");
+        double world[3][3], pixels[3][2];
+        for (int i = 0; i < 3; ++i) {
+            const cv::Vec3d object = objects.at<cv::Vec3d>(i, 0);
+            const cv::Vec2d image = images.at<cv::Vec2d>(i, 0);
+            require(std::isfinite(object[0]) && std::isfinite(object[1]) && std::isfinite(object[2]) &&
+                    std::isfinite(image[0]) && std::isfinite(image[1]),
+                    "AP3P observations must be finite");
+            world[i][0] = object[0]; world[i][1] = object[1]; world[i][2] = object[2];
+            pixels[i][0] = image[0]; pixels[i][1] = image[1];
+        }
+        require(opencv_calib3d_detail::ap3p_world_admissible(world),
+                "AP3P world geometry is singular or unrepresentable");
+        for (int i = 0; i < 3; ++i) {
+            if (std::abs(pixels[i][0]) > std::numeric_limits<double>::max() / 2.0 ||
+                std::abs(intrinsics->center_x) > std::numeric_limits<double>::max() / 2.0 ||
+                std::abs(pixels[i][1]) > std::numeric_limits<double>::max() / 2.0 ||
+                std::abs(intrinsics->center_y) > std::numeric_limits<double>::max() / 2.0)
+                throw std::invalid_argument("AP3P pixel normalization is unrepresentable");
+        }
+        cv::Mat object_input(3, 1, CV_64FC3), image_input(3, 1, CV_64FC2);
+        for (int i = 0; i < 3; ++i) {
+            object_input.at<cv::Vec3d>(i, 0) = cv::Vec3d(world[i][0], world[i][1], world[i][2]);
+            image_input.at<cv::Vec2d>(i, 0) = cv::Vec2d(pixels[i][0], pixels[i][1]);
+        }
+        const cv::Mat camera = camera_matrix(*intrinsics);
+        const cv::Mat coefficients = distortion_vector(*distortion);
+        // Inspection only. solveP3P below still receives the original pixels.
+        cv::Mat normalized;
+        cv::undistortPoints(image_input, normalized, camera, coefficients);
+        require(normalized.dims == 2 && normalized.type() == CV_64FC2 &&
+                normalized.rows == 3 && normalized.cols == 1,
+                "native undistortion did not return 3x1 Float64 C2");
+        double rays[3][2];
+        for (int i = 0; i < 3; ++i) {
+            const cv::Vec2d ray = normalized.at<cv::Vec2d>(i, 0);
+            require(std::isfinite(ray[0]) && std::isfinite(ray[1]),
+                    "native undistorted AP3P ray is nonfinite");
+            rays[i][0] = ray[0];
+            rays[i][1] = ray[1];
+        }
+        require(opencv_calib3d_detail::ap3p_bearings_admissible(rays),
+                "AP3P undistorted bearings are singular or unrepresentable");
+        std::vector<cv::Mat> rotations, translations;
+        checkpoint(50);
+        int count = cv::solveP3P(object_input, image_input, camera, coefficients,
+                                 rotations, translations, cv::SOLVEPNP_AP3P);
+        checkpoint(51);
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+        const int control = ap3p_control;
+        ap3p_control = 0;
+        if (control == 1) { count = 0; rotations.clear(); translations.clear(); }
+        if (control == 2) count = 5;
+        if (control == 3 && !rotations.empty()) rotations.pop_back();
+        if (control == 4 && !rotations.empty()) rotations[0] = cv::Mat::zeros(2, 2, CV_32F);
+        if (control == 5 && !translations.empty())
+            translations[0].at<double>(0) = std::numeric_limits<double>::infinity();
+#endif
+        if (count < 0 || count > 4 ||
+            rotations.size() != static_cast<std::size_t>(count) ||
+            translations.size() != static_cast<std::size_t>(count))
+            throw std::runtime_error("malformed AP3P hypothesis count");
+        opencv_calib3d_ap3p_hypotheses local{};
+        local.count = count;
+        for (int i = 0; i < count; ++i) {
+            checkpoint(52);
+            const cv::Mat &rotation = rotations[static_cast<std::size_t>(i)];
+            const cv::Mat &translation = translations[static_cast<std::size_t>(i)];
+            if (rotation.dims != 2 || translation.dims != 2 ||
+                rotation.type() != CV_64F || translation.type() != CV_64F ||
+                rotation.total() != 3 || translation.total() != 3)
+                throw std::runtime_error("malformed AP3P pose vector");
+            const cv::Mat rotation_values = rotation.reshape(1, 3);
+            const cv::Mat translation_values = translation.reshape(1, 3);
+            opencv_calib3d_pose pose{
+                rotation_values.at<double>(0), rotation_values.at<double>(1), rotation_values.at<double>(2),
+                translation_values.at<double>(0), translation_values.at<double>(1), translation_values.at<double>(2)};
+            if (!finite_pose(pose)) throw std::runtime_error("nonfinite AP3P pose");
+            cv::Mat matrix;
+            cv::Rodrigues(rotation_values, matrix);
+            if (matrix.rows != 3 || matrix.cols != 3 || matrix.type() != CV_64F || !cv::checkRange(matrix))
+                throw std::runtime_error("AP3P Rodrigues matrix is not finite");
+            const double determinant = cv::determinant(matrix);
+            const double orthogonality = cv::norm(matrix.t() * matrix - cv::Mat::eye(3, 3, CV_64F), cv::NORM_INF);
+            if (!std::isfinite(determinant) || !std::isfinite(orthogonality) ||
+                std::abs(determinant - 1.0) > 1.0e-6 || orthogonality > 1.0e-6)
+                throw std::runtime_error("AP3P rotation is not a proper rotation");
+            local.candidates[i] = pose;
+        }
+        checkpoint(53);
+        *result = local;
     });
 }
 

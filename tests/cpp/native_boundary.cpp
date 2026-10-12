@@ -1,4 +1,5 @@
 #include "opencv_calib3d_shim.h"
+#include "pnp_profile.hpp"
 #include "opencv_core_shim.h"
 #include "opencv_core_module_bridge.hpp"
 #include "homography_profile.hpp"
@@ -29,6 +30,7 @@ extern "C" void opencv_calib3d_test_triangulation_unknown(void);
 extern "C" int opencv_calib3d_test_triangulation_live(void);
 extern "C" void opencv_calib3d_test_planar_control(int);
 extern "C" void opencv_calib3d_test_visibility_control(int);
+extern "C" void opencv_calib3d_test_ap3p_control(int);
 #endif
 
 namespace {
@@ -1362,12 +1364,216 @@ void visibility_boundary() {
     std::cout << "PASS: visibility raw production, multiple/zero survivors, conversion, strided Core handles\n";
 }
 
+void ap3p_boundary() {
+    const opencv_calib3d_camera_intrinsics k{800, 820, 640, 360};
+    const opencv_calib3d_distortion5 none{};
+    const opencv_calib3d_distortion5 distorted{-0.12, 0.02, 0.001, -0.0015, 0.01};
+    cv::Mat rotation_y, rotation_z, rotation;
+    cv::Rodrigues(cv::Vec3d(0, 0.35, 0), rotation_y);
+    cv::Rodrigues(cv::Vec3d(0, 0, 0.22), rotation_z);
+    rotation = rotation_z * rotation_y;
+    const cv::Vec3d translation(0.2, -0.3, 0.8);
+    const std::vector<cv::Point3d> world{{0.3, -0.2, 3.5}, {1.4, 0.1, 4.0}, {-0.5, 1.2, 5.3}};
+    auto objects = matrix(3, 1, OPENCV_CORE_DEPTH_FLOAT64, 3);
+    auto images = matrix(3, 1, OPENCV_CORE_DEPTH_FLOAT64, 2);
+    auto prepare = [&](const opencv_calib3d_distortion5 &coefficients) {
+        cv::Mat rvec;
+        cv::Mat camera = cv::Mat::zeros(3, 3, CV_64FC1);
+        camera.at<double>(0, 0) = k.focal_x;
+        camera.at<double>(0, 2) = k.center_x;
+        camera.at<double>(1, 1) = k.focal_y;
+        camera.at<double>(1, 2) = k.center_y;
+        camera.at<double>(2, 2) = 1.0;
+        cv::Mat distortion(5, 1, CV_64F);
+        distortion.at<double>(0) = coefficients.k1; distortion.at<double>(1) = coefficients.k2;
+        distortion.at<double>(2) = coefficients.p1; distortion.at<double>(3) = coefficients.p2;
+        distortion.at<double>(4) = coefficients.k3;
+        cv::Rodrigues(rotation, rvec);
+        std::vector<cv::Point2d> projected;
+        cv::projectPoints(world, rvec, translation, camera, distortion, projected);
+        for (int i = 0; i < 3; ++i) {
+            output(objects.get()).at<cv::Vec3d>(i, 0) = cv::Vec3d(world[i].x, world[i].y, world[i].z);
+            output(images.get()).at<cv::Vec2d>(i, 0) = cv::Vec2d(projected[i].x, projected[i].y);
+        }
+    };
+    auto cleared = [](const opencv_calib3d_ap3p_hypotheses &value) {
+        if (value.count != 0) return false;
+        for (const auto &pose : value.candidates) if (!zero_pose(pose)) return false;
+        return true;
+    };
+    for (const auto &coefficients : {none, distorted}) {
+        prepare(coefficients);
+        opencv_calib3d_ap3p_hypotheses result{};
+        check(opencv_calib3d_solve_ap3p_hypotheses(objects.get(), images.get(), &k, &coefficients, &result) == 0,
+              "raw AP3P production");
+        check(result.count >= 1 && result.count <= 4, "raw AP3P hypothesis bounds");
+        bool matched = false;
+        for (int i = 0; i < result.count; ++i) {
+            cv::Mat matrix;
+            cv::Rodrigues(cv::Vec3d(result.candidates[i].rx, result.candidates[i].ry, result.candidates[i].rz), matrix);
+            const double trace = cv::trace(rotation.t() * matrix)[0];
+            const double cosine = std::max(-1.0, std::min(1.0, (trace - 1.0) / 2.0));
+            const double angle = std::acos(cosine);
+            const double error = cv::norm(cv::Vec3d(result.candidates[i].tx, result.candidates[i].ty,
+                                                    result.candidates[i].tz) - translation);
+            matched = matched || (angle < 1.0e-4 && error < 1.0e-4);
+        }
+        check(matched, "raw AP3P known pose");
+    }
+    auto parent_world = matrix(3, 2, OPENCV_CORE_DEPTH_FLOAT64, 3);
+    auto parent_image = matrix(3, 2, OPENCV_CORE_DEPTH_FLOAT64, 2);
+    prepare(none);
+    output(objects.get()).copyTo(output(parent_world.get()).col(0));
+    output(images.get()).copyTo(output(parent_image.get()).col(0));
+    output(objects.get()) = output(parent_world.get()).col(0);
+    output(images.get()) = output(parent_image.get()).col(0);
+    opencv_calib3d_ap3p_hypotheses strided{};
+    check(!output(objects.get()).isContinuous() && !output(images.get()).isContinuous() &&
+          opencv_calib3d_solve_ap3p_hypotheses(objects.get(), images.get(), &k, &none, &strided) == 0 &&
+          strided.count >= 1, "strided AP3P Core regions");
+    auto invalid = [&](const opencv_core_mat_handle *world_handle, const opencv_core_mat_handle *image_handle,
+                       const opencv_calib3d_camera_intrinsics *intrinsics,
+                       const opencv_calib3d_distortion5 *coefficients, bool have_output = true) {
+        opencv_calib3d_ap3p_hypotheses dirty{99, {{9, 9, 9, 9, 9, 9}, {8, 8, 8, 8, 8, 8},
+                                                  {7, 7, 7, 7, 7, 7}, {6, 6, 6, 6, 6, 6}}};
+        check(opencv_calib3d_solve_ap3p_hypotheses(world_handle, image_handle, intrinsics, coefficients,
+                                                   have_output ? &dirty : nullptr) != 0, "invalid AP3P accepted");
+        if (have_output) check(cleared(dirty), "invalid AP3P did not clear aggregate");
+    };
+    prepare(none);
+    invalid(nullptr, images.get(), &k, &none);
+    invalid(objects.get(), nullptr, &k, &none);
+    invalid(objects.get(), images.get(), nullptr, &none);
+    invalid(objects.get(), images.get(), &k, nullptr);
+    invalid(objects.get(), images.get(), &k, &none, false);
+    for (int rows : {0, 1, 2, 4, 5}) {
+        auto bad_world = matrix(std::max(rows, 1), 1, OPENCV_CORE_DEPTH_FLOAT64, 3);
+        auto bad_image = matrix(std::max(rows, 1), 1, OPENCV_CORE_DEPTH_FLOAT64, 2);
+        if (rows == 0) { output(bad_world.get()).release(); output(bad_image.get()).release(); }
+        else { output(bad_world.get()) = cv::Mat(rows, 1, CV_64FC3, cv::Scalar(0, 0, 1));
+               output(bad_image.get()) = cv::Mat(rows, 1, CV_64FC2, cv::Scalar(1, 1)); }
+        invalid(bad_world.get(), images.get(), &k, &none);
+        invalid(objects.get(), bad_image.get(), &k, &none);
+    }
+    auto mismatch = matrix(4, 1, OPENCV_CORE_DEPTH_FLOAT64, 2);
+    auto float_world = matrix(3, 1, OPENCV_CORE_DEPTH_FLOAT32, 3);
+    auto one_channel = matrix(3, 1, OPENCV_CORE_DEPTH_FLOAT64, 1);
+    auto wrong_shape = matrix(1, 3, OPENCV_CORE_DEPTH_FLOAT64, 3);
+    invalid(mismatch.get(), images.get(), &k, &none);
+    invalid(float_world.get(), images.get(), &k, &none);
+    invalid(one_channel.get(), images.get(), &k, &none);
+    invalid(wrong_shape.get(), images.get(), &k, &none);
+    auto nd = matrix(3, 1, OPENCV_CORE_DEPTH_FLOAT64, 3);
+    const int sizes[] = {3, 1, 1};
+    output(nd.get()) = cv::Mat(3, sizes, CV_64FC3, cv::Scalar(0, 0, 1));
+    invalid(nd.get(), images.get(), &k, &none);
+    for (double value : {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()}) {
+        prepare(none);
+        output(objects.get()).at<cv::Vec3d>(0, 0)[0] = value;
+        invalid(objects.get(), images.get(), &k, &none);
+        prepare(none);
+        output(images.get()).at<cv::Vec2d>(0, 0)[1] = value;
+        invalid(objects.get(), images.get(), &k, &none);
+    }
+    prepare(none);
+    output(objects.get()).at<cv::Vec3d>(1, 0) = output(objects.get()).at<cv::Vec3d>(0, 0);
+    invalid(objects.get(), images.get(), &k, &none);
+    prepare(none);
+    output(objects.get()).at<cv::Vec3d>(0, 0) = cv::Vec3d(0, 0, 1);
+    output(objects.get()).at<cv::Vec3d>(1, 0) = cv::Vec3d(1, 0, 2);
+    output(objects.get()).at<cv::Vec3d>(2, 0) = cv::Vec3d(2, 0, 3);
+    invalid(objects.get(), images.get(), &k, &none);
+    prepare(none);
+    output(images.get()).at<cv::Vec2d>(1, 0) = output(images.get()).at<cv::Vec2d>(0, 0);
+    invalid(objects.get(), images.get(), &k, &none);
+    prepare(none);
+    for (int i = 0; i < 3; ++i) output(images.get()).at<cv::Vec2d>(i, 0)[1] = 360;
+    invalid(objects.get(), images.get(), &k, &none);
+    prepare(none);
+    output(objects.get()).at<cv::Vec3d>(0, 0) = cv::Vec3d(1e200, 0, 1e200);
+    output(objects.get()).at<cv::Vec3d>(1, 0) = cv::Vec3d(0, 1e200, 1e200);
+    output(objects.get()).at<cv::Vec3d>(2, 0) = cv::Vec3d(-1e200, -1e200, 2e200);
+    invalid(objects.get(), images.get(), &k, &none);
+    const cv::Point3d zero_world[] = {{-0.39081598340561996, 0.32617277568950875, 4.0131477606213553},
+                                      {-1.6067503815809268, 0.73284013236088175, 2.4253925955828199},
+                                      {1.9483108946655348, -1.1457818430811084, 7.0007856567437514}};
+    const cv::Point2d zero_image[] = {{118.67887557148487, 129.79777044444734},
+                                      {452.33705169300674, 427.73531562095332},
+                                      {690.96005298599528, 241.045602436595}};
+    for (int i = 0; i < 3; ++i) {
+        output(objects.get()).at<cv::Vec3d>(i, 0) = cv::Vec3d(zero_world[i].x, zero_world[i].y, zero_world[i].z);
+        output(images.get()).at<cv::Vec2d>(i, 0) = cv::Vec2d(zero_image[i].x, zero_image[i].y);
+    }
+    opencv_calib3d_ap3p_hypotheses empty{99, {{1, 1, 1, 1, 1, 1}, {1, 1, 1, 1, 1, 1},
+                                              {1, 1, 1, 1, 1, 1}, {1, 1, 1, 1, 1, 1}}};
+    check(opencv_calib3d_solve_ap3p_hypotheses(objects.get(), images.get(), &k, &none, &empty) == 0 && cleared(empty),
+          "valid native AP3P zero result");
+    prepare(none);
+    check(opencv_calib3d_solve_ap3p_hypotheses(objects.get(), images.get(), &k, &none, &strided) == 0 && strided.count >= 1,
+          "valid AP3P recovers after invalid calls");
+    const opencv_calib3d_distortion5 radial{0.2, 0, 0, 0, 0};
+    const double normalized_distorted[3][2] = {{-0.55, 0.55}, {0.0, 0.525}, {0.55, 0.55}};
+    for (int i = 0; i < 3; ++i) {
+        output(objects.get()).at<cv::Vec3d>(i, 0) = cv::Vec3d(i == 0 ? 0.0 : (i == 1 ? 1.0 : -0.4),
+                                                              i == 2 ? 0.8 : (i == 1 ? 0.2 : 0.0), 3.0 + i);
+        output(images.get()).at<cv::Vec2d>(i, 0) = cv::Vec2d(k.focal_x * normalized_distorted[i][0] + k.center_x,
+                                                             k.focal_y * normalized_distorted[i][1] + k.center_y);
+    }
+    cv::Mat inspection(3, 1, CV_64FC2), recovered_rays;
+    for (int i = 0; i < 3; ++i) inspection.at<cv::Vec2d>(i, 0) = output(images.get()).at<cv::Vec2d>(i, 0);
+    cv::Mat radial_camera = cv::Mat::eye(3, 3, CV_64F), radial_distortion(5, 1, CV_64F, cv::Scalar(0));
+    radial_camera.at<double>(0, 0) = k.focal_x; radial_camera.at<double>(1, 1) = k.focal_y;
+    radial_camera.at<double>(0, 2) = k.center_x; radial_camera.at<double>(1, 2) = k.center_y;
+    radial_distortion.at<double>(0) = 0.2;
+    cv::undistortPoints(inspection, recovered_rays, radial_camera, radial_distortion);
+    double recovered[3][2];
+    for (int i = 0; i < 3; ++i) {
+        recovered[i][0] = recovered_rays.at<cv::Vec2d>(i, 0)[0];
+        recovered[i][1] = recovered_rays.at<cv::Vec2d>(i, 0)[1];
+    }
+    const double ideal[3][2] = {{-0.5, 0.5}, {0.0, 0.5}, {0.5, 0.5}};
+    const double exact_coplanar[3][2] = {{-0.5, 0.0}, {0.0, 0.0}, {0.5, 0.0}};
+    double recovery = 0;
+    for (int i = 0; i < 3; ++i)
+        recovery = opencv_calib3d_detail::larger(recovery, std::hypot(recovered[i][0] - ideal[i][0], recovered[i][1] - ideal[i][1]));
+    std::cout << "AP3P undistort recovery error=" << recovery << "\n";
+    check(opencv_calib3d_detail::ap3p_bearings_admissible(normalized_distorted) &&
+          !opencv_calib3d_detail::ap3p_bearings_admissible(exact_coplanar),
+          "distorted pixels are not the native AP3P rays");
+    opencv_calib3d_ap3p_hypotheses radial_result{};
+    check(opencv_calib3d_solve_ap3p_hypotheses(objects.get(), images.get(), &k, &radial, &radial_result) == 0 &&
+          radial_result.count >= 1 && radial_result.count <= 4,
+          "near-coplanar recovered rays remain admissible");
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+    for (int stage = 50; stage <= 53; ++stage) for (int kind = 1; kind <= 5; ++kind) {
+        opencv_calib3d_ap3p_hypotheses dirty{99, {{9, 9, 9, 9, 9, 9}, {8, 8, 8, 8, 8, 8},
+                                                  {7, 7, 7, 7, 7, 7}, {6, 6, 6, 6, 6, 6}}};
+        opencv_calib3d_test_fail(stage, kind);
+        check(opencv_calib3d_solve_ap3p_hypotheses(objects.get(), images.get(), &k, &none, &dirty) != 0 && cleared(dirty),
+              "AP3P injected fault did not clear aggregate");
+    }
+    for (int mode = 2; mode <= 5; ++mode) {
+        opencv_calib3d_ap3p_hypotheses dirty{99, {{9, 9, 9, 9, 9, 9}, {8, 8, 8, 8, 8, 8},
+                                                  {7, 7, 7, 7, 7, 7}, {6, 6, 6, 6, 6, 6}}};
+        opencv_calib3d_test_ap3p_control(mode);
+        check(opencv_calib3d_solve_ap3p_hypotheses(objects.get(), images.get(), &k, &none, &dirty) != 0 && cleared(dirty),
+              "AP3P malformed post-native control");
+    }
+    opencv_calib3d_test_ap3p_control(1);
+    check(opencv_calib3d_solve_ap3p_hypotheses(objects.get(), images.get(), &k, &none, &empty) == 0 && cleared(empty),
+          "test-only post-native AP3P zero");
+    std::cout << "PASS: raw AP3P 20 fault scenarios and post-native controls\n";
+#endif
+    std::cout << "PASS: raw AP3P production, distortion, strided Core handles, zero result\n";
+}
+
 int main() {
     try {
         run();
         triangulation_boundary();
         planar_boundary();
         visibility_boundary();
+        ap3p_boundary();
         return 0;
     } catch (const std::exception &error) {
         std::cerr << "FAIL: " << error.what() << '\n';

@@ -1348,6 +1348,59 @@ package body OpenCV.Calib3D is
          end return;
       end;
    end Solve_PnP_RANSAC;
+
+    function Solve_AP3P_Hypotheses
+      (Object_Points : Object_Point_Array;
+       Image_Points  : Image_Point_Array;
+       Intrinsics    : Camera_Intrinsics;
+       Distortion    : Distortion_Coefficients := No_Distortion)
+       return AP3P_Pose_Hypothesis_Array
+    is
+       Native_Intrinsics : aliased C.C_Camera_Intrinsics;
+       Native_Distortion : aliased C.C_Distortion5;
+       Native            : aliased C.C_AP3P_Hypotheses;
+       Objects           : OpenCV.Core.Mat;
+       Images            : OpenCV.Core.Mat;
+       Code              : C.Status := C.Success;
+       procedure Object_Callback (Object_Handle : Bridge.Input_Mat_Handle) is
+          procedure Image_Callback (Image_Handle : Bridge.Input_Mat_Handle) is
+          begin
+             Code := C.Solve_AP3P_Hypotheses
+               (Object_Handle, Image_Handle, Native_Intrinsics'Access,
+                Native_Distortion'Access, Native'Access);
+          end Image_Callback;
+       begin
+          Bridge.With_Input_Handle (Images, Image_Callback'Access);
+       end Object_Callback;
+    begin
+       Validate (Intrinsics);
+       Validate (Distortion);
+       Validate (Object_Points);
+       Validate (Image_Points);
+       if Object_Points'Length /= 3 or else Image_Points'Length /= 3 then
+          raise OpenCV.OpenCV_Error with "Solve_AP3P_Hypotheses requires exactly three correspondences";
+       end if;
+       Objects := Object_Matrix (Object_Points);
+       Images := Image_Matrix (Image_Points);
+       Native_Intrinsics := To_C (Intrinsics);
+       Native_Distortion := To_C (Distortion);
+       Bridge.With_Input_Handle (Objects, Object_Callback'Access);
+       C.Check (Code, "Calib3D.Solve_AP3P_Hypotheses");
+       if Native.Count < 0 or else Native.Count > 4 then
+          raise OpenCV.OpenCV_Error with "Malformed AP3P hypothesis count";
+       end if;
+       return Result : AP3P_Pose_Hypothesis_Array (1 .. Natural (Native.Count)) do
+          for I in Result'Range loop
+             Result (I).Pose := From_C (Native.Candidates (I));
+             Validate (Result (I).Pose);
+          end loop;
+       end return;
+    exception
+       when Constraint_Error =>
+          raise OpenCV.OpenCV_Error with "Unrepresentable AP3P result";
+    end Solve_AP3P_Hypotheses;
+
+
    overriding procedure Finalize (Self : in out Essential_Estimate) is
    begin
       Free (Self.Data);

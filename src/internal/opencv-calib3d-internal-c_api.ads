@@ -176,6 +176,22 @@ package OpenCV.Calib3D.Internal.C_API is
    type C_Pose is record
       RX, RY, RZ, TX, TY, TZ : Interfaces.C.double;
    end record with Convention => C;
+    type C_Pose_Array is array (Positive range 1 .. 4) of C_Pose
+      with Convention => C;
+    type C_AP3P_Hypotheses is record
+       Count : Interfaces.Integer_32;
+       Candidates : C_Pose_Array;
+    end record with Convention => C;
+    function Solve_AP3P_Hypotheses
+      (Object_Points : OpenCV.Core.Module_Interop.Input_Mat_Handle;
+       Image_Points  : OpenCV.Core.Module_Interop.Input_Mat_Handle;
+       Intrinsics    : access constant C_Camera_Intrinsics;
+       Distortion    : access constant C_Distortion5;
+       Result        : access C_AP3P_Hypotheses) return Status
+      with Import, Convention => C,
+        External_Name => "opencv_calib3d_solve_ap3p_hypotheses";
+
+
 
    type C_Point3 is record
       X, Y, Z : Interfaces.C.double;
