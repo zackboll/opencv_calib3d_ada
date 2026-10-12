@@ -448,6 +448,65 @@ package OpenCV.Calib3D is
        Distortion    : Distortion_Coefficients := No_Distortion)
        return AP3P_Pose_Hypothesis_Array;
 
+   --  Independent-reference diagnostics for existing AP3P hypotheses.
+   --  Native Project_Points performs perspective projection and the five
+   --  Brown/OpenCV distortion coefficients. Ada classifies camera depth and
+   --  aggregates results. No candidate is selected, sorted, refined, or replaced.
+   --
+   --  X_camera = R * X_world + t, with R from Rotation_Matrix_Of. A reference
+   --  is eligible for projection only when that camera Z is finite and Z > 0.
+   --  Zero and negative Z are Non_Positive_Depth and are not projected.
+   --  Numerically_Unavailable covers specified Ada-side Float64 representability
+   --  failures (camera-frame products/sums, or a residual after a successful
+   --  native projection). It is not a substitute for a native Project_Points
+   --  failure: those raise OpenCV_Error and do not return a partial matrix.
+   --  Stored zeros on a nonprojected disposition are undefined placeholders,
+   --  not a perfect reprojection.
+   --
+   --  Output is 1 .. Hypotheses'Length by 1 .. Reference_World'Length, paired
+   --  by position regardless of input bounds. Empty pairs do not call
+   --  projectPoints. Malformed inputs raise OpenCV_Error before evaluation.
+   type AP3P_Reference_Disposition is
+     (Projected_Positive_Depth, Non_Positive_Depth, Numerically_Unavailable);
+
+   type AP3P_Reference_Result is record
+      Disposition : AP3P_Reference_Disposition := Numerically_Unavailable;
+      Camera_Depth : OpenCV.Float64_Value := 0.0;
+      Error_Pixels : OpenCV.Float64_Value := 0.0;
+   end record;
+
+   type AP3P_Reference_Result_Matrix is
+     array (Positive range <>, Positive range <>) of AP3P_Reference_Result;
+
+   function Evaluate_AP3P_References
+     (Hypotheses       : AP3P_Pose_Hypothesis_Array;
+      Reference_World  : Object_Point_Array;
+      Reference_Pixels : Image_Point_Array;
+      Intrinsics       : Camera_Intrinsics;
+      Distortion       : Distortion_Coefficients := No_Distortion)
+      return AP3P_Reference_Result_Matrix;
+
+   --  One one-based summary per hypothesis row, original order preserved.
+   --  RMS and maximum use Summarize_Reprojection on projected errors only.
+   --  Entire_Set_Evaluable is True only when every supplied reference for that
+   --  row was projected. An empty row is not a zero-error success.
+   type AP3P_Hypothesis_Reference_Summary is record
+      Total_References : Natural := 0;
+      Projected_References : Natural := 0;
+      Non_Positive_Depth_References : Natural := 0;
+      Numerically_Unavailable_References : Natural := 0;
+      Entire_Set_Evaluable : Boolean := False;
+      Reprojection : Reprojection_Summary;
+   end record;
+
+   type AP3P_Hypothesis_Reference_Summary_Array is
+     array (Positive range <>) of AP3P_Hypothesis_Reference_Summary;
+
+   function Summarize_AP3P_References
+     (Results : AP3P_Reference_Result_Matrix)
+      return AP3P_Hypothesis_Reference_Summary_Array;
+
+
 
    --  Euclidean pixel errors, one-based in correspondence order. Equal counts
    --  are required; empty/empty returns 1 .. 0. These diagnostics are not pose

@@ -1,5 +1,12 @@
 # Roadmap
 
+## Task 013 approved scope
+
+Independent-reference diagnostics for existing AP3P hypotheses only.
+Native projection and distortion stay in `Project_Points`. Ada classifies
+camera depth and aggregates projected residuals. No automatic pose
+selection, RANSAC, refinement, covariance, or geographic frame.
+
 ## Task 012 approved scope
 
 Minimal AP3P camera-pose hypotheses only. Exactly three correspondences,

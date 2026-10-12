@@ -144,6 +144,44 @@ begin
                 Put_Line ("A fourth independent observation can help discriminate between hypotheses.");
                 Put_Line ("No physical pose has been automatically selected by this binding.");
                 Put_Line ("World-point units determine translation scale. No geographic reference is inferred.");
+                 declare
+                    Extra_World : constant Object_Point_Array :=
+                      [[0.7, -0.8, 6.1], [1.1, 0.4, 5.2], [-0.9, -0.6, 4.4],
+                       [0.2, 1.3, 7.0], [-1.5, 0.5, 3.8]];
+                    Extra_Pixels : constant Image_Point_Array :=
+                      Project_Points (Extra_World, Intrinsics, No_Distortion, Truth);
+                    Diagnostics : constant AP3P_Reference_Result_Matrix :=
+                      Evaluate_AP3P_References
+                        (Hypotheses, Extra_World, Extra_Pixels, Intrinsics);
+                    Summaries : constant AP3P_Hypothesis_Reference_Summary_Array :=
+                      Summarize_AP3P_References (Diagnostics);
+                 begin
+                    Put_Line ("AP3P reference diagnostics hypotheses:" &
+                      Natural'Image (Hypotheses'Length));
+                    Put_Line ("AP3P additional references:" &
+                      Natural'Image (Extra_World'Length));
+                    for I in Summaries'Range loop
+                       Put_Line ("AP3P diagnostic candidate" & Positive'Image (I));
+                       Put_Line ("projected references:" &
+                         Natural'Image (Summaries (I).Projected_References));
+                       Put_Line ("non-positive-depth references:" &
+                         Natural'Image (Summaries (I).Non_Positive_Depth_References));
+                       Put_Line ("numerically unavailable references:" &
+                         Natural'Image (Summaries (I).Numerically_Unavailable_References));
+                       Put_Line ("RMS pixel error:" &
+                         OpenCV.Float64_Value'Image (Summaries (I).Reprojection.RMS_Error_Pixels));
+                       Put_Line ("maximum pixel error:" &
+                         OpenCV.Float64_Value'Image
+                           (Summaries (I).Reprojection.Maximum_Error_Pixels));
+                       Put_Line ("entire set evaluable: " &
+                         Boolean'Image (Summaries (I).Entire_Set_Evaluable));
+                    end loop;
+                    Put_Line ("These diagnostics compare AP3P hypotheses with additional observations.");
+                    Put_Line ("The binding does not select a unique physical pose.");
+                    Put_Line ("A small reprojection error does not prove globally correct localization.");
+                    Put_Line ("Pose translation uses the units of the supplied world coordinates.");
+                 end;
+
              end;
 
          end;

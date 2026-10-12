@@ -530,6 +530,35 @@ begin
           end;
        end loop;
        Ada.Text_IO.Put_Line ("PASS: Ada AP3P 20 exception translations and post-native controls");
+       for Stage in Interfaces.C.int range 1 .. 2 loop
+          for Kind in Interfaces.C.int range 1 .. 5 loop
+             Fail (Stage, Kind);
+             begin
+                declare
+                   Values : constant AP3P_Reference_Result_Matrix :=
+                     Evaluate_AP3P_References
+                       ([(Pose => (Rotation => [others => 0.0],
+                                   Translation => [others => 0.0]))],
+                        [[0.0, 0.0, 5.0]], [[10.0, 20.0]], Calibration);
+                   pragma Unreferenced (Values);
+                begin
+                   raise Program_Error with "projection fault became an AP3P disposition";
+                end;
+             exception
+                when OpenCV.OpenCV_Error => null;
+             end;
+          end loop;
+       end loop;
+       declare
+          Quiet : constant AP3P_Reference_Result_Matrix :=
+            Evaluate_AP3P_References
+              ([(Pose => (Rotation => [others => 0.0], Translation => [others => 0.0]))],
+               [[0.0, 0.0, 0.0]], [[10.0, 20.0]], Calibration);
+       begin
+          Check (Quiet (1, 1).Disposition = Non_Positive_Depth,
+            "nonpositive depth must not enter native projection");
+       end;
+       Ada.Text_IO.Put_Line ("PASS: AP3P reference diagnostics propagate 10 native projection faults");
     end;
 
 end Run_Refinement_Faults;

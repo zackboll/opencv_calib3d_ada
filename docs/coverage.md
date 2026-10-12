@@ -1,5 +1,17 @@
 # Coverage
 
+## Task 013 AP3P reference diagnostics
+
+107 registrations preserve all 99 Task 012 cases and add eight reference
+cases: known fourth point, multiple references, different bounds, depth
+classification, five-coefficient distortion, extreme finite residuals,
+summaries, and empty/invalid input. Native projection faults at existing
+checkpoints 1 and 2 are executed by the fault runner, not a production
+AUnit case.
+The private ABI remains 46. Existing projection checkpoints 1 and 2 are
+reused; no new checkpoint is added. Inventory is not a claim of success;
+see [executed evidence](ap3p-reference-validation.md).
+
 ## Task 012 minimal AP3P hypotheses
 
 99 registrations preserve all 93 Task 011 cases and add six AP3P cases:
