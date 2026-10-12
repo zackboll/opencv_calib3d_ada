@@ -335,6 +335,16 @@ package OpenCV.Calib3D is
 
    function Camera_Center (Pose : World_To_Camera_Pose) return Object_Point;
 
+   --  Native cv::composeRT. First maps frame A to B (X_B = R1 X_A + t1), Second
+   --  maps B to C (X_C = R2 X_B + t2); the result maps A directly to C. "Apply
+   --  First, then Second." The caller supplies consecutive compatible frames and
+   --  consistent Cartesian units. The result Rodrigues vector is native output and
+   --  is not canonicalized: compare Rotation_Matrix_Of, not vector components.
+   --  Raises OpenCV_Error for nonfinite or unrepresentable inputs/outputs.
+   function Compose_Poses
+     (First : World_To_Camera_Pose; Second : World_To_Camera_Pose)
+      return World_To_Camera_Pose;
+
    --  R = native Rodrigues(Pose.Rotation), X_camera = R * X_world + t.
    --  All six pose components must be finite, even for direction operations.
    function Rotation_Matrix_Of (Pose : World_To_Camera_Pose) return Rotation_Matrix;

@@ -614,6 +614,28 @@ package body OpenCV.Calib3D is
               2 => OpenCV.Float64_Value (Center.Z)];
    end Camera_Center;
 
+   function Compose_Poses
+     (First : World_To_Camera_Pose; Second : World_To_Camera_Pose)
+      return World_To_Camera_Pose
+   is
+      Native_First  : aliased C.C_Pose;
+      Native_Second : aliased C.C_Pose;
+      Native_Result : aliased C.C_Pose := (others => 0.0);
+   begin
+      Validate (First);
+      Validate (Second);
+      Native_First := To_C (First);
+      Native_Second := To_C (Second);
+      C.Check (C.Compose_RT (Native_First'Access, Native_Second'Access, Native_Result'Access),
+               "Calib3D.Compose_Poses");
+      return Result : constant World_To_Camera_Pose := From_C (Native_Result) do
+         Validate (Result);
+      end return;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Pose composition exceeds Float64 range";
+   end Compose_Poses;
+
    function Rotation_Matrix_Of (Pose : World_To_Camera_Pose) return Rotation_Matrix is
       Native_Pose : aliased C.C_Pose;
       Matrix : aliased C.C_Rotation_Matrix := (others => 0.0);

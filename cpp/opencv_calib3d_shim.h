@@ -214,6 +214,14 @@ OPENCV_CALIB3D_API void opencv_calib3d_homography_result_destroy(
 OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_rotation_matrix_of(
     const opencv_calib3d_pose *pose, opencv_calib3d_rotation_matrix *matrix);
 
+/* Native cv::composeRT: apply `first`, then `second` (X_B=R1 X_A+t1, X_C=R2 X_B+t2).
+ * Result maps A->C. Distinct input/output records are required: result==first or
+ * result==second is rejected BEFORE clearing so an input is never destroyed. For
+ * every other failure the result is cleared and published once on success only. */
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_compose_rt(
+    const opencv_calib3d_pose *first, const opencv_calib3d_pose *second,
+    opencv_calib3d_pose *result);
+
 OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_undistort_normalized(
     const opencv_core_mat_handle *image_points,
     const opencv_calib3d_camera_intrinsics *intrinsics,

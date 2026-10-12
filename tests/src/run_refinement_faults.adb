@@ -561,4 +561,33 @@ begin
        Ada.Text_IO.Put_Line ("PASS: AP3P reference diagnostics propagate 10 native projection faults");
     end;
 
+    declare
+       First  : constant World_To_Camera_Pose :=
+         (Rotation => [0.0, 0.0, 1.5], Translation => [2.0, -1.0, 0.5]);
+       Second : constant World_To_Camera_Pose :=
+         (Rotation => [1.0, 0.0, 0.0], Translation => [1.0, 3.0, -2.0]);
+       Expected : constant World_To_Camera_Pose := Compose_Poses (First, Second);
+       Count : Natural := 0;
+    begin
+       for Stage in Interfaces.C.int range 54 .. 57 loop
+          for Kind in Interfaces.C.int range 1 .. 5 loop
+             Fail (Stage, Kind);
+             begin
+                declare
+                   Value : constant World_To_Camera_Pose := Compose_Poses (First, Second);
+                   pragma Unreferenced (Value);
+                begin
+                   raise Program_Error with "pose composition fault not translated";
+                end;
+             exception
+                when OpenCV.OpenCV_Error => Count := Count + 1;
+             end;
+             Check (Compose_Poses (First, Second) = Expected,
+                    "pose composition did not recover after injected fault");
+          end loop;
+       end loop;
+       Check (Count = 20, "pose composition expected 20 translated faults");
+       Ada.Text_IO.Put_Line ("PASS: Ada pose composition 20 exception translations and recovery");
+    end;
+
 end Run_Refinement_Faults;
