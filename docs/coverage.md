@@ -5,6 +5,7 @@
 107 registrations preserve all 99 Task 012 cases and add eight reference
 cases: known fourth point, multiple references, different bounds, depth
 classification, five-coefficient distortion, extreme finite residuals,
+a real evaluator-produced `Numerically_Unavailable` camera-sum overflow,
 summaries, and empty/invalid input. Native projection faults at existing
 checkpoints 1 and 2 are executed by the fault runner, not a production
 AUnit case.

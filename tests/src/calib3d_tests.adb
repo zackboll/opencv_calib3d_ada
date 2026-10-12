@@ -4096,7 +4096,30 @@ package body Calib3D_Tests is
        Observed : constant Image_Point_Array := [[-1.0E308, 0.0]];
        Residual : constant AP3P_Reference_Result_Matrix :=
          Evaluate_AP3P_References ([(Pose => Identity)], Finite_Point, Observed, Cam);
+       Turn : constant World_To_Camera_Pose :=
+         (Rotation => [0.0, 0.0, Ada.Numerics.Pi / 4.0], Translation => [0.0, 0.0, 0.0]);
+       Batch : Object_Point_Array := [[0.0, 0.0, 4.0], [1.0E308, -1.0E308, 4.0]];
+       Batch_Pixels : constant Image_Point_Array := [[0.0, 0.0], [0.0, 0.0]];
     begin
+       Batch (2) := [1.0E308 * 1.5, -(1.0E308 * 1.5), 4.0];
+       declare
+          Mixed : constant AP3P_Reference_Result_Matrix :=
+            Evaluate_AP3P_References ([(Pose => Turn)], Batch, Batch_Pixels, Cam);
+          Mixed_Summary : constant AP3P_Hypothesis_Reference_Summary_Array :=
+            Summarize_AP3P_References (Mixed);
+       begin
+          Assert (Mixed (1, 1).Disposition = Projected_Positive_Depth
+            and then Mixed (1, 1).Camera_Depth > 0.0, "ordinary reference preserved");
+          Assert (Mixed (1, 2).Disposition = Numerically_Unavailable
+            and then Mixed (1, 2).Camera_Depth = 0.0
+            and then Mixed (1, 2).Error_Pixels = 0.0, "rotated opposing coordinates overflow");
+          Assert (Mixed_Summary (1).Projected_References = 1
+            and then Mixed_Summary (1).Numerically_Unavailable_References = 1
+            and then Mixed_Summary (1).Non_Positive_Depth_References = 0
+            and then Mixed_Summary (1).Total_References = 2
+            and then not Mixed_Summary (1).Entire_Set_Evaluable
+            and then Mixed_Summary (1).Reprojection.Count = 1, "summary excludes unavailable reference");
+       end;
        Assert ((for all Value of Predicted (1) => Finite (Value)), "native prediction finite");
        Assert ((for all Value of Observed (1) => Finite (Value)), "observed pixel finite");
        Assert (Residual (1, 1).Disposition = Projected_Positive_Depth

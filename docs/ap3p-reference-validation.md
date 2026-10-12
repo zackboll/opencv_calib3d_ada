@@ -58,6 +58,17 @@ remains a finite projected error. Float64 can represent that subtraction,
 so it is not `Numerically_Unavailable`. A native `Project_Points` failure
 still propagates as `OpenCV_Error`.
 
+A real `Numerically_Unavailable` disposition is executed through
+`Evaluate_AP3P_References`: pose `Rz(pi/4)`, zero translation, and world
+points `(0,0,4)` and `(1.5e308,-1.5e308,4)`. The camera X sum of the two
+rotated products (each about `1.06e308`) exceeds Float64, so the second
+reference returns `Numerically_Unavailable` with stored zeros while the
+first stays `Projected_Positive_Depth`. The summary is Projected=1,
+Unavailable=1, Non-positive=0, Total=2, not `Entire_Set_Evaluable`, with
+`Reprojection.Count=1`. This summary comes from the evaluator, not a
+hand-built record. The residual-subtraction overflow path is not claimed:
+no portable finite native prediction near `Float64'Last` was established.
+
 The fault runner reuses projection checkpoints 1 and 2, five categories
 each. All 10 raise `OpenCV_Error`. A zero-depth reference does not enter
 projection. The private ABI remains 46 imports and exports.
