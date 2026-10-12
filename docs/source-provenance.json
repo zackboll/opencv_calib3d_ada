@@ -365,5 +365,63 @@
     "canonicalization": "finite max-absolute scaling and positive determinant orientation; checked underflow and calibrated singular values",
     "failure": "malformed/nonfinite native outputs are errors; atomic fixed-capacity result",
     "zero_solution_evidence": "explicit test-only control after real native call, not claimed native degenerate behavior"
+  },
+  "task_014_review": {
+    "verification": "SHA-256 and git blob SHA-1 computed from immutable raw URLs; 4.1.0 hashes equal existing entries",
+    "native_call": "composeRT(rvec1,tvec1,rvec2,tvec2,rvec3,tvec3) without Jacobians",
+    "files": {
+      "4.1.0": [
+        {
+          "path": "modules/calib3d/src/calibration.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/src/calibration.cpp",
+          "sha256": "10255dda042c02b660b913d3993a1012cf66d20b23ba624cb790a85538878b92",
+          "git_blob_sha1": "1b5a8db06a028267a69a067ef102ae6fe53ae27d"
+        },
+        {
+          "path": "modules/calib3d/include/opencv2/calib3d.hpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/371bba8f54560b374fbcd47e7e02f015ac4969ad/modules/calib3d/include/opencv2/calib3d.hpp",
+          "sha256": "b525513f3cbdd148aa59feca0da775fe93dd8d2de31f648c473d255d688d415e",
+          "git_blob_sha1": "b6f3b30696705d8ebe7486beb23429fff52974f2"
+        }
+      ],
+      "4.10.0": [
+        {
+          "path": "modules/calib3d/src/calibration.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/src/calibration.cpp",
+          "sha256": "fbbd22d1d01ece77b58f923270e64b07183584e7d7e239eac7a7a91086c6fe30",
+          "git_blob_sha1": "c428da6bd5c417bec0306e4599da59e8be85e1c0"
+        },
+        {
+          "path": "modules/calib3d/include/opencv2/calib3d.hpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/71d3237a093b60a27601c20e9ee6c3e52154e8b1/modules/calib3d/include/opencv2/calib3d.hpp",
+          "sha256": "f937d4fbd7d9bd0226092e9bc2f4a56c439a27bcf059ee35de299ed2f6ba96f0",
+          "git_blob_sha1": "0280e05e21845b71097aac657ae33ecddec80f4a"
+        }
+      ],
+      "5.0.0": [
+        {
+          "path": "modules/geometry/src/calibration_base.cpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/src/calibration_base.cpp",
+          "sha256": "886b515003df67ffbbc196a6ecad12dea6cb08b8e7b715ee7f8d417e7e239b62",
+          "git_blob_sha1": "6b77da4a4eb88612954920f90929b395ab1d2f4c"
+        },
+        {
+          "path": "modules/geometry/include/opencv2/geometry/3d.hpp",
+          "url": "https://raw.githubusercontent.com/opencv/opencv/40738fb16ceddb5fb3fea747585f7ce6abb0605b/modules/geometry/include/opencv2/geometry/3d.hpp",
+          "sha256": "3e23154729137cce7c1574c7d70d00e1fff4a8d3e1548b4b128d8337e5861c34",
+          "git_blob_sha1": "64178c3a99e6e37535a9d49fe3f13372ca282f65"
+        }
+      ]
+    },
+    "implementation_lines": {
+      "4.1.0": "calibration.cpp cv::composeRT 3512, cvComposeRT 149",
+      "4.10.0": "calibration.cpp cv::composeRT 3674, cvComposeRT 150",
+      "5.0.0": "calibration_base.cpp cv::composeRT 373 (inline, no cvComposeRT)"
+    },
+    "equations": "R3=R2*R1; t3=R2*t1+t2; r3=Rodrigues^-1(R3)",
+    "rodrigues_zero_flush": "matrix-to-vector branch returns exact zero when s<1e-5 and c>0",
+    "norm_overflow": "theta=norm(r) overflows to inf for squared-sum overflow; probe: 1e200 -> zero rotation, 1e160 both -> NaN translation",
+    "preflight": "reject finite rotation vectors whose squared component sum overflows Float64",
+    "private_abi_operations": 47
   }
 }

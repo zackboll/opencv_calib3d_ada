@@ -4270,6 +4270,400 @@ package body Calib3D_Tests is
 
 
 
+   --  Task 014 independent oracles. Composition equations appear in TEST code only.
+   Pi_Value : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Ada.Numerics.Pi);
+
+   function Rot_X (A : OpenCV.Float64_Value) return Rotation_Matrix is
+      C : constant OpenCV.Float64_Value := Math.Cos (A);
+      S : constant OpenCV.Float64_Value := Math.Sin (A);
+   begin
+      return [[1.0, 0.0, 0.0], [0.0, C, -S], [0.0, S, C]];
+   end Rot_X;
+
+   function Rot_Z (A : OpenCV.Float64_Value) return Rotation_Matrix is
+      C : constant OpenCV.Float64_Value := Math.Cos (A);
+      S : constant OpenCV.Float64_Value := Math.Sin (A);
+   begin
+      return [[C, -S, 0.0], [S, C, 0.0], [0.0, 0.0, 1.0]];
+   end Rot_Z;
+
+   function Mul (A, B : Rotation_Matrix) return Rotation_Matrix is
+   begin
+      return Result : Rotation_Matrix := [others => [others => 0.0]] do
+         for I in 0 .. 2 loop
+            for J in 0 .. 2 loop
+               for K in 0 .. 2 loop
+                  Result (I, J) := Result (I, J) + A (I, K) * B (K, J);
+               end loop;
+            end loop;
+         end loop;
+      end return;
+   end Mul;
+
+   function Apply (M : Rotation_Matrix; V : Object_Point) return Object_Point is
+   begin
+      return Result : Object_Point := [others => 0.0] do
+         for I in 0 .. 2 loop
+            for J in 0 .. 2 loop
+               Result (I) := Result (I) + M (I, J) * V (J);
+            end loop;
+         end loop;
+      end return;
+   end Apply;
+
+   function Matrix_Difference (A, B : Rotation_Matrix) return OpenCV.Float64_Value is
+      Worst : OpenCV.Float64_Value := 0.0;
+   begin
+      for I in 0 .. 2 loop
+         for J in 0 .. 2 loop
+            Worst := OpenCV.Float64_Value'Max (Worst, abs (A (I, J) - B (I, J)));
+         end loop;
+      end loop;
+      return Worst;
+   end Matrix_Difference;
+
+   function Orthonormal_Error (M : Rotation_Matrix) return OpenCV.Float64_Value is
+      Worst : OpenCV.Float64_Value := 0.0;
+   begin
+      for I in 0 .. 2 loop
+         for J in 0 .. 2 loop
+            declare
+               Dot : OpenCV.Float64_Value := 0.0;
+            begin
+               for K in 0 .. 2 loop
+                  Dot := Dot + M (K, I) * M (K, J);
+               end loop;
+               Worst := OpenCV.Float64_Value'Max
+                 (Worst, abs (Dot - (if I = J then 1.0 else 0.0)));
+            end;
+         end loop;
+      end loop;
+      return Worst;
+   end Orthonormal_Error;
+
+   Compose_First : constant World_To_Camera_Pose :=
+     (Rotation => [0.0, 0.0, Pi_Value / 2.0], Translation => [2.0, -1.0, 0.5]);
+   Compose_Second : constant World_To_Camera_Pose :=
+     (Rotation => [Pi_Value / 3.0, 0.0, 0.0], Translation => [1.0, 3.0, -2.0]);
+   Compose_Points : constant Object_Point_Array :=
+     [[0.7, -0.4, 1.3], [-1.1, 0.9, 0.2], [2.5, 1.5, -0.8], [0.0, 0.3, 0.6]];
+
+   function Expected_Rotation return Rotation_Matrix is
+     (Mul (Rot_X (Pi_Value / 3.0), Rot_Z (Pi_Value / 2.0)));
+
+   function Expected_Translation return Object_Point is
+      Rotated : constant Object_Point :=
+        Apply (Rot_X (Pi_Value / 3.0), [2.0, -1.0, 0.5]);
+   begin
+      return [Rotated (0) + 1.0, Rotated (1) + 3.0, Rotated (2) - 2.0];
+   end Expected_Translation;
+
+   procedure Compose_Identity (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Identity : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, 0.0], Translation => [0.0, 0.0, 0.0]);
+      P : constant World_To_Camera_Pose := Compose_First;
+      Left : constant World_To_Camera_Pose := Compose_Poses (Identity, P);
+      Right : constant World_To_Camera_Pose := Compose_Poses (P, Identity);
+      Both : constant World_To_Camera_Pose := Compose_Poses (Identity, Identity);
+      type Pose_Pair is array (1 .. 2) of World_To_Camera_Pose;
+      Pair : constant Pose_Pair := [Left, Right];
+   begin
+      for Result of Pair loop
+         Assert (Matrix_Difference (Rotation_Matrix_Of (Result), Rotation_Matrix_Of (P)) < 1.0E-13,
+                 "identity composition changed rotation");
+         for Axis in 0 .. 2 loop
+            Assert (Near (Result.Translation (Axis), P.Translation (Axis), 1.0E-13),
+                    "identity composition changed translation");
+            Assert (Near (Camera_Center (Result) (Axis), Camera_Center (P) (Axis), 1.0E-12),
+                    "identity composition moved camera center");
+         end loop;
+         for Point of Compose_Points loop
+            declare
+               A : constant Object_Point := World_To_Camera_Point (Result, Point);
+               B : constant Object_Point := World_To_Camera_Point (P, Point);
+            begin
+               Assert (Near (A (0), B (0), 1.0E-12) and then Near (A (1), B (1), 1.0E-12)
+                       and then Near (A (2), B (2), 1.0E-12), "identity composition moved a point");
+            end;
+         end loop;
+      end loop;
+      Assert (Both = Identity, "identity composed with identity is not exactly zero");
+   end Compose_Identity;
+
+   procedure Compose_Order (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Composed : constant World_To_Camera_Pose := Compose_Poses (Compose_First, Compose_Second);
+      Reversed : constant World_To_Camera_Pose := Compose_Poses (Compose_Second, Compose_First);
+      Expected_T : constant Object_Point := Expected_Translation;
+   begin
+      Assert (Matrix_Difference (Rotation_Matrix_Of (Composed), Expected_Rotation) < 1.0E-12,
+              "R3 is not R_second * R_first");
+      for Axis in 0 .. 2 loop
+         Assert (Near (Composed.Translation (Axis), Expected_T (Axis), 1.0E-12),
+                 "t3 is not R_second * t_first + t_second");
+      end loop;
+      Assert (Matrix_Difference (Rotation_Matrix_Of (Reversed), Expected_Rotation) > 0.1,
+              "reversed rotation order was not distinguishable");
+      Assert (abs (Reversed.Translation (0) - Composed.Translation (0)) > 0.1
+              or else abs (Reversed.Translation (1) - Composed.Translation (1)) > 0.1,
+              "reversed translation order was not distinguishable");
+   end Compose_Order;
+
+   procedure Compose_Sequential (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Composed : constant World_To_Camera_Pose := Compose_Poses (Compose_First, Compose_Second);
+      Direction : constant World_Direction := [0.3, -0.5, 0.8];
+      Expected_D : constant Object_Point := Apply (Expected_Rotation, Object_Point (Direction));
+      Shifted : constant World_To_Camera_Pose := Compose_Poses
+        (Compose_First, (Rotation => Compose_Second.Rotation, Translation => [50.0, -60.0, 70.0]));
+      Stepwise : constant Camera_Direction := World_To_Camera_Direction
+        (Compose_Second, World_Direction (World_To_Camera_Direction (Compose_First, Direction)));
+      Combined : constant Camera_Direction := World_To_Camera_Direction (Composed, Direction);
+      Moved : constant Camera_Direction := World_To_Camera_Direction (Shifted, Direction);
+   begin
+      for Point of Compose_Points loop
+         declare
+            Sequential : constant Object_Point := World_To_Camera_Point
+              (Compose_Second, World_To_Camera_Point (Compose_First, Point));
+            Together : constant Object_Point := World_To_Camera_Point (Composed, Point);
+         begin
+            for Axis in 0 .. 2 loop
+               Assert (Near (Together (Axis), Sequential (Axis), 1.0E-12),
+                       "composed point differs from sequential transform");
+            end loop;
+         end;
+      end loop;
+      for Axis in 0 .. 2 loop
+         Assert (Near (Combined (Axis), Stepwise (Axis), 1.0E-12)
+                 and then Near (Combined (Axis), Expected_D (Axis), 1.0E-12)
+                 and then Near (Moved (Axis), Combined (Axis), 1.0E-12),
+                 "direction composition or translation independence differs");
+      end loop;
+   end Compose_Sequential;
+
+   procedure Compose_Camera_Center (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Composed : constant World_To_Camera_Pose := Compose_Poses (Compose_First, Compose_Second);
+      R : constant Rotation_Matrix := Expected_Rotation;
+      Tr : constant Object_Point := Expected_Translation;
+      Center : constant Object_Point := Camera_Center (Composed);
+   begin
+      for Axis in 0 .. 2 loop
+         declare
+            Expected : OpenCV.Float64_Value := 0.0;
+         begin
+            for K in 0 .. 2 loop
+               Expected := Expected - R (K, Axis) * Tr (K);
+            end loop;
+            Assert (Near (Center (Axis), Expected, 1.0E-12), "composed center is not -R^T*t");
+            Assert (abs (Center (Axis) - Composed.Translation (Axis)) > 1.0E-3
+                    or else Axis = 0, "center must not equal the translation term");
+         end;
+      end loop;
+      Assert (abs (Center (1) - Tr (1)) > 0.1 and then abs (Center (2) - Tr (2)) > 0.1,
+              "camera center collapsed to translation");
+   end Compose_Camera_Center;
+
+
+   --  Independent scalar pinhole/Brown oracle for camera-frame points (test only).
+   function Scalar_Project
+     (Camera : Object_Point; Intrinsics : Camera_Intrinsics; D : Distortion_Coefficients)
+      return Image_Point
+   is
+      X : constant OpenCV.Float64_Value := Camera (0) / Camera (2);
+      Y : constant OpenCV.Float64_Value := Camera (1) / Camera (2);
+      R2 : constant OpenCV.Float64_Value := X * X + Y * Y;
+      Radial : constant OpenCV.Float64_Value :=
+        1.0 + D.K1 * R2 + D.K2 * R2 * R2 + D.K3 * R2 * R2 * R2;
+      XD : constant OpenCV.Float64_Value :=
+        X * Radial + 2.0 * D.P1 * X * Y + D.P2 * (R2 + 2.0 * X * X);
+      YD : constant OpenCV.Float64_Value :=
+        Y * Radial + D.P1 * (R2 + 2.0 * Y * Y) + 2.0 * D.P2 * X * Y;
+   begin
+      return [Intrinsics.Focal_X * XD + Intrinsics.Center_X,
+              Intrinsics.Focal_Y * YD + Intrinsics.Center_Y];
+   end Scalar_Project;
+
+   procedure Compose_Projection (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Camera_A : constant World_To_Camera_Pose :=
+        (Rotation => [0.05, -0.04, 0.10], Translation => [0.10, -0.05, 0.30]);
+      Camera_B : constant World_To_Camera_Pose :=
+        (Rotation => [-0.03, 0.06, 0.02], Translation => [-0.20, 0.10, 5.00]);
+      World_Points : constant Object_Point_Array :=
+        [[0.4, -0.3, 1.0], [-0.8, 0.5, 0.2], [1.1, 0.9, 0.7], [-0.2, -0.9, 1.4]];
+      Intrinsics : constant Camera_Intrinsics := (800.0, 820.0, 320.0, 240.0);
+      Brown : constant Distortion_Coefficients :=
+        (K1 => -0.12, K2 => 0.03, P1 => 0.001, P2 => -0.0015, K3 => 0.004);
+      Composed : constant World_To_Camera_Pose := Compose_Poses (Camera_A, Camera_B);
+      Worst : OpenCV.Float64_Value := 0.0;
+   begin
+      for Model in 1 .. 2 loop
+         declare
+            D : constant Distortion_Coefficients := (if Model = 1 then No_Distortion else Brown);
+            Native : constant Image_Point_Array :=
+              Project_Points (World_Points, Intrinsics, D, Composed);
+         begin
+            for I in World_Points'Range loop
+               declare
+                  Camera : constant Object_Point := World_To_Camera_Point
+                    (Camera_B, World_To_Camera_Point (Camera_A, World_Points (I)));
+                  Expected : constant Image_Point := Scalar_Project (Camera, Intrinsics, D);
+               begin
+                  Worst := OpenCV.Float64_Value'Max
+                    (Worst, OpenCV.Float64_Value'Max
+                       (abs (Native (I) (0) - Expected (0)), abs (Native (I) (1) - Expected (1))));
+               end;
+            end loop;
+         end;
+      end loop;
+      Ada.Text_IO.Put_Line ("Compose projection maximum pixel difference:" &
+                            OpenCV.Float64_Value'Image (Worst));
+      Assert (Worst < 1.0E-8, "composed projection differs from sequential projection");
+   end Compose_Projection;
+   procedure Compose_Rodrigues (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Zero : constant World_To_Camera_Pose := (others => <>);
+      About_X : constant World_To_Camera_Pose :=
+        (Rotation => [0.4, 0.0, 0.0], Translation => [1.0, 0.0, 0.0]);
+      About_Y : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.7, 0.0], Translation => [0.0, 2.0, 0.0]);
+      Near_Pi : constant World_To_Camera_Pose :=
+        (Rotation => [Pi_Value - 1.0E-6, 0.0, 0.0], Translation => [1.0, 2.0, 3.0]);
+      Past_Pi : constant World_To_Camera_Pose :=
+        (Rotation => [-(Pi_Value - 1.0E-6), 0.0, 0.0], Translation => [-1.0, 0.5, 2.0]);
+      type Pair_Array is array (1 .. 7) of World_To_Camera_Pose;
+      Firsts : constant Pair_Array :=
+        [Zero, Zero, About_X, About_X, About_X, Near_Pi, Near_Pi];
+      Seconds : constant Pair_Array :=
+        [Zero, About_X, Zero, About_X, About_Y, About_Y, Past_Pi];
+   begin
+      for I in Pair_Array'Range loop
+         declare
+            Value : constant World_To_Camera_Pose := Compose_Poses (Firsts (I), Seconds (I));
+            M : constant Rotation_Matrix := Rotation_Matrix_Of (Value);
+            Expected : constant Rotation_Matrix := Mul
+              (Rotation_Matrix_Of (Seconds (I)), Rotation_Matrix_Of (Firsts (I)));
+         begin
+            Assert (Orthonormal_Error (M) < 1.0E-12, "composed rotation is not orthonormal");
+            Assert (Matrix_Difference (M, Expected) < 1.0E-5,
+                    "composed physical rotation differs, case" & Integer'Image (I));
+         end;
+      end loop;
+      Assert (Near (Compose_Poses (About_X, About_X).Rotation (0), 0.8, 1.0E-12),
+              "same-axis rotation angles did not add");
+      --  +(pi-0.01) and -(pi+0.01) about X are one physical rotation.
+      declare
+         Plus : constant World_To_Camera_Pose := Compose_Poses
+           (Zero, (Rotation => [Pi_Value - 0.01, 0.0, 0.0], Translation => [0.0, 0.0, 0.0]));
+         Minus : constant World_To_Camera_Pose := Compose_Poses
+           (Zero, (Rotation => [-(Pi_Value + 0.01), 0.0, 0.0], Translation => [0.0, 0.0, 0.0]));
+      begin
+         Assert (Matrix_Difference (Rotation_Matrix_Of (Plus), Rotation_Matrix_Of (Minus)) < 1.0E-12,
+                 "physically equivalent Rodrigues vectors yield different matrices");
+      end;
+   end Compose_Rodrigues;
+
+   procedure Compose_Numbers (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      Max : constant OpenCV.Float64_Value := OpenCV.Float64_Value'Last;
+      Mild : constant World_To_Camera_Pose :=
+        (Rotation => [0.3, 0.2, 0.1], Translation => [1.0, 2.0, 3.0]);
+      Origin : constant Translation_Vector := [0.0, 0.0, 0.0];
+      procedure Rejects (A, B : World_To_Camera_Pose; Message : String) is
+      begin
+         declare
+            Value : constant World_To_Camera_Pose := Compose_Poses (A, B);
+            pragma Unreferenced (Value);
+         begin
+            Assert (False, Message);
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Rejects;
+   begin
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         for Slot in 0 .. 5 loop
+            declare
+               Bad : World_To_Camera_Pose := Mild;
+               Bad_Value : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Kind));
+            begin
+               if Slot < 3 then
+                  Bad.Rotation (Slot) := Bad_Value;
+               else
+                  Bad.Translation (Slot - 3) := Bad_Value;
+               end if;
+               Rejects (Bad, Mild, "nonfinite first accepted");
+               Rejects (Mild, Bad, "nonfinite second accepted");
+            end;
+         end loop;
+      end loop;
+      Rejects ((Rotation => [1.0E160, 0.0, 0.0], Translation => Origin), Mild,
+               "squared-norm overflow first accepted");
+      Rejects (Mild, (Rotation => [Max, 0.0, 0.0], Translation => Origin),
+               "maximum rotation second accepted");
+      Rejects ((Rotation => [1.0E160, 1.0E160, 1.0E160], Translation => Origin), Mild,
+               "three-component overflow accepted");
+      Rejects ((Rotation => Mild.Rotation, Translation => [Max, Max, Max]),
+               (Rotation => Mild.Rotation, Translation => [Max, Max, Max]),
+               "unrepresentable composed translation accepted");
+      declare
+         Cancelled : constant World_To_Camera_Pose := Compose_Poses
+           ((Rotation => [0.0, 0.0, 0.0], Translation => [Max, Max, Max]),
+            (Rotation => [0.0, 0.0, 0.0], Translation => [-Max, -Max, -Max]));
+         Large : constant World_To_Camera_Pose := Compose_Poses
+           (Mild, (Rotation => [1.0E10, 0.0, 0.0], Translation => [1.0E300, -1.0E300, 1.0E299]));
+      begin
+         Assert (Cancelled.Translation = Origin, "maximum translations did not cancel");
+         for Axis in 0 .. 2 loop
+            Assert (Finite (Large.Translation (Axis)) and then Finite (Large.Rotation (Axis)),
+                    "large representable composition returned nonfinite pose");
+         end loop;
+      end;
+   end Compose_Numbers;
+   procedure Compose_Layout (T : in out Fixture) is
+      pragma Unreferenced (T);
+      function Pose_Layout (Field : Interfaces.Integer_32) return Interfaces.Integer_32
+        with Import, Convention => C, External_Name => "calib3d_test_pose_layout";
+      First : aliased ABI.C_Pose :=
+        (RX => 0.0, RY => 0.0, RZ => 0.25, TX => 2.0, TY => -1.0, TZ => 0.5);
+      Second : aliased ABI.C_Pose :=
+        (RX => 0.5, RY => 0.0, RZ => 0.0, TX => 1.0, TY => 3.0, TZ => -2.0);
+      Result : aliased ABI.C_Pose := (others => 0.0);
+      Expected : constant World_To_Camera_Pose := Compose_Poses
+        ((Rotation => [0.0, 0.0, 0.25], Translation => [2.0, -1.0, 0.5]),
+         (Rotation => [0.5, 0.0, 0.0], Translation => [1.0, 3.0, -2.0]));
+   begin
+      Assert (ABI.C_Pose'Size = Natural (Pose_Layout (0)) * System.Storage_Unit
+              and then ABI.C_Pose'Alignment = Natural (Pose_Layout (1)),
+              "compose pose layout differs from compiler-derived C layout");
+      Assert (ABI.Compose_RT (First'Access, Second'Access, Result'Access) = 0,
+              "raw compose status");
+      Assert (First.RZ = 0.25 and then First.TX = 2.0 and then Second.RX = 0.5
+              and then Second.TZ = -2.0, "inputs changed across native compose");
+      Assert (Result.RX = Interfaces.C.double (Expected.Rotation (0))
+              and then Result.RY = Interfaces.C.double (Expected.Rotation (1))
+              and then Result.RZ = Interfaces.C.double (Expected.Rotation (2))
+              and then Result.TX = Interfaces.C.double (Expected.Translation (0))
+              and then Result.TY = Interfaces.C.double (Expected.Translation (1))
+              and then Result.TZ = Interfaces.C.double (Expected.Translation (2)),
+              "all six compose output fields must interchange");
+      Assert (ABI.Compose_RT (First'Access, Second'Access, First'Access) /= 0
+              and then First.RZ = 0.25 and then First.TY = -1.0,
+              "alias result==first must be rejected without clearing");
+      Assert (ABI.Compose_RT (First'Access, Second'Access, Second'Access) /= 0
+              and then Second.RX = 0.5 and then Second.TY = 3.0,
+              "alias result==second must be rejected without clearing");
+   end Compose_Layout;
+
+
+
+
+
+
+
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
@@ -4380,6 +4774,14 @@ package body Calib3D_Tests is
        Result.Add_Test (Caller.Create ("AP3P reference numerical unavailability", AP3P_Reference_Numbers'Access));
        Result.Add_Test (Caller.Create ("AP3P reference summary and malformed records", AP3P_Reference_Summary'Access));
        Result.Add_Test (Caller.Create ("AP3P empty and invalid reference diagnostics", AP3P_Reference_Empty'Access));
+      Result.Add_Test (Caller.Create ("pose composition identity oracle", Compose_Identity'Access));
+      Result.Add_Test (Caller.Create ("pose composition noncommutative order oracle", Compose_Order'Access));
+      Result.Add_Test (Caller.Create ("pose composition sequential point and direction oracle", Compose_Sequential'Access));
+      Result.Add_Test (Caller.Create ("pose composition camera-center oracle", Compose_Camera_Center'Access));
+      Result.Add_Test (Caller.Create ("pose composition native projection with Brown distortion", Compose_Projection'Access));
+      Result.Add_Test (Caller.Create ("pose composition Rodrigues boundary cases", Compose_Rodrigues'Access));
+      Result.Add_Test (Caller.Create ("pose composition numerical and invalid inputs", Compose_Numbers'Access));
+      Result.Add_Test (Caller.Create ("pose composition C/Ada layout, interchange and aliasing", Compose_Layout'Access));
       return Result;
    end Suite;
 end Calib3D_Tests;

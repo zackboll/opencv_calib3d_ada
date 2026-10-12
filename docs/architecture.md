@@ -1,5 +1,14 @@
 # Architecture
 
+## Task 014 native pose composition
+
+`Compose_Poses (First, Second)` calls native `cv::composeRT` (no Jacobians)
+through one new guarded private operation. The private ABI is now 47 imports
+and exports. Ada validates, marshals and checks results; it does not compose
+poses. Aliased output is rejected before clearing. See the
+[contract](pose-composition-contract.md), [source review](pose-composition-source-review.md)
+and [qualification](pose-composition-validation.md).
+
 ## Task 013 reference diagnostics
 
 No new C ABI operation. The private ABI remains 46 imports and exports.

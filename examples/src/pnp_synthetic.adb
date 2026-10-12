@@ -187,4 +187,60 @@ begin
          end;
       end if;
    end;
+
+   --  Task 014: native cv::composeRT coordinate-frame composition. This is NOT
+   --  navigation fusion or geolocation; it chains two rigid frame transforms.
+   declare
+      Mount : constant World_To_Camera_Pose :=
+        (Rotation => [0.05, -0.04, 0.10], Translation => [0.10, -0.05, 0.30]);
+      Camera : constant World_To_Camera_Pose :=
+        (Rotation => [-0.03, 0.06, 0.02], Translation => [-0.20, 0.10, 5.00]);
+      Composed : constant World_To_Camera_Pose := Compose_Poses (Mount, Camera);
+      Sample : constant Object_Point_Array :=
+        [[0.4, -0.3, 1.0], [-0.8, 0.5, 0.2], [1.1, 0.9, 0.7], [-0.2, -0.9, 1.4]];
+      Maximum_Difference : OpenCV.Float64_Value := 0.0;
+      Projection_Error : OpenCV.Float64_Value := 0.0;
+      Composed_Pixels : constant Image_Point_Array :=
+        Project_Points (Sample, Intrinsics, No_Distortion, Composed);
+      Identity_Pose : constant World_To_Camera_Pose := (others => <>);
+   begin
+      New_Line;
+      Put_Line ("Pose composition: world -> intermediate mount frame -> final camera frame");
+      Put_Line ("Compose_Poses (First, Second) applies First, then Second.");
+      Put_Vector ("first rotation vector", Object_Point (Mount.Rotation));
+      Put_Vector ("first translation vector", Object_Point (Mount.Translation));
+      Put_Vector ("second rotation vector", Object_Point (Camera.Rotation));
+      Put_Vector ("second translation vector", Object_Point (Camera.Translation));
+      Put_Vector ("composed rotation vector", Object_Point (Composed.Rotation));
+      Put_Vector ("composed translation vector", Object_Point (Composed.Translation));
+      Put_Vector ("composed camera center", Camera_Center (Composed));
+      for I in Sample'Range loop
+         declare
+            Sequential : constant Object_Point :=
+              World_To_Camera_Point (Camera, World_To_Camera_Point (Mount, Sample (I)));
+            Combined : constant Object_Point := World_To_Camera_Point (Composed, Sample (I));
+            Reference : constant Image_Point_Array :=
+              Project_Points ([Sequential], Intrinsics, No_Distortion, Identity_Pose);
+         begin
+            if I = Sample'First then
+               Put_Vector ("sequential point transform", Sequential);
+               Put_Vector ("composed point transform", Combined);
+            end if;
+            for Axis in 0 .. 2 loop
+               Maximum_Difference := OpenCV.Float64_Value'Max
+                 (Maximum_Difference, abs (Sequential (Axis) - Combined (Axis)));
+            end loop;
+            for Axis in 0 .. 1 loop
+               Projection_Error := OpenCV.Float64_Value'Max
+                 (Projection_Error, abs (Composed_Pixels (I) (Axis) - Reference (1) (Axis)));
+            end loop;
+         end;
+      end loop;
+      Put_Line ("maximum point-transform difference:" &
+                OpenCV.Float64_Value'Image (Maximum_Difference));
+      Put_Line ("sequential versus composed projection error (pixels):" &
+                OpenCV.Float64_Value'Image (Projection_Error));
+      Put_Line ("This is coordinate-frame composition, not navigation fusion or geolocation.");
+      Put_Line ("Both translations must use the same Cartesian units.");
+   end;
 end PnP_Synthetic;

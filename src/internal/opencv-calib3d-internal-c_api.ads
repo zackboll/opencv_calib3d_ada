@@ -233,6 +233,12 @@ package OpenCV.Calib3D.Internal.C_API is
       Center : access C_Point3) return Status
      with Import, Convention => C, External_Name => "opencv_calib3d_camera_center";
 
+   function Compose_RT
+     (First  : access constant C_Pose;
+      Second : access constant C_Pose;
+      Result : access C_Pose) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_compose_rt";
+
    function Solve_PnP_RANSAC
      (Object_Points              : OpenCV.Core.Module_Interop.Input_Mat_Handle;
       Image_Points               : OpenCV.Core.Module_Interop.Input_Mat_Handle;

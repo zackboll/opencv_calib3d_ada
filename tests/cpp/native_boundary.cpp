@@ -1567,9 +1567,157 @@ void ap3p_boundary() {
     std::cout << "PASS: raw AP3P production, distortion, strided Core handles, zero result\n";
 }
 
+namespace compose_support {
+using pose = opencv_calib3d_pose;
+const pose first{0, 0, M_PI / 2, 2.0, -1.0, 0.5};
+const pose second{M_PI / 3, 0, 0, 1.0, 3.0, -2.0};
+cv::Matx33d matrix_of(const pose &p) {
+    opencv_calib3d_rotation_matrix m{};
+    check(opencv_calib3d_rotation_matrix_of(&p, &m) == 0, "compose oracle rotation");
+    return cv::Matx33d(m.m00, m.m01, m.m02, m.m10, m.m11, m.m12, m.m20, m.m21, m.m22);
+}
+bool same(const pose &a, const pose &b) {
+    return a.rx == b.rx && a.ry == b.ry && a.rz == b.rz &&
+           a.tx == b.tx && a.ty == b.ty && a.tz == b.tz;
+}
+bool zero(const pose &a) { return same(a, pose{}); }
+double max_rotation_difference(const pose &a, const cv::Matx33d &b) {
+    const cv::Matx33d m = matrix_of(a);
+    double result = 0;
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) result = std::max(result, std::abs(m(i, j) - b(i, j)));
+    return result;
+}
+} // namespace compose_support
+
+void compose_boundary() {
+    using namespace compose_support;
+    const pose identity{};
+    const pose first_saved = first, second_saved = second;
+
+    // Independent oracle (test code only): R = R2*R1, t = R2*t1 + t2.
+    pose out{9, 9, 9, 9, 9, 9};
+    check(opencv_calib3d_compose_rt(&first, &second, &out) == 0, "compose nonidentity status");
+    const cv::Matx33d expected = matrix_of(second) * matrix_of(first);
+    const cv::Vec3d t_expected = matrix_of(second) * cv::Vec3d(2.0, -1.0, 0.5) +
+                                 cv::Vec3d(1.0, 3.0, -2.0);
+    check(max_rotation_difference(out, expected) < 1e-13, "compose rotation oracle");
+    check(std::abs(out.tx - t_expected[0]) < 1e-13 && std::abs(out.ty - t_expected[1]) < 1e-13 &&
+          std::abs(out.tz - t_expected[2]) < 1e-13, "compose translation oracle");
+    check(same(first, first_saved) && same(second, second_saved), "compose changed inputs");
+
+    pose swapped{};
+    check(opencv_calib3d_compose_rt(&second, &first, &swapped) == 0, "compose swapped status");
+    check(max_rotation_difference(swapped, expected) > 0.1 &&
+          (std::abs(swapped.tx - out.tx) > 0.1 || std::abs(swapped.ty - out.ty) > 0.1),
+          "compose order oracle must be noncommutative");
+
+    pose left{}, right{}, both{9, 9, 9, 9, 9, 9};
+    check(opencv_calib3d_compose_rt(&identity, &first, &left) == 0 &&
+          opencv_calib3d_compose_rt(&first, &identity, &right) == 0 &&
+          opencv_calib3d_compose_rt(&identity, &identity, &both) == 0 && zero(both),
+          "compose identity status");
+    for (const pose *p : {&left, &right}) {
+        check(max_rotation_difference(*p, matrix_of(first)) < 1e-14, "identity rotation");
+        check(std::abs(p->tx - 2.0) < 1e-14 && std::abs(p->ty + 1.0) < 1e-14 &&
+              std::abs(p->tz - 0.5) < 1e-14, "identity translation");
+    }
+
+    const pose ta{0, 0, 0, 1.5, -2.5, 4.0}, tb{0, 0, 0, 0.25, 8.0, -1.0};
+    pose tr{9, 9, 9, 9, 9, 9};
+    check(opencv_calib3d_compose_rt(&ta, &tb, &tr) == 0 && tr.rx == 0 && tr.ry == 0 &&
+          tr.rz == 0 && tr.tx == 1.75 && tr.ty == 5.5 && tr.tz == 3.0, "translation-only exact");
+
+    const pose near_pi{M_PI - 1e-9, 0, 0, 1, 2, 3};
+    pose pp{};
+    // Source finding: matrix->vector Rodrigues (s < 1e-5, c > 0) returns an exact
+    // zero vector, so a composed rotation of physical angle 2e-9 is flushed to
+    // identity. Compare by matrix with a tolerance that admits that native result.
+    check(opencv_calib3d_compose_rt(&near_pi, &near_pi, &pp) == 0 && pp.rx == 0 &&
+          pp.ry == 0 && pp.rz == 0 &&
+          max_rotation_difference(pp, matrix_of(near_pi) * matrix_of(near_pi)) < 1e-8,
+          "near-pi composition compares by matrix; tiny result flushed natively");
+    const pose small_a{0.5, 0, 0, 0, 0, 0}, small_b{-0.5 + 3e-5, 0, 0, 0, 0, 0};
+    pose small_out{};
+    check(opencv_calib3d_compose_rt(&small_a, &small_b, &small_out) == 0 &&
+          std::abs(small_out.rx - 3e-5) < 1e-9, "composed rotation above 1e-5 preserved");
+
+    const pose large{1e10, 0, 0, 1e300, -1e300, 1e299};
+    pose large_out{};
+    check(opencv_calib3d_compose_rt(&second, &large, &large_out) == 0, "large representable");
+    pose cancel{9, 9, 9, 9, 9, 9};
+    const double huge = std::numeric_limits<double>::max();
+    const pose negated{0, 0, 0, -huge, -huge, -huge}, positive{0, 0, 0, huge, huge, huge};
+    check(opencv_calib3d_compose_rt(&positive, &negated, &cancel) == 0 && zero(cancel),
+          "translation cancellation");
+    std::cout << "PASS: compose_rt raw order, identity, exactness, boundaries\n";
+}
+
+
+void compose_rejections() {
+    using namespace compose_support;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double huge = std::numeric_limits<double>::max();
+    const pose first_saved = first, second_saved = second;
+    auto rejected = [&](const pose *a, const pose *b, const char *what) {
+        pose dirty{9, 9, 9, 9, 9, 9};
+        check(opencv_calib3d_compose_rt(a, b, &dirty) != 0 && zero(dirty), what);
+    };
+    rejected(nullptr, &second, "null first");
+    rejected(&first, nullptr, "null second");
+    check(opencv_calib3d_compose_rt(&first, &second, nullptr) != 0, "null output");
+    for (int component = 0; component < 6; ++component) {
+        for (double bad_value : {nan, std::numeric_limits<double>::infinity()}) {
+            pose bad = first;
+            double *fields[] = {&bad.rx, &bad.ry, &bad.rz, &bad.tx, &bad.ty, &bad.tz};
+            *fields[component] = bad_value;
+            rejected(&bad, &second, "nonfinite first");
+            rejected(&second, &bad, "nonfinite second");
+        }
+    }
+    // Native evidence: squared-norm overflow silently yields identity or NaN output.
+    const pose big_rotation{1e160, 0, 0, 0, 0, 0}, max_rotation{huge, 0, 0, 0, 0, 0};
+    const pose spread{1e160, 1e160, 1e160, 0, 0, 0};
+    rejected(&big_rotation, &second, "squared-norm overflow first");
+    rejected(&second, &max_rotation, "max rotation second");
+    rejected(&spread, &second, "three-component squared overflow");
+    rejected(&second, &spread, "three-component squared overflow second");
+    const pose huge_t{0.3, 0.2, 0.1, huge, huge, huge};
+    rejected(&huge_t, &huge_t, "unrepresentable composed translation");
+
+    pose a1 = first, b1 = second;
+    check(opencv_calib3d_compose_rt(&a1, &b1, &a1) != 0 && same(a1, first_saved), "alias first");
+    check(opencv_calib3d_compose_rt(&a1, &b1, &b1) != 0 && same(b1, second_saved), "alias second");
+    check(opencv_calib3d_compose_rt(&a1, &a1, &a1) != 0 && same(a1, first_saved), "alias all");
+    pose twice{};
+    check(opencv_calib3d_compose_rt(&a1, &a1, &twice) == 0, "same input twice, distinct output");
+    pose expected{}, again{};
+    check(opencv_calib3d_compose_rt(&first, &second, &expected) == 0 &&
+          opencv_calib3d_compose_rt(&first, &second, &again) == 0 && same(again, expected),
+          "recovery");
+    std::cout << "PASS: compose_rt nulls, nonfinite, numerical rejection, aliasing, recovery\n";
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+    for (int stage = 54; stage <= 57; ++stage) {
+        for (int kind = 1; kind <= 5; ++kind) {
+            pose dirty{9, 9, 9, 9, 9, 9};
+            opencv_calib3d_test_fail(stage, kind);
+            check(opencv_calib3d_compose_rt(&first, &second, &dirty) != 0 && zero(dirty),
+                  "compose injected exception clears output");
+            check(same(first, first_saved) && same(second, second_saved), "compose fault inputs");
+            pose recovered{};
+            check(opencv_calib3d_compose_rt(&first, &second, &recovered) == 0 &&
+                  same(recovered, expected), "compose recovery after injection");
+        }
+    }
+    std::cout << "PASS: compose_rt 20 raw fault injections (checkpoints 54..57)\n";
+#endif
+}
+
 int main() {
     try {
         run();
+        compose_boundary();
+        compose_rejections();
         triangulation_boundary();
         planar_boundary();
         visibility_boundary();

@@ -164,6 +164,11 @@ bool finite_pose(const opencv_calib3d_pose &pose) noexcept {
            opencv_calib3d_detail::finite(pose.ty) && opencv_calib3d_detail::finite(pose.tz);
 }
 
+bool rotation_norm_squared_representable(const opencv_calib3d_pose &pose) noexcept {
+    const double squared = pose.rx * pose.rx + pose.ry * pose.ry + pose.rz * pose.rz;
+    return std::isfinite(squared);
+}
+
 void validate_intrinsics(const opencv_calib3d_camera_intrinsics *value) {
     require(value != nullptr, "null camera intrinsics");
     require(opencv_calib3d_detail::intrinsics_fit(value->focal_x, value->focal_y,
@@ -782,6 +787,61 @@ opencv_calib3d_status opencv_calib3d_camera_center(
                 "native camera center is nonfinite");
         checkpoint(4);
         *center = value;
+    });
+}
+
+opencv_calib3d_status opencv_calib3d_compose_rt(
+    const opencv_calib3d_pose *first, const opencv_calib3d_pose *second,
+    opencv_calib3d_pose *result) {
+    // Early alias rejection: an input pose must never be destroyed by clearing.
+    if (result != nullptr && (result == first || result == second))
+        return guarded([&] { require(false, "compose output must not alias an input pose"); });
+    if (result != nullptr) *result = {};
+    return guarded([&] {
+        require(first != nullptr && second != nullptr && result != nullptr,
+                "null pose composition argument");
+        validate_pose(first);
+        validate_pose(second);
+        // cvRodrigues2 evaluates theta = sqrt(x*x + y*y + z*z) in double. If the
+        // square sum overflows, theta is infinite, cos(theta) is NaN, and the later
+        // matrix Rodrigues range check silently writes a zero vector. Reject first.
+        require(rotation_norm_squared_representable(*first) &&
+                rotation_norm_squared_representable(*second),
+                "rotation vector squared norm is not representable");
+        cv::Mat rvec1 = rotation_vector(*first), tvec1 = translation_vector(*first);
+        cv::Mat rvec2 = rotation_vector(*second), tvec2 = translation_vector(*second);
+        cv::Mat rvec3, tvec3;
+        checkpoint(54);
+        cv::composeRT(rvec1, tvec1, rvec2, tvec2, rvec3, tvec3);
+        checkpoint(55);
+        checkpoint(56);
+        require(rvec3.dims == 2 && rvec3.rows == 3 && rvec3.cols == 1 &&
+                rvec3.type() == CV_64FC1 && tvec3.dims == 2 && tvec3.rows == 3 &&
+                tvec3.cols == 1 && tvec3.type() == CV_64FC1,
+                "native composeRT output schema differs");
+        const opencv_calib3d_pose value{rvec3.at<double>(0), rvec3.at<double>(1),
+                                        rvec3.at<double>(2), tvec3.at<double>(0),
+                                        tvec3.at<double>(1), tvec3.at<double>(2)};
+        require(finite_pose(value), "native composeRT output is nonfinite");
+        cv::Mat rotation;
+        cv::Rodrigues(rotation_vector(value), rotation);
+        require(rotation.dims == 2 && rotation.rows == 3 && rotation.cols == 3 &&
+                rotation.type() == CV_64FC1, "native Rodrigues output schema differs");
+        const cv::Matx33d matrix(rotation.at<double>(0,0), rotation.at<double>(0,1),
+                                 rotation.at<double>(0,2), rotation.at<double>(1,0),
+                                 rotation.at<double>(1,1), rotation.at<double>(1,2),
+                                 rotation.at<double>(2,0), rotation.at<double>(2,1),
+                                 rotation.at<double>(2,2));
+        const cv::Matx33d gram = matrix.t() * matrix;
+        double deviation = std::abs(cv::determinant(matrix) - 1.0);
+        for (int row = 0; row < 3; ++row)
+            for (int col = 0; col < 3; ++col)
+                deviation = std::max(deviation,
+                                     std::abs(gram(row, col) - (row == col ? 1.0 : 0.0)));
+        require(std::isfinite(deviation) && deviation <= 1.0e-12,
+                "native composeRT output is not a proper rotation");
+        checkpoint(57);
+        *result = value;
     });
 }
 

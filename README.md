@@ -1,5 +1,15 @@
 # OpenCV Calib3D for Ada
 
+## Task 014: native pose composition
+
+`Compose_Poses (First, Second)` chains two world-to-camera rigid transforms
+through native `cv::composeRT` (apply `First`, then `Second`). Rotation vectors
+are returned as native Rodrigues output; compare `Rotation_Matrix_Of`, not
+components. Inputs must be consecutive frames in consistent Cartesian units.
+This is coordinate-frame composition, not navigation fusion or geolocation.
+See the [contract](docs/pose-composition-contract.md) and
+[qualification](docs/pose-composition-validation.md).
+
 ## Task 013: AP3P independent-reference diagnostics
 
 `Evaluate_AP3P_References` classifies additional world/pixel observations

@@ -1,5 +1,15 @@
 # Coverage
 
+## Task 014 native pose composition
+
+115 registrations preserve all 107 Task 013 cases and add eight composition
+cases: identity, noncommutative order, sequential point/direction, camera
+center, native projection with five-coefficient distortion, Rodrigues boundaries,
+numerical/invalid inputs, and C/Ada layout with aliasing. Checkpoints 54..57
+are exercised by the raw and Ada fault runners (20 scenarios each). The private
+ABI is 47. Inventory is not a claim of success; see
+[executed evidence](pose-composition-validation.md).
+
 ## Task 013 AP3P reference diagnostics
 
 107 registrations preserve all 99 Task 012 cases and add eight reference
