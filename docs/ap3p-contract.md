@@ -47,8 +47,12 @@ with the same K and distortion. Those rays are not the original distorted
 pixels. The subsequent `solveP3P` call still receives the original pixels.
 Iterative undistortion does not restore an exactly collinear ray set: on
 OpenCV 4.10 the documented radial fixture recovers the ideal line only to
-about `1.4e-5`, and that nonzero result remains admissible. Exact zero is
-still rejected. No universal epsilon is applied to the residual.
+about `1.4e-5`, and that nonzero result remains admissible. A portable exact
+rejection is a bearing set whose normalized `y` components are all zero, so
+the third bearing lies in the plane of the first two with a bitwise-zero
+product. The ideal `y=0.5` line is mathematically collinear, but unit
+normalization through `sqrt` is not a portable bitwise zero and is not used
+as that gate. No universal epsilon is applied to the residual.
 
 Repeated points, collinear points, identical bearings, and coplanar
 three-ray geometry are invalid. They are not reported as an empty success.

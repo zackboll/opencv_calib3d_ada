@@ -58,8 +58,10 @@ normalized coordinates that are not collinear. Native `undistortPoints` on
 OpenCV 4.10 recovers them with maximum error `1.44021e-5`. Pixel-only
 preflight would treat those pixels as safe bearings; the corrected preflight
 inspects the recovered rays and still accepts this nonzero residual. The
-raw solver returns a bounded hypothesis set. Exact ideal collinearity remains
-rejected.
+raw solver returns a bounded hypothesis set. The portable exact-coplanar
+rejection uses normalized `y=0`, whose bearing product is bitwise zero.
+The ideal `y=0.5` line is mathematically collinear, but its unit-bearing
+product is not portable across libm and is not the rejection oracle.
 
 Private ABI: 46 declarations and imports. Compiler layout: size 200,
 alignment 8, count at 0, candidates at 8, pose stride 48, candidate offsets

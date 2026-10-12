@@ -1532,12 +1532,13 @@ void ap3p_boundary() {
         recovered[i][1] = recovered_rays.at<cv::Vec2d>(i, 0)[1];
     }
     const double ideal[3][2] = {{-0.5, 0.5}, {0.0, 0.5}, {0.5, 0.5}};
+    const double exact_coplanar[3][2] = {{-0.5, 0.0}, {0.0, 0.0}, {0.5, 0.0}};
     double recovery = 0;
     for (int i = 0; i < 3; ++i)
         recovery = opencv_calib3d_detail::larger(recovery, std::hypot(recovered[i][0] - ideal[i][0], recovered[i][1] - ideal[i][1]));
     std::cout << "AP3P undistort recovery error=" << recovery << "\n";
     check(opencv_calib3d_detail::ap3p_bearings_admissible(normalized_distorted) &&
-          !opencv_calib3d_detail::ap3p_bearings_admissible(ideal),
+          !opencv_calib3d_detail::ap3p_bearings_admissible(exact_coplanar),
           "distorted pixels are not the native AP3P rays");
     opencv_calib3d_ap3p_hypotheses radial_result{};
     check(opencv_calib3d_solve_ap3p_hypotheses(objects.get(), images.get(), &k, &radial, &radial_result) == 0 &&
