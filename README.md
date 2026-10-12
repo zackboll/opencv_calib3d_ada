@@ -1,5 +1,17 @@
 # OpenCV Calib3D for Ada
 
+## Task 013: AP3P independent-reference diagnostics
+
+`Evaluate_AP3P_References` classifies additional world/pixel observations
+against every retained AP3P hypothesis. Native `Project_Points` performs
+perspective projection and five-coefficient Brown distortion. Ada computes
+camera depth `Z` from `X_camera = R * X_world + t` and aggregates RMS and
+maximum error with `Summarize_Reprojection`. A native projection failure
+raises `OpenCV_Error`; it is not reported as `Numerically_Unavailable`.
+No hypothesis is selected or refined. See
+[contract](docs/ap3p-reference-contract.md) and
+[qualification](docs/ap3p-reference-validation.md).
+
 ## Task 012: minimal AP3P pose hypotheses
 
 `Solve_AP3P_Hypotheses` returns every native `SOLVEPNP_AP3P` hypothesis for

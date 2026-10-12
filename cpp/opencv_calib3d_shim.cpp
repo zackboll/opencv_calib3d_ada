@@ -878,8 +878,13 @@ opencv_calib3d_status opencv_calib3d_solve_ap3p_hypotheses(
         }
         cv::Mat object_input(3, 1, CV_64FC3), image_input(3, 1, CV_64FC2);
         for (int i = 0; i < 3; ++i) {
-            object_input.at<cv::Vec3d>(i, 0) = cv::Vec3d(world[i][0], world[i][1], world[i][2]);
-            image_input.at<cv::Vec2d>(i, 0) = cv::Vec2d(pixels[i][0], pixels[i][1]);
+            cv::Vec3d &object_value = object_input.at<cv::Vec3d>(i, 0);
+            cv::Vec2d &image_value = image_input.at<cv::Vec2d>(i, 0);
+            object_value[0] = world[i][0];
+            object_value[1] = world[i][1];
+            object_value[2] = world[i][2];
+            image_value[0] = pixels[i][0];
+            image_value[1] = pixels[i][1];
         }
         const cv::Mat camera = camera_matrix(*intrinsics);
         const cv::Mat coefficients = distortion_vector(*distortion);

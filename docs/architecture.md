@@ -1,5 +1,15 @@
 # Architecture
 
+## Task 013 reference diagnostics
+
+No new C ABI operation. The private ABI remains 46 imports and exports.
+`Evaluate_AP3P_References` borrows `Rotation_Matrix_Of` once per hypothesis
+and calls the existing `Project_Points` binding only for references whose
+camera-frame `Z` is strictly positive. Pixel error reuses the scaled
+Euclidean residual established by `Reprojection_Errors`. Summaries call
+`Summarize_Reprojection`. Ada does not implement the Brown polynomial.
+See [reference contract](ap3p-reference-contract.md).
+
 ## Task 012 AP3P boundary
 
 One additional guarded C operation brings the private ABI to 46 operations.

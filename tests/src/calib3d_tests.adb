@@ -3722,6 +3722,554 @@ package body Calib3D_Tests is
       end loop;
    end AP3P_Layout;
 
+    procedure AP3P_Reference_Known (T : in out Fixture) is
+       pragma Unreferenced (T);
+       function Rotation_Y (Angle : OpenCV.Float64_Value) return Rotation_Matrix is
+          C : constant OpenCV.Float64_Value := Math.Cos (Angle);
+          S : constant OpenCV.Float64_Value := Math.Sin (Angle);
+       begin
+          return [[C, 0.0, S], [0.0, 1.0, 0.0], [-S, 0.0, C]];
+       end Rotation_Y;
+       function Rotation_Z (Angle : OpenCV.Float64_Value) return Rotation_Matrix is
+          C : constant OpenCV.Float64_Value := Math.Cos (Angle);
+          S : constant OpenCV.Float64_Value := Math.Sin (Angle);
+       begin
+          return [[C, -S, 0.0], [S, C, 0.0], [0.0, 0.0, 1.0]];
+       end Rotation_Z;
+       function Multiply (Left, Right : Rotation_Matrix) return Rotation_Matrix is
+          Result : Rotation_Matrix := [others => [others => 0.0]];
+       begin
+          for Row in 0 .. 2 loop
+             for Column in 0 .. 2 loop
+                for Axis in 0 .. 2 loop
+                   Result (Row, Column) := Result (Row, Column) + Left (Row, Axis) * Right (Axis, Column);
+                end loop;
+             end loop;
+          end loop;
+          return Result;
+       end Multiply;
+       function Apply (Matrix : Rotation_Matrix; Point : Object_Point) return Object_Point is
+          ([Matrix (0, 0) * Point (0) + Matrix (0, 1) * Point (1) + Matrix (0, 2) * Point (2),
+           Matrix (1, 0) * Point (0) + Matrix (1, 1) * Point (1) + Matrix (1, 2) * Point (2),
+           Matrix (2, 0) * Point (0) + Matrix (2, 1) * Point (1) + Matrix (2, 2) * Point (2)]);
+       Truth_R : constant Rotation_Matrix := Multiply (Rotation_Z (0.22), Rotation_Y (0.35));
+       Truth_T : constant Translation_Vector := [0.2, -0.3, 0.8];
+       Cam : constant Camera_Intrinsics := (800.0, 820.0, 640.0, 360.0);
+       Seeds : constant Object_Point_Array := [[0.3, -0.2, 3.5], [1.4, 0.1, 4.0], [-0.5, 1.2, 5.3]];
+       Fourth : constant Object_Point := [0.7, -0.8, 6.1];
+       Depth : constant OpenCV.Float64_Value := Apply (Truth_R, Fourth) (2) + Truth_T (2);
+       function Angle_Of (Candidate : Rotation_Matrix) return OpenCV.Float64_Value is
+          Trace : OpenCV.Float64_Value := 0.0;
+       begin
+          for Axis in 0 .. 2 loop
+             Trace := Trace + Candidate (0, Axis) * Truth_R (0, Axis)
+               + Candidate (1, Axis) * Truth_R (1, Axis)
+               + Candidate (2, Axis) * Truth_R (2, Axis);
+          end loop;
+          return Math.Arccos (OpenCV.Float64_Value'Max (-1.0,
+            OpenCV.Float64_Value'Min (1.0, (Trace - 1.0) / 2.0)));
+       end Angle_Of;
+       function Project (Point : Object_Point) return Image_Point is
+          Camera : constant Object_Point :=
+            [Apply (Truth_R, Point) (0) + Truth_T (0),
+             Apply (Truth_R, Point) (1) + Truth_T (1),
+             Apply (Truth_R, Point) (2) + Truth_T (2)];
+       begin
+          return [Cam.Focal_X * Camera (0) / Camera (2) + Cam.Center_X,
+                  Cam.Focal_Y * Camera (1) / Camera (2) + Cam.Center_Y];
+       end Project;
+       Pixels : Image_Point_Array (1 .. 3);
+       World_Ref : constant Object_Point_Array (4 .. 4) := [Fourth];
+       Pixel_Ref : Image_Point_Array (9 .. 9);
+    begin
+       Assert (Depth > 0.0, "analytic fourth depth");
+       for I in Seeds'Range loop
+          Pixels (I) := Project (Seeds (I));
+       end loop;
+       Pixel_Ref (9) := Project (Fourth);
+       declare
+          Found : constant AP3P_Pose_Hypothesis_Array :=
+            Solve_AP3P_Hypotheses (Seeds, Pixels, Cam);
+          Before : constant AP3P_Pose_Hypothesis_Array := Found;
+          Saved_World : constant Object_Point_Array := World_Ref;
+          Saved_Pixels : constant Image_Point_Array := Pixel_Ref;
+          Values : constant AP3P_Reference_Result_Matrix :=
+            Evaluate_AP3P_References (Found, World_Ref, Pixel_Ref, Cam);
+          Summaries : constant AP3P_Hypothesis_Reference_Summary_Array :=
+            Summarize_AP3P_References (Values);
+          Matched, Alternate : Boolean := False;
+          Best : OpenCV.Float64_Value := 0.0;
+       begin
+          Assert (Found = Before and then World_Ref = Saved_World
+            and then Pixel_Ref = Saved_Pixels, "inputs unchanged");
+          Assert (Values'First (1) = 1 and then Values'Last (1) = Found'Length
+            and then Values'First (2) = 1 and then Values'Last (2) = 1,
+            "one-based fourth-reference matrix");
+          for I in Found'Range loop
+             declare
+                Angle : constant OpenCV.Float64_Value :=
+                  Angle_Of (Rotation_Matrix_Of (Found (I).Pose));
+                Shift : constant OpenCV.Float64_Value := Math.Sqrt
+                  ((Found (I).Pose.Translation (0) - Truth_T (0)) ** 2
+                   + (Found (I).Pose.Translation (1) - Truth_T (1)) ** 2
+                   + (Found (I).Pose.Translation (2) - Truth_T (2)) ** 2);
+                Item : constant AP3P_Reference_Result := Values (I, 1);
+             begin
+                Assert (Item.Disposition = Projected_Positive_Depth, "projected");
+                Assert (Summaries (I).Total_References = 1
+                  and then Summaries (I).Projected_References = 1
+                  and then Summaries (I).Reprojection.Count = 1
+                  and then Summaries (I).Entire_Set_Evaluable, "one-reference summary");
+                if Angle < 1.0E-4 and then Shift < 1.0E-4 then
+                   Matched := True;
+                   Best := Item.Error_Pixels;
+                   Assert (abs (Item.Camera_Depth - Depth) < 1.0E-8, "known depth");
+                   Assert (Item.Error_Pixels < 1.0E-3, "known fourth error");
+                elsif Item.Error_Pixels > 1.0 then
+                   Alternate := True;
+                end if;
+             end;
+          end loop;
+          Assert (Matched and then (Found'Length = 1 or else Alternate),
+            "known pose kept with alternatives and no selection");
+          Ada.Text_IO.Put_Line ("AP3P fourth-reference hypotheses=" & Natural'Image (Found'Length)
+            & " known-error=" & OpenCV.Float64_Value'Image (Best)
+            & " depth=" & OpenCV.Float64_Value'Image (Depth));
+       end;
+    end AP3P_Reference_Known;
+
+    procedure AP3P_Reference_Many (T : in out Fixture) is
+       pragma Unreferenced (T);
+       Cam : constant Camera_Intrinsics := (800.0, 820.0, 640.0, 360.0);
+       Seeds : constant Object_Point_Array := [[0.3, -0.2, 3.5], [1.4, 0.1, 4.0], [-0.5, 1.2, 5.3]];
+       Refs : constant Object_Point_Array (10 .. 14) :=
+         [[0.7, -0.8, 6.1], [1.8, 0.4, 5.2], [-1.1, 0.9, 7.4], [0.2, -1.6, 4.8], [-0.4, 0.3, 9.0]];
+       Pixels : Image_Point_Array (1 .. 3);
+       Observed : Image_Point_Array (21 .. 25);
+       function RY (Angle : OpenCV.Float64_Value) return Rotation_Matrix is
+          C : constant OpenCV.Float64_Value := Math.Cos (Angle);
+          S : constant OpenCV.Float64_Value := Math.Sin (Angle);
+       begin
+          return [[C, 0.0, S], [0.0, 1.0, 0.0], [-S, 0.0, C]];
+       end RY;
+       function RZ (Angle : OpenCV.Float64_Value) return Rotation_Matrix is
+          C : constant OpenCV.Float64_Value := Math.Cos (Angle);
+          S : constant OpenCV.Float64_Value := Math.Sin (Angle);
+       begin
+          return [[C, -S, 0.0], [S, C, 0.0], [0.0, 0.0, 1.0]];
+       end RZ;
+       function Pose_Matrix return Rotation_Matrix is
+          A : constant Rotation_Matrix := RZ (0.22);
+          B : constant Rotation_Matrix := RY (0.35);
+          Result : Rotation_Matrix := [others => [others => 0.0]];
+       begin
+          for Row in 0 .. 2 loop
+             for Column in 0 .. 2 loop
+                for Axis in 0 .. 2 loop
+                   Result (Row, Column) := Result (Row, Column) + A (Row, Axis) * B (Axis, Column);
+                end loop;
+             end loop;
+          end loop;
+          return Result;
+       end Pose_Matrix;
+       Truth : constant Rotation_Matrix := Pose_Matrix;
+       Shift : constant Translation_Vector := [0.2, -0.3, 0.8];
+       function Project (Point : Object_Point) return Image_Point is
+          X : constant OpenCV.Float64_Value :=
+            Truth (0, 0) * Point (0) + Truth (0, 1) * Point (1) + Truth (0, 2) * Point (2) + Shift (0);
+          Y : constant OpenCV.Float64_Value :=
+            Truth (1, 0) * Point (0) + Truth (1, 1) * Point (1) + Truth (1, 2) * Point (2) + Shift (1);
+          Z : constant OpenCV.Float64_Value :=
+            Truth (2, 0) * Point (0) + Truth (2, 1) * Point (1) + Truth (2, 2) * Point (2) + Shift (2);
+       begin
+          return [Cam.Focal_X * X / Z + Cam.Center_X, Cam.Focal_Y * Y / Z + Cam.Center_Y];
+       end Project;
+       Known : Natural := 0;
+       Separated : Boolean := False;
+    begin
+       for I in Seeds'Range loop
+          Pixels (I) := Project (Seeds (I));
+       end loop;
+       for Offset in 0 .. Refs'Length - 1 loop
+          Observed (Observed'First + Offset) := Project (Refs (Refs'First + Offset));
+       end loop;
+       declare
+          Found : constant AP3P_Pose_Hypothesis_Array :=
+            Solve_AP3P_Hypotheses (Seeds, Pixels, Cam);
+          Values : constant AP3P_Reference_Result_Matrix :=
+            Evaluate_AP3P_References (Found, Refs, Observed, Cam);
+          Summaries : constant AP3P_Hypothesis_Reference_Summary_Array :=
+            Summarize_AP3P_References (Values);
+       begin
+       Assert (Values'First (1) = 1 and then Values'Last (1) = Found'Length
+         and then Values'First (2) = 1 and then Values'Last (2) = 5, "position pairing");
+       for Row in Values'Range (1) loop
+          declare
+             Errors : Reprojection_Error_Array (1 .. 5);
+             Direct : constant Reprojection_Error_Array :=
+               Reprojection_Errors (Refs, Observed, Cam, No_Distortion, Found (Row).Pose);
+             Maximum : OpenCV.Float64_Value := 0.0;
+          begin
+             for Column in Values'Range (2) loop
+                Assert (Values (Row, Column).Disposition = Projected_Positive_Depth, "all projected");
+                Assert (abs (Values (Row, Column).Error_Pixels - Direct (Column)) <= 1.0E-9
+                  or else abs (Values (Row, Column).Error_Pixels - Direct (Column))
+                    <= 1.0E-9 * OpenCV.Float64_Value'Max (1.0, Direct (Column)),
+                  "Reprojection_Errors agreement");
+                Errors (Column) := Values (Row, Column).Error_Pixels;
+                Maximum := OpenCV.Float64_Value'Max (Maximum, Errors (Column));
+             end loop;
+             declare
+                Expected : constant Reprojection_Summary := Summarize_Reprojection (Errors);
+             begin
+                Assert (Summaries (Row).Projected_References = 5
+                  and then Summaries (Row).Total_References = 5
+                  and then Summaries (Row).Entire_Set_Evaluable
+                  and then Summaries (Row).Reprojection.Count = 5
+                  and then Summaries (Row).Reprojection.RMS_Error_Pixels = Expected.RMS_Error_Pixels
+                  and then Summaries (Row).Reprojection.Maximum_Error_Pixels = Expected.Maximum_Error_Pixels,
+                  "summary reuses Summarize_Reprojection");
+             end;
+             if Maximum < 1.0E-3 then
+                Known := Known + 1;
+             elsif Maximum > 1.0 then
+                Separated := True;
+             end if;
+          end;
+       end loop;
+       Assert (Known = 1 and then (Found'Length = 1 or else Separated),
+         "independent references distinguish one known candidate");
+       Ada.Text_IO.Put_Line ("AP3P many references=" & Natural'Image (Refs'Length)
+         & " hypotheses=" & Natural'Image (Found'Length));
+       end;
+    end AP3P_Reference_Many;
+
+    procedure AP3P_Reference_Bounds (T : in out Fixture) is
+       pragma Unreferenced (T);
+       Cam : constant Camera_Intrinsics := (100.0, 110.0, 20.0, 30.0);
+       Pose_A : constant World_To_Camera_Pose :=
+         (Rotation => [others => 0.0], Translation => [0.0, 0.0, 2.0]);
+       Pose_B : constant World_To_Camera_Pose :=
+         (Rotation => [others => 0.0], Translation => [0.1, -0.2, 1.0]);
+       Hypotheses : constant AP3P_Pose_Hypothesis_Array (4 .. 5) :=
+         [(Pose => Pose_A), (Pose => Pose_B)];
+       World_Ref : constant Object_Point_Array (10 .. 14) :=
+         [[1.0, 0.0, 5.0], [-1.0, 2.0, 6.0], [0.5, -0.5, 8.0], [2.0, 1.0, 3.0], [0.0, 0.0, 9.0]];
+       Pixels : constant Image_Point_Array (21 .. 25) :=
+         Project_Points (World_Ref, Cam, No_Distortion, Pose_A);
+       Before_H : constant AP3P_Pose_Hypothesis_Array := Hypotheses;
+       Before_W : constant Object_Point_Array := World_Ref;
+       Before_P : constant Image_Point_Array := Pixels;
+       Values : constant AP3P_Reference_Result_Matrix :=
+         Evaluate_AP3P_References (Hypotheses, World_Ref, Pixels, Cam);
+       Summaries : constant AP3P_Hypothesis_Reference_Summary_Array :=
+         Summarize_AP3P_References (Values);
+    begin
+       Assert (Hypotheses = Before_H and then World_Ref = Before_W and then Pixels = Before_P,
+         "lower-bound inputs immutable");
+       Assert (Values'First (1) = 1 and then Values'Last (1) = 2
+         and then Values'First (2) = 1 and then Values'Last (2) = 5, "one-based output");
+       Assert (Summaries'First = 1 and then Summaries'Last = 2, "one-based summaries");
+       for Column in 1 .. 5 loop
+          Assert (Values (1, Column).Disposition = Projected_Positive_Depth
+            and then Values (1, Column).Error_Pixels < 1.0E-6, "first candidate order");
+       end loop;
+       Assert (Summaries (1).Entire_Set_Evaluable and then Summaries (2).Total_References = 5,
+         "summary candidate order");
+    end AP3P_Reference_Bounds;
+
+    procedure AP3P_Reference_Depth (T : in out Fixture) is
+       pragma Unreferenced (T);
+       Cam : constant Camera_Intrinsics := (100.0, 120.0, 10.0, 20.0);
+       Identity : constant World_To_Camera_Pose :=
+         (Rotation => [others => 0.0], Translation => [others => 0.0]);
+       Shifted : constant World_To_Camera_Pose :=
+         (Rotation => [others => 0.0], Translation => [1.0, -2.0, 3.0]);
+       Quarter : constant World_To_Camera_Pose :=
+         (Rotation => [0.0, 0.0, 1.5707963267948966], Translation => [0.0, 0.0, 1.0]);
+       Points : constant Object_Point_Array :=
+         [[0.2, -0.3, 5.0], [1.0, 1.0, 0.0], [0.4, -0.2, -2.0]];
+       Pixels : constant Image_Point_Array := [[11.0, 12.0], [13.0, 14.0], [15.0, 16.0]];
+       Values : constant AP3P_Reference_Result_Matrix :=
+         Evaluate_AP3P_References ([(Pose => Identity)], Points, Pixels, Cam);
+       Summary : constant AP3P_Hypothesis_Reference_Summary_Array :=
+         Summarize_AP3P_References (Values);
+    begin
+       Assert (Values (1, 1).Disposition = Projected_Positive_Depth
+         and then abs (Values (1, 1).Camera_Depth - 5.0) < 1.0E-12, "strict positive");
+       Assert (Values (1, 2).Disposition = Non_Positive_Depth
+         and then Values (1, 2).Camera_Depth = 0.0
+         and then Values (1, 2).Error_Pixels = 0.0, "exact zero not projected");
+       Assert (Values (1, 3).Disposition = Non_Positive_Depth
+         and then abs (Values (1, 3).Camera_Depth + 2.0) < 1.0E-12, "negative depth");
+       Assert (Summary (1).Total_References = 3 and then Summary (1).Projected_References = 1
+         and then Summary (1).Non_Positive_Depth_References = 2
+         and then Summary (1).Numerically_Unavailable_References = 0
+         and then not Summary (1).Entire_Set_Evaluable
+         and then Summary (1).Reprojection.Count = 1, "depth summary");
+       declare
+          Moved : constant Object_Point_Array :=
+            [[-0.8, 1.7, 2.0], [0.0, 3.0, -3.0], [-0.6, 1.8, -5.0]];
+          Shifted_Values : constant AP3P_Reference_Result_Matrix :=
+            Evaluate_AP3P_References ([(Pose => Shifted)], Moved, Pixels, Cam);
+          Turned : constant Object_Point_Array := [[-0.2, 0.3, 4.0]];
+          Turned_Values : constant AP3P_Reference_Result_Matrix :=
+            Evaluate_AP3P_References ([(Pose => Quarter)], Turned, Pixels (1 .. 1), Cam);
+       begin
+          Assert (abs (Shifted_Values (1, 1).Camera_Depth - 5.0) < 1.0E-12
+            and then Shifted_Values (1, 2).Camera_Depth = 0.0
+            and then abs (Shifted_Values (1, 3).Camera_Depth + 2.0) < 1.0E-12,
+            "added translation is t");
+          Assert (abs (Turned_Values (1, 1).Camera_Depth - 5.0) < 1.0E-9,
+            "Rz depth uses R, which would be 5 either way; X distinguishes transpose");
+          declare
+             Predicted : constant Image_Point_Array :=
+               Project_Points (Turned, Cam, No_Distortion, Quarter);
+          begin
+             Assert (abs (Predicted (1) (0) - (Cam.Focal_X * (-0.3) / 5.0 + Cam.Center_X)) < 1.0E-6
+               and then abs (Predicted (1) (1) - (Cam.Focal_Y * (-0.2) / 5.0 + Cam.Center_Y)) < 1.0E-6
+               and then abs (Turned_Values (1, 1).Error_Pixels
+                 - Math.Sqrt ((Predicted (1) (0) - Pixels (1) (0)) ** 2
+                              + (Predicted (1) (1) - Pixels (1) (1)) ** 2)) < 1.0E-6,
+               "nonidentity rotation is not transposed");
+          end;
+       end;
+    end AP3P_Reference_Depth;
+
+    procedure AP3P_Reference_Distortion (T : in out Fixture) is
+       pragma Unreferenced (T);
+       Cam : constant Camera_Intrinsics := (800.0, 820.0, 640.0, 360.0);
+       Lens : constant Distortion_Coefficients := (-0.12, 0.02, 0.001, -0.0015, 0.01);
+       Pose : constant World_To_Camera_Pose :=
+         (Rotation => [0.10, -0.05, 0.08], Translation => [0.20, -0.30, 4.00]);
+       Points : constant Object_Point_Array :=
+         [[1.5, -1.2, 2.0], [-1.4, 1.1, 2.4], [1.2, 0.9, 2.2]];
+       function Brown (Point : Object_Point) return Image_Point is
+          Camera : constant Object_Point := World_To_Camera_Point (Pose, Point);
+          X : constant OpenCV.Float64_Value := Camera (0) / Camera (2);
+          Y : constant OpenCV.Float64_Value := Camera (1) / Camera (2);
+          R2 : constant OpenCV.Float64_Value := X * X + Y * Y;
+          Radial : constant OpenCV.Float64_Value :=
+            1.0 + Lens.K1 * R2 + Lens.K2 * R2 * R2 + Lens.K3 * R2 * R2 * R2;
+       begin
+          return [Cam.Focal_X * (X * Radial + 2.0 * Lens.P1 * X * Y + Lens.P2 * (R2 + 2.0 * X * X))
+                    + Cam.Center_X,
+                  Cam.Focal_Y * (Y * Radial + Lens.P1 * (R2 + 2.0 * Y * Y) + 2.0 * Lens.P2 * X * Y)
+                    + Cam.Center_Y];
+       end Brown;
+       Distorted : Image_Point_Array (Points'Range);
+       Plain : constant Image_Point_Array := Project_Points (Points, Cam, No_Distortion, Pose);
+       Native : constant Image_Point_Array := Project_Points (Points, Cam, Lens, Pose);
+       Hypothesis : constant AP3P_Pose_Hypothesis_Array := [(Pose => Pose)];
+    begin
+       for I in Points'Range loop
+          Distorted (I) := Brown (Points (I));
+          Assert (abs (Native (I) (0) - Distorted (I) (0)) < 1.0E-6
+            and then abs (Native (I) (1) - Distorted (I) (1)) < 1.0E-6, "scalar Brown matches native");
+          Assert (abs (Native (I) (0) - Plain (I) (0)) > 0.01
+            or else abs (Native (I) (1) - Plain (I) (1)) > 0.01, "off-axis distortion is exercised");
+       end loop;
+       declare
+          Values : constant AP3P_Reference_Result_Matrix :=
+            Evaluate_AP3P_References (Hypothesis, Points, Distorted, Cam, Lens);
+          Zero : constant AP3P_Reference_Result_Matrix :=
+            Evaluate_AP3P_References (Hypothesis, Points, Plain, Cam);
+          Direct : constant Reprojection_Error_Array :=
+            Reprojection_Errors (Points, Distorted, Cam, Lens, Pose);
+       begin
+          for I in 1 .. 3 loop
+             Assert (Values (1, I).Error_Pixels < 1.0E-6, "distorted diagnostic error");
+             Assert (abs (Values (1, I).Error_Pixels - Direct (I)) < 1.0E-9, "error API agreement");
+             Assert (Zero (1, I).Error_Pixels < 1.0E-6, "zero-distortion control");
+          end loop;
+       end;
+    end AP3P_Reference_Distortion;
+
+    procedure AP3P_Reference_Numbers (T : in out Fixture) is
+       pragma Unreferenced (T);
+       Cam : constant Camera_Intrinsics := (100.0, 100.0, 0.0, 0.0);
+       Identity : constant World_To_Camera_Pose :=
+         (Rotation => [others => 0.0], Translation => [others => 0.0]);
+       Finite_Point : constant Object_Point_Array := [[0.25, -0.5, 2.0]];
+       Predicted : constant Image_Point_Array :=
+         Project_Points (Finite_Point, Cam, No_Distortion, Identity);
+       Observed : constant Image_Point_Array := [[-1.0E308, 0.0]];
+       Residual : constant AP3P_Reference_Result_Matrix :=
+         Evaluate_AP3P_References ([(Pose => Identity)], Finite_Point, Observed, Cam);
+       Turn : constant World_To_Camera_Pose :=
+         (Rotation => [0.0, 0.0, Ada.Numerics.Pi / 4.0], Translation => [0.0, 0.0, 0.0]);
+       Batch : Object_Point_Array := [[0.0, 0.0, 4.0], [1.0E308, -1.0E308, 4.0]];
+       Batch_Pixels : constant Image_Point_Array := [[0.0, 0.0], [0.0, 0.0]];
+    begin
+       Batch (2) := [1.0E308 * 1.5, -(1.0E308 * 1.5), 4.0];
+       declare
+          Mixed : constant AP3P_Reference_Result_Matrix :=
+            Evaluate_AP3P_References ([(Pose => Turn)], Batch, Batch_Pixels, Cam);
+          Mixed_Summary : constant AP3P_Hypothesis_Reference_Summary_Array :=
+            Summarize_AP3P_References (Mixed);
+       begin
+          Assert (Mixed (1, 1).Disposition = Projected_Positive_Depth
+            and then Mixed (1, 1).Camera_Depth > 0.0, "ordinary reference preserved");
+          Assert (Mixed (1, 2).Disposition = Numerically_Unavailable
+            and then Mixed (1, 2).Camera_Depth = 0.0
+            and then Mixed (1, 2).Error_Pixels = 0.0, "rotated opposing coordinates overflow");
+          Assert (Mixed_Summary (1).Projected_References = 1
+            and then Mixed_Summary (1).Numerically_Unavailable_References = 1
+            and then Mixed_Summary (1).Non_Positive_Depth_References = 0
+            and then Mixed_Summary (1).Total_References = 2
+            and then not Mixed_Summary (1).Entire_Set_Evaluable
+            and then Mixed_Summary (1).Reprojection.Count = 1, "summary excludes unavailable reference");
+       end;
+       Assert ((for all Value of Predicted (1) => Finite (Value)), "native prediction finite");
+       Assert ((for all Value of Observed (1) => Finite (Value)), "observed pixel finite");
+       Assert (Residual (1, 1).Disposition = Projected_Positive_Depth
+         and then Finite (Residual (1, 1).Error_Pixels),
+         "representable extreme residual remains projected");
+    end AP3P_Reference_Numbers;
+
+    procedure AP3P_Reference_Summary (T : in out Fixture) is
+       pragma Unreferenced (T);
+       function Item (Depth, Error : OpenCV.Float64_Value) return AP3P_Reference_Result is
+          ((Projected_Positive_Depth, Depth, Error));
+       Behind : constant AP3P_Reference_Result := (Non_Positive_Depth, -1.0, 0.0);
+       Missing : constant AP3P_Reference_Result := (Numerically_Unavailable, 0.0, 0.0);
+       Pair : constant AP3P_Reference_Result_Matrix :=
+         [[Item (2.0, 5.0), Item (3.0, 12.0)]];
+       Expected : constant Reprojection_Summary := Summarize_Reprojection ([5.0, 12.0]);
+       Mixed_Depth : constant AP3P_Reference_Result_Matrix := [[Item (2.0, 5.0), Behind]];
+       Mixed_Number : constant AP3P_Reference_Result_Matrix := [[Item (2.0, 5.0), Missing]];
+       All_Behind : constant AP3P_Reference_Result_Matrix := [[Behind, (Non_Positive_Depth, 0.0, 0.0)]];
+       Empty_Columns : constant AP3P_Reference_Result_Matrix (1 .. 1, 1 .. 0) :=
+         [others => [others => Missing]];
+       procedure Reject (Values : AP3P_Reference_Result_Matrix) is
+       begin
+          declare
+             Summary : constant AP3P_Hypothesis_Reference_Summary_Array :=
+               Summarize_AP3P_References (Values);
+             pragma Unreferenced (Summary);
+          begin
+             Assert (False, "malformed reference summary accepted");
+          end;
+       exception
+          when OpenCV.OpenCV_Error => null;
+       end Reject;
+       function RMS (Values : AP3P_Reference_Result_Matrix) return AP3P_Hypothesis_Reference_Summary is
+          (Summarize_AP3P_References (Values) (1));
+    begin
+       Assert (abs (Expected.RMS_Error_Pixels - Math.Sqrt ((25.0 + 144.0) / 2.0)) < 1.0E-12
+         and then Expected.Maximum_Error_Pixels = 12.0, "analytic RMS");
+       Assert (RMS (Pair).Reprojection = Expected and then RMS (Pair).Entire_Set_Evaluable,
+         "projected pair uses Summarize_Reprojection");
+       Assert (RMS (Mixed_Depth).Projected_References = 1
+         and then RMS (Mixed_Depth).Non_Positive_Depth_References = 1
+         and then not RMS (Mixed_Depth).Entire_Set_Evaluable
+         and then RMS (Mixed_Depth).Reprojection.RMS_Error_Pixels = 5.0, "subset RMS");
+       Assert (RMS (Mixed_Number).Numerically_Unavailable_References = 1
+         and then RMS (Mixed_Number).Reprojection.Count = 1, "unavailable excluded");
+       Assert (RMS (All_Behind).Projected_References = 0
+         and then RMS (All_Behind).Reprojection.Count = 0
+         and then RMS (All_Behind).Reprojection.RMS_Error_Pixels = 0.0
+         and then not RMS (All_Behind).Entire_Set_Evaluable, "no projected evidence");
+       Assert (RMS (Empty_Columns).Total_References = 0 and then not RMS (Empty_Columns).Entire_Set_Evaluable,
+         "empty references are not success");
+       declare
+          Tiny : constant AP3P_Reference_Result_Matrix :=
+            [[Item (1.0, 1.0E-200), Item (1.0, 1.0E-200)]];
+          Large : constant AP3P_Reference_Result_Matrix :=
+            [[Item (1.0, OpenCV.Float64_Value'Last), Item (1.0, OpenCV.Float64_Value'Last)]];
+       begin
+          Assert (RMS (Tiny).Reprojection = Summarize_Reprojection ([1.0E-200, 1.0E-200])
+            and then RMS (Large).Reprojection.Maximum_Error_Pixels = OpenCV.Float64_Value'Last,
+            "scaled summary extremes");
+       end;
+       Reject ([[(Projected_Positive_Depth, 0.0, 1.0)]]);
+       Reject ([[(Projected_Positive_Depth, 1.0, -1.0)]]);
+       Reject ([[(Non_Positive_Depth, 1.0, 0.0)]]);
+       Reject ([[(Non_Positive_Depth, -1.0, 2.0)]]);
+       Reject ([[(Numerically_Unavailable, 1.0, 0.0)]]);
+       Reject ([[(Numerically_Unavailable, 0.0, 1.0)]]);
+    end AP3P_Reference_Summary;
+
+    procedure AP3P_Reference_Empty (T : in out Fixture) is
+       pragma Unreferenced (T);
+       pragma Suppress (Validity_Check);
+       Cam : constant Camera_Intrinsics := (800.0, 820.0, 640.0, 360.0);
+       Pose : constant World_To_Camera_Pose :=
+         (Rotation => [others => 0.0], Translation => [0.0, 0.0, 1.0]);
+       None_H : constant AP3P_Pose_Hypothesis_Array (1 .. 0) := [others => <>];
+       None_W : constant Object_Point_Array (1 .. 0) := [others => [others => 0.0]];
+       None_P : constant Image_Point_Array (1 .. 0) := [others => [others => 0.0]];
+       Some_W : constant Object_Point_Array := [[0.1, 0.2, 3.0]];
+       Some_P : constant Image_Point_Array := [[1.0, 2.0]];
+       Some_H : constant AP3P_Pose_Hypothesis_Array := [(Pose => Pose)];
+       Native_Zero : constant AP3P_Pose_Hypothesis_Array := Solve_AP3P_Hypotheses
+         ([[-0.39081598340561996, 0.32617277568950875, 4.0131477606213553],
+           [-1.6067503815809268, 0.73284013236088175, 2.4253925955828199],
+           [1.9483108946655348, -1.1457818430811084, 7.0007856567437514]],
+          [[118.67887557148487, 129.79777044444734],
+           [452.33705169300674, 427.73531562095332],
+           [690.96005298599528, 241.045602436595]], Cam);
+       procedure Reject (Hypotheses : AP3P_Pose_Hypothesis_Array;
+                         World_Ref : Object_Point_Array; Pixels : Image_Point_Array;
+                         Camera : Camera_Intrinsics := Cam) is
+       begin
+          declare
+             Values : constant AP3P_Reference_Result_Matrix :=
+               Evaluate_AP3P_References (Hypotheses, World_Ref, Pixels, Camera);
+             pragma Unreferenced (Values);
+          begin
+             Assert (False, "invalid AP3P reference input accepted");
+          end;
+       exception
+          when OpenCV.OpenCV_Error => null;
+       end Reject;
+    begin
+       declare
+          Empty : constant AP3P_Reference_Result_Matrix :=
+            Evaluate_AP3P_References (None_H, None_W, None_P, Cam);
+          Rows : constant AP3P_Reference_Result_Matrix :=
+            Evaluate_AP3P_References (None_H, Some_W, Some_P, Cam);
+          Columns : constant AP3P_Reference_Result_Matrix :=
+            Evaluate_AP3P_References (Some_H, None_W, None_P, Cam);
+          Native : constant AP3P_Reference_Result_Matrix :=
+            Evaluate_AP3P_References (Native_Zero, Some_W, Some_P, Cam);
+       begin
+          Assert (Empty'Length (1) = 0 and then Empty'Length (2) = 0, "0x0");
+          Assert (Rows'Length (1) = 0 and then Rows'Length (2) = 1, "0xN");
+          Assert (Columns'Length (1) = 1 and then Columns'Length (2) = 0, "Mx0");
+          Assert (Native_Zero'Length = 0 and then Native'Length (1) = 0
+            and then Native'Length (2) = 1, "real native zero remains empty");
+          Assert (Summarize_AP3P_References (Rows)'Length = 0, "empty summary");
+       end;
+       Reject ([(Pose => (Rotation => [OpenCV.Float64_Value (Nonfinite (0)), 0.0, 0.0],
+                          Translation => [others => 0.0]))], Some_W, Some_P);
+       Reject (Some_H, [[OpenCV.Float64_Value (Nonfinite (1)), 0.0, 1.0]], Some_P);
+       Reject (Some_H, Some_W, [[0.0, OpenCV.Float64_Value (Nonfinite (0))]]);
+       Reject (Some_H, Some_W, Some_P, (0.0, 820.0, 640.0, 360.0));
+       Reject (Some_H, Some_W, Some_P, (800.0, 820.0, OpenCV.Float64_Value (Nonfinite (0)), 360.0));
+       Reject (Some_H, Some_W (1 .. 1) & Some_W (1 .. 1), Some_P);
+       begin
+          declare
+             Values : constant AP3P_Reference_Result_Matrix :=
+               Evaluate_AP3P_References (Some_H, Some_W, Some_P, Cam,
+                 (OpenCV.Float64_Value (Nonfinite (0)), 0.0, 0.0, 0.0, 0.0));
+             pragma Unreferenced (Values);
+          begin
+             Assert (False, "nonfinite distortion accepted");
+          end;
+       exception
+          when OpenCV.OpenCV_Error => null;
+       end;
+       declare
+          Five : constant AP3P_Pose_Hypothesis_Array (1 .. 5) :=
+            [others => (Pose => Pose)];
+       begin
+          Reject (Five, Some_W, Some_P);
+       end;
+    end AP3P_Reference_Empty;
+
+
+
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
@@ -3824,6 +4372,14 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("AP3P count and degenerate rejection", AP3P_Reject'Access));
       Result.Add_Test (Caller.Create ("AP3P valid native zero result", AP3P_Zero'Access));
       Result.Add_Test (Caller.Create ("compiler-derived AP3P aggregate layout", AP3P_Layout'Access));
+       Result.Add_Test (Caller.Create ("AP3P independent fourth-reference diagnostics", AP3P_Reference_Known'Access));
+       Result.Add_Test (Caller.Create ("AP3P multiple independent reference diagnostics", AP3P_Reference_Many'Access));
+       Result.Add_Test (Caller.Create ("AP3P reference diagnostics with different lower bounds", AP3P_Reference_Bounds'Access));
+       Result.Add_Test (Caller.Create ("AP3P strict positive and nonpositive reference depth", AP3P_Reference_Depth'Access));
+       Result.Add_Test (Caller.Create ("AP3P five-coefficient reference projection", AP3P_Reference_Distortion'Access));
+       Result.Add_Test (Caller.Create ("AP3P reference numerical unavailability", AP3P_Reference_Numbers'Access));
+       Result.Add_Test (Caller.Create ("AP3P reference summary and malformed records", AP3P_Reference_Summary'Access));
+       Result.Add_Test (Caller.Create ("AP3P empty and invalid reference diagnostics", AP3P_Reference_Empty'Access));
       return Result;
    end Suite;
 end Calib3D_Tests;

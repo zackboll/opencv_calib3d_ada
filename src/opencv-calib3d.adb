@@ -1400,6 +1400,244 @@ package body OpenCV.Calib3D is
           raise OpenCV.OpenCV_Error with "Unrepresentable AP3P result";
     end Solve_AP3P_Hypotheses;
 
+    function Pixel_Error
+      (Predicted, Observed : Image_Point) return OpenCV.Float64_Value
+    is
+       DX : OpenCV.Float64_Value;
+       DY : OpenCV.Float64_Value;
+       Scale : OpenCV.Float64_Value;
+       Error : OpenCV.Float64_Value;
+       NX, NY, Sum : OpenCV.Float64_Value;
+       Residual_Overflow : Boolean := False;
+    begin
+       begin
+          DX := Predicted (0) - Observed (0);
+          DY := Predicted (1) - Observed (1);
+       exception
+          when Constraint_Error =>
+             Residual_Overflow := True;
+       end;
+       if Residual_Overflow or else not (Is_Finite (DX) and then Is_Finite (DY)) then
+          raise Constraint_Error;
+       end if;
+       Scale := OpenCV.Float64_Value'Max (abs DX, abs DY);
+       if Scale = 0.0 then
+          Error := 0.0;
+       else
+          NX := DX / Scale;
+          NY := DY / Scale;
+          Sum := NX * NX + NY * NY;
+          Error := Scale * Math.Sqrt (Sum);
+       end if;
+       if not Is_Finite (Error) then
+          raise Constraint_Error;
+       end if;
+       return Error;
+    end Pixel_Error;
+
+    function Evaluate_AP3P_References
+      (Hypotheses       : AP3P_Pose_Hypothesis_Array;
+       Reference_World  : Object_Point_Array;
+       Reference_Pixels : Image_Point_Array;
+       Intrinsics       : Camera_Intrinsics;
+       Distortion       : Distortion_Coefficients := No_Distortion)
+       return AP3P_Reference_Result_Matrix
+    is
+       function Camera_Coordinate
+         (Matrix : Rotation_Matrix; Point : Object_Point;
+          Translation : Translation_Vector; Row : Natural)
+          return OpenCV.Float64_Value
+       is
+          Sum : OpenCV.Float64_Value := 0.0;
+       begin
+          for Column in 0 .. 2 loop
+             declare
+                Product : OpenCV.Float64_Value;
+             begin
+                Product := Matrix (Row, Column) * Point (Column);
+                if not Is_Finite (Product) then
+                   raise Constraint_Error;
+                end if;
+                Sum := Sum + Product;
+                if not Is_Finite (Sum) then
+                   raise Constraint_Error;
+                end if;
+             end;
+          end loop;
+          Sum := Sum + Translation (Row);
+          if not Is_Finite (Sum) then
+             raise Constraint_Error;
+          end if;
+          return Sum;
+       end Camera_Coordinate;
+
+       Unavailable : constant AP3P_Reference_Result :=
+         (Disposition => Numerically_Unavailable,
+          Camera_Depth => 0.0, Error_Pixels => 0.0);
+    begin
+       if Hypotheses'Length > 4 then
+          raise OpenCV.OpenCV_Error
+            with "AP3P reference diagnostics accept at most four hypotheses";
+       end if;
+       if Reference_World'Length /= Reference_Pixels'Length then
+          raise OpenCV.OpenCV_Error with "AP3P reference world/pixel counts differ";
+       end if;
+       Validate (Intrinsics);
+       Validate (Distortion);
+       for Hypothesis of Hypotheses loop
+          Validate (Hypothesis.Pose);
+       end loop;
+       Validate (Reference_World);
+       Validate (Reference_Pixels);
+       return Results : AP3P_Reference_Result_Matrix
+         (1 .. Hypotheses'Length, 1 .. Reference_World'Length) :=
+         [others => [others => Unavailable]]
+       do
+          if Hypotheses'Length = 0 or else Reference_World'Length = 0 then
+             return;
+          end if;
+          for Hypothesis_Index in Hypotheses'Range loop
+             declare
+                Pose : constant World_To_Camera_Pose :=
+                  Hypotheses (Hypothesis_Index).Pose;
+                Matrix : constant Rotation_Matrix := Rotation_Matrix_Of (Pose);
+                Row : constant Positive := Hypothesis_Index - Hypotheses'First + 1;
+             begin
+                for Reference_Index in Reference_World'Range loop
+                   declare
+                      Column : constant Positive :=
+                        Reference_Index - Reference_World'First + 1;
+                      Point : constant Object_Point :=
+                        Reference_World (Reference_Index);
+                      Depth : OpenCV.Float64_Value := 0.0;
+                      Camera_X, Camera_Y : OpenCV.Float64_Value := 0.0;
+                      Transform_Failed : Boolean := False;
+                   begin
+                      begin
+                         Camera_X := Camera_Coordinate (Matrix, Point, Pose.Translation, 0);
+                         Camera_Y := Camera_Coordinate (Matrix, Point, Pose.Translation, 1);
+                         Depth := Camera_Coordinate (Matrix, Point, Pose.Translation, 2);
+                         if not (Is_Finite (Camera_X) and then Is_Finite (Camera_Y)) then
+                            raise Constraint_Error;
+                         end if;
+                      exception
+                         when Constraint_Error =>
+                            Transform_Failed := True;
+                      end;
+                      if Transform_Failed then
+                         Results (Row, Column) := Unavailable;
+                      elsif Depth > 0.0 then
+                            declare
+                               Predicted : constant Image_Point_Array := Project_Points
+                                 ([Point], Intrinsics, Distortion, Pose);
+                               Error : OpenCV.Float64_Value := 0.0;
+                               Residual_Failed : Boolean := False;
+                            begin
+                               begin
+                                  Error := Pixel_Error
+                                    (Predicted (Predicted'First),
+                                     Reference_Pixels (Reference_Pixels'First + (Column - 1)));
+                               exception
+                                  when Constraint_Error =>
+                                     Residual_Failed := True;
+                               end;
+                               if Residual_Failed then
+                                  Results (Row, Column) := Unavailable;
+                               else
+                                  Results (Row, Column) :=
+                                    (Disposition => Projected_Positive_Depth,
+                                     Camera_Depth => Depth,
+                                     Error_Pixels => Error);
+                               end if;
+                            end;
+                         else
+                            Results (Row, Column) :=
+                              (Disposition => Non_Positive_Depth,
+                               Camera_Depth => Depth, Error_Pixels => 0.0);
+                      end if;
+                   end;
+                end loop;
+             end;
+          end loop;
+       end return;
+    end Evaluate_AP3P_References;
+
+    function Summarize_AP3P_References
+      (Results : AP3P_Reference_Result_Matrix)
+       return AP3P_Hypothesis_Reference_Summary_Array
+    is
+       procedure Validate_Result (Item : AP3P_Reference_Result) is
+       begin
+          case Item.Disposition is
+             when Projected_Positive_Depth =>
+                if not Is_Finite (Item.Camera_Depth) or else Item.Camera_Depth <= 0.0
+                  or else not Is_Finite (Item.Error_Pixels) or else Item.Error_Pixels < 0.0
+                then
+                   raise OpenCV.OpenCV_Error with "Malformed projected AP3P reference";
+                end if;
+             when Non_Positive_Depth =>
+                if not Is_Finite (Item.Camera_Depth) or else Item.Camera_Depth > 0.0
+                  or else Item.Error_Pixels /= 0.0
+                then
+                   raise OpenCV.OpenCV_Error with "Malformed non-positive AP3P reference";
+                end if;
+             when Numerically_Unavailable =>
+                if Item.Camera_Depth /= 0.0 or else Item.Error_Pixels /= 0.0 then
+                   raise OpenCV.OpenCV_Error with "Malformed unavailable AP3P reference";
+                end if;
+          end case;
+       end Validate_Result;
+    begin
+       if Results'Length (1) > 4 or else
+         Results'Length (2) > Natural (Interfaces.Integer_32'Last)
+       then
+          raise OpenCV.OpenCV_Error with "AP3P reference summary exceeds supported bounds";
+       end if;
+       return Summaries : AP3P_Hypothesis_Reference_Summary_Array (1 .. Results'Length (1)) do
+          for Row in Results'Range (1) loop
+             declare
+                Projected : Natural := 0;
+                Behind : Natural := 0;
+                Unavailable_Count : Natural := 0;
+                Output : constant Positive := Row - Results'First (1) + 1;
+             begin
+                for Column in Results'Range (2) loop
+                   Validate_Result (Results (Row, Column));
+                   case Results (Row, Column).Disposition is
+                      when Projected_Positive_Depth => Projected := Projected + 1;
+                      when Non_Positive_Depth => Behind := Behind + 1;
+                      when Numerically_Unavailable => Unavailable_Count := Unavailable_Count + 1;
+                   end case;
+                end loop;
+                declare
+                   Errors : Reprojection_Error_Array (1 .. Projected);
+                   Next : Natural := 0;
+                begin
+                   for Column in Results'Range (2) loop
+                      if Results (Row, Column).Disposition = Projected_Positive_Depth then
+                         Next := Next + 1;
+                         Errors (Next) := Results (Row, Column).Error_Pixels;
+                      end if;
+                   end loop;
+                   Summaries (Output) :=
+                     (Total_References => Results'Length (2),
+                      Projected_References => Projected,
+                      Non_Positive_Depth_References => Behind,
+                      Numerically_Unavailable_References => Unavailable_Count,
+                      Entire_Set_Evaluable =>
+                        Results'Length (2) > 0 and then Projected = Results'Length (2),
+                      Reprojection => Summarize_Reprojection (Errors));
+                end;
+             end;
+          end loop;
+       end return;
+    exception
+       when Constraint_Error =>
+          raise OpenCV.OpenCV_Error with "AP3P reference summary is unrepresentable";
+    end Summarize_AP3P_References;
+
+
+
 
    overriding procedure Finalize (Self : in out Essential_Estimate) is
    begin
