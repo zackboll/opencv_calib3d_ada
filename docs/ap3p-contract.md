@@ -39,8 +39,16 @@ Checked before native entry, using exact zero rather than an invented epsilon:
 - three finite pixel observations;
 - positive finite focal lengths and finite principal point and distortion;
 - nonzero world baseline and nonzero cross-product area;
-- distinct first two bearings and a third bearing not coplanar with them;
+- distinct first two undistorted bearings and a third bearing not exactly coplanar with them;
 - no intermediate product that overflows Float64.
+
+Bearing checks use the normalized coordinates returned by `undistortPoints`
+with the same K and distortion. Those rays are not the original distorted
+pixels. The subsequent `solveP3P` call still receives the original pixels.
+Iterative undistortion does not restore an exactly collinear ray set: on
+OpenCV 4.10 the documented radial fixture recovers the ideal line only to
+about `1.4e-5`, and that nonzero result remains admissible. Exact zero is
+still rejected. No universal epsilon is applied to the residual.
 
 Repeated points, collinear points, identical bearings, and coplanar
 three-ray geometry are invalid. They are not reported as an empty success.

@@ -50,8 +50,16 @@ fourth-point pixels 3.06e-4
 The front-parallel fixture retains 4 hypotheses. The known-pose alternate
 candidate has a fourth-point residual of about 247 pixels and is retained.
 The valid zero-solution fixture returns `1 .. 0`. Repeated, collinear,
-identical-bearing, coplanar-bearing, and overflowing coordinates raise
+identical-bearing, exactly coplanar, and overflowing coordinates raise
 `OpenCV_Error`.
+
+A radial `k1=0.2` fixture whose ideal rays are exactly coplanar has distorted
+normalized coordinates that are not collinear. Native `undistortPoints` on
+OpenCV 4.10 recovers them with maximum error `1.44021e-5`. Pixel-only
+preflight would treat those pixels as safe bearings; the corrected preflight
+inspects the recovered rays and still accepts this nonzero residual. The
+raw solver returns a bounded hypothesis set. Exact ideal collinearity remains
+rejected.
 
 Private ABI: 46 declarations and imports. Compiler layout: size 200,
 alignment 8, count at 0, candidates at 8, pose stride 48, candidate offsets

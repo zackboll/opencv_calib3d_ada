@@ -867,10 +867,15 @@ opencv_calib3d_status opencv_calib3d_solve_ap3p_hypotheses(
             world[i][0] = object[0]; world[i][1] = object[1]; world[i][2] = object[2];
             pixels[i][0] = image[0]; pixels[i][1] = image[1];
         }
-        require(opencv_calib3d_detail::ap3p_admissible(
-                    world, pixels, intrinsics->focal_x, intrinsics->focal_y,
-                    intrinsics->center_x, intrinsics->center_y),
-                "AP3P geometry is singular or unrepresentable");
+        require(opencv_calib3d_detail::ap3p_world_admissible(world),
+                "AP3P world geometry is singular or unrepresentable");
+        for (int i = 0; i < 3; ++i) {
+            if (std::abs(pixels[i][0]) > std::numeric_limits<double>::max() / 2.0 ||
+                std::abs(intrinsics->center_x) > std::numeric_limits<double>::max() / 2.0 ||
+                std::abs(pixels[i][1]) > std::numeric_limits<double>::max() / 2.0 ||
+                std::abs(intrinsics->center_y) > std::numeric_limits<double>::max() / 2.0)
+                throw std::invalid_argument("AP3P pixel normalization is unrepresentable");
+        }
         cv::Mat object_input(3, 1, CV_64FC3), image_input(3, 1, CV_64FC2);
         for (int i = 0; i < 3; ++i) {
             object_input.at<cv::Vec3d>(i, 0) = cv::Vec3d(world[i][0], world[i][1], world[i][2]);
@@ -878,6 +883,22 @@ opencv_calib3d_status opencv_calib3d_solve_ap3p_hypotheses(
         }
         const cv::Mat camera = camera_matrix(*intrinsics);
         const cv::Mat coefficients = distortion_vector(*distortion);
+        // Inspection only. solveP3P below still receives the original pixels.
+        cv::Mat normalized;
+        cv::undistortPoints(image_input, normalized, camera, coefficients);
+        require(normalized.dims == 2 && normalized.type() == CV_64FC2 &&
+                normalized.rows == 3 && normalized.cols == 1,
+                "native undistortion did not return 3x1 Float64 C2");
+        double rays[3][2];
+        for (int i = 0; i < 3; ++i) {
+            const cv::Vec2d ray = normalized.at<cv::Vec2d>(i, 0);
+            require(std::isfinite(ray[0]) && std::isfinite(ray[1]),
+                    "native undistorted AP3P ray is nonfinite");
+            rays[i][0] = ray[0];
+            rays[i][1] = ray[1];
+        }
+        require(opencv_calib3d_detail::ap3p_bearings_admissible(rays),
+                "AP3P undistorted bearings are singular or unrepresentable");
         std::vector<cv::Mat> rotations, translations;
         checkpoint(50);
         int count = cv::solveP3P(object_input, image_input, camera, coefficients,

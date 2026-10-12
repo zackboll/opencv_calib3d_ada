@@ -1,4 +1,5 @@
 #include "opencv_calib3d_shim.h"
+#include "pnp_profile.hpp"
 #include "opencv_core_shim.h"
 #include "opencv_core_module_bridge.hpp"
 #include "homography_profile.hpp"
@@ -1376,7 +1377,13 @@ void ap3p_boundary() {
     auto objects = matrix(3, 1, OPENCV_CORE_DEPTH_FLOAT64, 3);
     auto images = matrix(3, 1, OPENCV_CORE_DEPTH_FLOAT64, 2);
     auto prepare = [&](const opencv_calib3d_distortion5 &coefficients) {
-        cv::Mat rvec, camera = (cv::Mat_<double>(3, 3) << k.focal_x, 0, k.center_x, 0, k.focal_y, k.center_y, 0, 0, 1);
+        cv::Mat rvec;
+        cv::Mat camera = cv::Mat::zeros(3, 3, CV_64FC1);
+        camera.at<double>(0, 0) = k.focal_x;
+        camera.at<double>(0, 2) = k.center_x;
+        camera.at<double>(1, 1) = k.focal_y;
+        camera.at<double>(1, 2) = k.center_y;
+        camera.at<double>(2, 2) = 1.0;
         cv::Mat distortion(5, 1, CV_64F);
         distortion.at<double>(0) = coefficients.k1; distortion.at<double>(1) = coefficients.k2;
         distortion.at<double>(2) = coefficients.p1; distortion.at<double>(3) = coefficients.p2;
@@ -1504,6 +1511,38 @@ void ap3p_boundary() {
     prepare(none);
     check(opencv_calib3d_solve_ap3p_hypotheses(objects.get(), images.get(), &k, &none, &strided) == 0 && strided.count >= 1,
           "valid AP3P recovers after invalid calls");
+    const opencv_calib3d_distortion5 radial{0.2, 0, 0, 0, 0};
+    const double normalized_distorted[3][2] = {{-0.55, 0.55}, {0.0, 0.525}, {0.55, 0.55}};
+    for (int i = 0; i < 3; ++i) {
+        output(objects.get()).at<cv::Vec3d>(i, 0) = cv::Vec3d(i == 0 ? 0.0 : (i == 1 ? 1.0 : -0.4),
+                                                              i == 2 ? 0.8 : (i == 1 ? 0.2 : 0.0), 3.0 + i);
+        output(images.get()).at<cv::Vec2d>(i, 0) = cv::Vec2d(k.focal_x * normalized_distorted[i][0] + k.center_x,
+                                                             k.focal_y * normalized_distorted[i][1] + k.center_y);
+    }
+    cv::Mat inspection(3, 1, CV_64FC2), recovered_rays;
+    for (int i = 0; i < 3; ++i) inspection.at<cv::Vec2d>(i, 0) = output(images.get()).at<cv::Vec2d>(i, 0);
+    cv::Mat radial_camera = cv::Mat::eye(3, 3, CV_64F), radial_distortion(5, 1, CV_64F, cv::Scalar(0));
+    radial_camera.at<double>(0, 0) = k.focal_x; radial_camera.at<double>(1, 1) = k.focal_y;
+    radial_camera.at<double>(0, 2) = k.center_x; radial_camera.at<double>(1, 2) = k.center_y;
+    radial_distortion.at<double>(0) = 0.2;
+    cv::undistortPoints(inspection, recovered_rays, radial_camera, radial_distortion);
+    double recovered[3][2];
+    for (int i = 0; i < 3; ++i) {
+        recovered[i][0] = recovered_rays.at<cv::Vec2d>(i, 0)[0];
+        recovered[i][1] = recovered_rays.at<cv::Vec2d>(i, 0)[1];
+    }
+    const double ideal[3][2] = {{-0.5, 0.5}, {0.0, 0.5}, {0.5, 0.5}};
+    double recovery = 0;
+    for (int i = 0; i < 3; ++i)
+        recovery = opencv_calib3d_detail::larger(recovery, std::hypot(recovered[i][0] - ideal[i][0], recovered[i][1] - ideal[i][1]));
+    std::cout << "AP3P undistort recovery error=" << recovery << "\n";
+    check(opencv_calib3d_detail::ap3p_bearings_admissible(normalized_distorted) &&
+          !opencv_calib3d_detail::ap3p_bearings_admissible(ideal),
+          "distorted pixels are not the native AP3P rays");
+    opencv_calib3d_ap3p_hypotheses radial_result{};
+    check(opencv_calib3d_solve_ap3p_hypotheses(objects.get(), images.get(), &k, &radial, &radial_result) == 0 &&
+          radial_result.count >= 1 && radial_result.count <= 4,
+          "near-coplanar recovered rays remain admissible");
 #ifdef OPENCV_CALIB3D_TEST_HOOKS
     for (int stage = 50; stage <= 53; ++stage) for (int kind = 1; kind <= 5; ++kind) {
         opencv_calib3d_ap3p_hypotheses dirty{99, {{9, 9, 9, 9, 9, 9}, {8, 8, 8, 8, 8, 8},

@@ -106,7 +106,9 @@ def main() -> None:
           "refinement must retain the common solvePnP path")
     check("cv::SOLVEPNP_AP3P" in cpp and "opencv_calib3d_solve_ap3p_hypotheses" in declared,
           "missing fixed AP3P hypothesis ABI")
-    check("ap3p_admissible" in (ROOT / "cpp/pnp_profile.hpp").read_text(),
+    check("ap3p_world_admissible" in (ROOT / "cpp/pnp_profile.hpp").read_text() and
+          "ap3p_bearings_admissible" in (ROOT / "cpp/pnp_profile.hpp").read_text() and
+          "cv::undistortPoints" in cpp,
           "missing AP3P source-derived admissibility profile")
 
     configure = (ROOT / "scripts/configure_opencv.sh").read_text()
