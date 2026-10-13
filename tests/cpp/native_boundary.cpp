@@ -31,6 +31,7 @@ extern "C" int opencv_calib3d_test_triangulation_live(void);
 extern "C" void opencv_calib3d_test_planar_control(int);
 extern "C" void opencv_calib3d_test_visibility_control(int);
 extern "C" void opencv_calib3d_test_ap3p_control(int);
+extern "C" void opencv_calib3d_test_correction_control(int);
 #endif
 
 namespace {
@@ -1713,11 +1714,256 @@ void compose_rejections() {
 #endif
 }
 
+namespace correction_support {
+using opts = opencv_calib3d_correction_options;
+// Explicit test policy for well-conditioned fixtures (example choice, not a default).
+const opts policy{1e-3, 1e-9, 1e-12, 1e-9, 1e-9, 1e-9};
+const opencv_calib3d_fundamental rect{0, 0, 0, 0, 0, -1, 0, 1, 0};
+Mat points(std::initializer_list<cv::Vec2d> values) {
+    auto m = matrix(static_cast<int>(values.size()), 1, OPENCV_CORE_DEPTH_FLOAT64, 2);
+    int i = 0;
+    for (const auto &v : values) { for (int k = 0; k < 2; ++k) output(m.get()).at<cv::Vec2d>(i, 0)[k] = v[k]; ++i; }
+    return m;
+}
+bool sentinel(opencv_core_mat_handle *h) {
+    const cv::Mat &m = output(h);
+    return m.rows == 1 && m.cols == 1 && m.type() == CV_64FC1 && m.at<double>(0, 0) == 4242;
+}
+void reset(opencv_core_mat_handle *h) { output(h) = cv::Mat(1, 1, CV_64FC1, cv::Scalar(4242)); }
+double near(const cv::Vec2d &a, double x, double y) { return std::max(std::abs(a[0] - x), std::abs(a[1] - y)); }
+} // namespace correction_support
+
+void correction_boundary() {
+    using namespace correction_support;
+    // Analytic rectified oracle on REAL strided Core Regions.
+    auto first_parent = matrix(3, 2, OPENCV_CORE_DEPTH_FLOAT64, 2);
+    auto second_parent = matrix(3, 2, OPENCV_CORE_DEPTH_FLOAT64, 2);
+    opencv_core_mat_handle *fraw = nullptr, *sraw = nullptr;
+    check(opencv_core_mat_region(first_parent.get(), 1, 0, 1, 3, &fraw) == 0 &&
+          opencv_core_mat_region(second_parent.get(), 1, 0, 1, 3, &sraw) == 0, "correction Regions");
+    Mat first(fraw, opencv_core_mat_destroy), second(sraw, opencv_core_mat_destroy);
+    check(!output(fraw).isContinuous() && !output(sraw).isContinuous(), "correction inputs strided");
+    const double in1[3][2] = {{100, 20}, {300, 40}, {-50, 7}}, in2[3][2] = {{90, 24}, {250, 30}, {-60, -3}};
+    for (int i = 0; i < 3; ++i) for (int k = 0; k < 2; ++k) {
+        output(fraw).at<cv::Vec2d>(i, 0)[k] = in1[i][k];
+        output(sraw).at<cv::Vec2d>(i, 0)[k] = in2[i][k];
+    }
+    const cv::Mat saved1 = output(fraw).clone(), saved2 = output(sraw).clone();
+    auto out = matrix(1, 1, OPENCV_CORE_DEPTH_FLOAT64, 1);
+    const double expect[3] = {22, 35, 2};
+    for (double scale : {1., -1., 2., .5, 1e-100, 1e-40, 1e40, 1e100, 1e-300, 1e300}) {
+        const opencv_calib3d_fundamental f{0, 0, 0, 0, 0, -scale, 0, scale, 0};
+        reset(out.get());
+        check(opencv_calib3d_correct_matches(&f, fraw, sraw, &policy, out.get()) == 0, "rectified scale accepted");
+        const cv::Mat &r = output(out.get());
+        check(r.rows == 3 && r.cols == 2 && r.type() == CV_64FC2, "Nx2 Float64 C2 result");
+        for (int i = 0; i < 3; ++i)
+            check(near(r.at<cv::Vec2d>(i, 0), in1[i][0], expect[i]) < 1e-12 &&
+                  near(r.at<cv::Vec2d>(i, 1), in2[i][0], expect[i]) < 1e-12,
+                  "independent rectified midpoint oracle at every scale");
+    }
+    check(cv::norm(saved1, output(fraw), cv::NORM_INF) == 0 && cv::norm(saved2, output(sraw), cv::NORM_INF) == 0,
+          "correction inputs unchanged");
+    // Vertical rectified geometry: corrected x is the midpoint.
+    {
+        const opencv_calib3d_fundamental vert{0, 0, 1, 0, 0, 0, -1, 0, 0};
+        auto a = points({{20, 100}, {5, 5}}), b = points({{24, 90}, {9, 40}});
+        check(opencv_calib3d_correct_matches(&vert, a.get(), b.get(), &policy, out.get()) == 0, "vertical");
+        const cv::Mat &r = output(out.get());
+        check(near(r.at<cv::Vec2d>(0, 0), 22, 100) < 1e-12 && near(r.at<cv::Vec2d>(1, 1), 7, 40) < 1e-12,
+              "vertical analytic oracle");
+    }
+    // Typed empty: valid, no native call; still validates F/options/SVD.
+    {
+        auto e1 = matrix(0, 1, OPENCV_CORE_DEPTH_FLOAT64, 2), e2 = matrix(0, 1, OPENCV_CORE_DEPTH_FLOAT64, 2);
+        reset(out.get());
+        check(opencv_calib3d_correct_matches(&rect, e1.get(), e2.get(), &policy, out.get()) == 0 &&
+              output(out.get()).rows == 0 && output(out.get()).cols == 2 &&
+              output(out.get()).type() == CV_64FC2, "typed empty 0x2 result");
+        const opencv_calib3d_fundamental zero{};
+        reset(out.get());
+        check(opencv_calib3d_correct_matches(&zero, e1.get(), e2.get(), &policy, out.get()) == 1 &&
+              sentinel(out.get()), "invalid F never becomes empty success");
+        const opencv_calib3d_fundamental rank1{1, 0, 0, 0, 0, 0, 0, 0, 0};
+        check(opencv_calib3d_correct_matches(&rank1, e1.get(), e2.get(), &policy, out.get()) == 1 &&
+              sentinel(out.get()), "empty batch still enforces SVD policy");
+        opts bad = policy; bad.relative_displacement_excess = 2;
+        check(opencv_calib3d_correct_matches(&rect, e1.get(), e2.get(), &bad, out.get()) == 1 &&
+              sentinel(out.get()), "empty batch still validates options");
+        auto one = points({{1, 2}});
+        check(opencv_calib3d_correct_matches(&rect, e1.get(), one.get(), &policy, out.get()) == 1 &&
+              sentinel(out.get()), "mismatched empty/nonempty");
+    }
+    // Every rejection: nonzero status, caller output untouched, inputs untouched.
+    const auto rejected = [&](const opencv_calib3d_fundamental *f, const opencv_core_mat_handle *a,
+                              const opencv_core_mat_handle *b, const opts *o, const char *needle,
+                              const char *what) {
+        reset(out.get());
+        check(opencv_calib3d_correct_matches(f, a, b, o, out.get()) != 0 && sentinel(out.get()), what);
+        check(std::string(opencv_calib3d_last_error()).find(needle) != std::string::npos, what);
+    };
+    rejected(nullptr, fraw, sraw, &policy, "null", "null F");
+    rejected(&rect, nullptr, sraw, &policy, "null", "null first");
+    rejected(&rect, fraw, nullptr, &policy, "null", "null second");
+    rejected(&rect, fraw, sraw, nullptr, "null", "null options");
+    check(opencv_calib3d_correct_matches(&rect, fraw, sraw, &policy, nullptr) == 1, "null output");
+    for (int field = 0; field < 9; ++field) {
+        double values[9] = {0, 0, 0, 0, 0, -1, 0, 1, 0};
+        values[field] = field % 2 ? INFINITY : NAN;
+        const opencv_calib3d_fundamental bad{values[0], values[1], values[2], values[3], values[4],
+                                             values[5], values[6], values[7], values[8]};
+        rejected(&bad, fraw, sraw, &policy, "finite", "nonfinite F coefficient");
+    }
+    const opencv_calib3d_fundamental zero{}, under{0, 0, 0, 0, 0, -1e300, 0, 1e300, 4e-300};
+    rejected(&zero, fraw, sraw, &policy, "zero", "zero F");
+    rejected(&under, fraw, sraw, &policy, "underflow", "normalization underflow");
+    for (int field = 0; field < 6; ++field) {
+        opts bad = policy;
+        double *f[] = {&bad.minimum_second_singular_ratio, &bad.maximum_third_singular_ratio,
+                       &bad.minimum_epipolar_line_ratio, &bad.maximum_corrected_error_pixels,
+                       &bad.absolute_displacement_excess_pixels, &bad.relative_displacement_excess};
+        *f[field] = NAN;
+        rejected(&rect, fraw, sraw, &bad, "options", "nonfinite option");
+        *f[field] = -1;
+        rejected(&rect, fraw, sraw, &bad, "options", "negative option");
+    }
+    // Schema: wrong depth/channels/shape/N-D and mismatched counts.
+    for (int channels : {1, 2, 3}) {
+        auto bad = matrix(3, 1, channels == 2 ? OPENCV_CORE_DEPTH_FLOAT32 : OPENCV_CORE_DEPTH_FLOAT64, channels);
+        rejected(&rect, bad.get(), sraw, &policy, "Nx1", "wrong first type");
+        rejected(&rect, fraw, bad.get(), &policy, "Nx1", "wrong second type");
+    }
+    auto row = matrix(1, 3, OPENCV_CORE_DEPTH_FLOAT64, 2), fewer = matrix(2, 1, OPENCV_CORE_DEPTH_FLOAT64, 2);
+    rejected(&rect, row.get(), sraw, &policy, "Nx1", "1xN public input rejected");
+    rejected(&rect, fraw, fewer.get(), &policy, "counts", "count mismatch");
+    auto nd = matrix(2, 1, OPENCV_CORE_DEPTH_FLOAT64, 2);
+    const int sizes[] = {3, 1, 1};
+    output(nd.get()) = cv::Mat(3, sizes, CV_64FC2, cv::Scalar(0, 0));
+    rejected(&rect, nd.get(), sraw, &policy, "Nx1", "N-D input");
+    {
+        auto nan_point = points({{100, 20}, {NAN, 1}, {3, 4}});
+        rejected(&rect, nan_point.get(), sraw, &policy, "finite", "nonfinite point");
+    }
+    // Aliasing: direct handle aliasing rejected; shared backing storage is safe
+    // because inputs are snapshotted and publication rebinds only the output header.
+    check(opencv_calib3d_correct_matches(&rect, fraw, sraw, &policy, fraw) != 0 &&
+          cv::norm(saved1, output(fraw), cv::NORM_INF) == 0, "output==first rejected, input intact");
+    check(opencv_calib3d_correct_matches(&rect, fraw, sraw, &policy, sraw) != 0 &&
+          cv::norm(saved2, output(sraw), cv::NORM_INF) == 0, "output==second rejected, input intact");
+    {
+        opencv_core_mat_handle *whole = nullptr;
+        check(opencv_core_mat_region(first_parent.get(), 0, 0, 2, 3, &whole) == 0, "shared-storage handle");
+        Mat shared(whole, opencv_core_mat_destroy);
+        check(opencv_calib3d_correct_matches(&rect, fraw, sraw, &policy, whole) == 0 &&
+              output(whole).rows == 3 && output(whole).cols == 2 &&
+              cv::norm(saved1, output(fraw), cv::NORM_INF) == 0,
+              "distinct handle sharing input storage: snapshot-before-publication");
+    }
+    std::cout << "PASS: correct_matches rectified/vertical oracles at 10 F scales, strided Regions, "
+                 "typed empty, nulls, nonfinite, schema, options, aliasing\n";
+    // Research failure classes through the ACTUAL shim. Disposition by reason text.
+    const auto outcome = [&](const opencv_calib3d_fundamental &f, cv::Vec2d p, cv::Vec2d q,
+                             const opts &o) {
+        auto a = points({p}), b = points({q});
+        reset(out.get());
+        const int status = opencv_calib3d_correct_matches(&f, a.get(), b.get(), &o, out.get());
+        if (status == 0) return std::string("ACCEPTED");
+        check(sentinel(out.get()), "rejection leaves caller output untouched");
+        return std::string(opencv_calib3d_last_error());
+    };
+    const auto has = [](const std::string &s, const char *n) { return s.find(n) != std::string::npos; };
+    // Rotated rank-1 (research with_sv(1,0,0)) and near-rank-1 (1e-6) fixtures.
+    const opencv_calib3d_fundamental rank1{0.45419899723237056, 0.14050021438031315, 0.59912146691828327,
+        0.38256653778680805, 0.11834169802510941, 0.50463305007126513, 0, 0, 0};
+    // Valid but deliberately permissive policy (max third < min second) so the
+    // native call runs and the OUTPUT gate, not conditioning, decides.
+    // The documented rule max-third < min-second forces a policy admitting
+    // near-rank-one F to also demand a near-zero third ratio.
+    const opts permissive{1e-20, 1e-21, 0, 1e3, 1e-9, 1e-9};
+    const opts near_rank_one{1e-7, 1e-15, 0, 1e3, 1e-9, 1e-9};
+    check(has(outcome(rank1, {-30, 55}, {12, 70}, policy), "second singular ratio"),
+          "rank-one F REJECTED_CONDITIONING under policy");
+    check(has(outcome(rank1, {-30, 55}, {12, 70}, permissive), "one-sided"),
+          "rank-one native output exceeding feasible bound REJECTED_NATIVE_OUTPUT");
+    const opencv_calib3d_fundamental near_rank1{0.45419917258335846, 0.1404996475182396, 0.59912146691828327,
+        0.38256632960277992, 0.1183423710274762, 0.50463305007126513, -1.1508098899676867e-07,
+        3.7202555194225961e-07, 0};
+    check(has(outcome(near_rank1, {-30, 55}, {12, 70}, near_rank_one), "one-sided"),
+          "sv2/sv1=1e-6 native displacement above bound rejected");
+    // Exact singular-ratio boundaries (diagonal SVD is exact): inclusive comparisons.
+    const opencv_calib3d_fundamental d2{1, 0, 0, 0, 1e-3, 0, 0, 0, 0}, d3{1, 0, 0, 0, 1, 0, 0, 0, 0x1p-30};
+    opts at = policy; at.minimum_second_singular_ratio = 1e-3;
+    check(outcome(d2, {100, 20}, {90, 24}, at) == "ACCEPTED", "s2/s1 exactly at minimum accepted");
+    at.minimum_second_singular_ratio = std::nextafter(1e-3, 1.);
+    check(has(outcome(d2, {100, 20}, {90, 24}, at), "second singular ratio"), "one ulp above rejected");
+    at = policy; at.maximum_third_singular_ratio = 0x1p-30;
+    check(outcome(d3, {100, 20}, {90, 24}, at) == "ACCEPTED", "s3/s1 exactly at maximum accepted");
+    at.maximum_third_singular_ratio = std::nextafter(0x1p-30, 0.);
+    check(has(outcome(d3, {100, 20}, {90, 24}, at), "third singular ratio"), "one ulp below rejected");
+    const opencv_calib3d_fundamental full{1, 2, 3, 4, 5, 6, 7, 8, 10};
+    check(has(outcome(full, {100, 20}, {90, 24}, policy), "third singular ratio"),
+          "full-rank F outside policy REJECTED_CONDITIONING");
+    // Epipoles of F=[e]x, e=(100,50,1).
+    const opencv_calib3d_fundamental ex{0, -1, 50, 1, 0, -100, -50, 100, 0};
+    check(has(outcome(ex, {100, 50}, {130, 75}, permissive), "undefined"), "exactly at epipole REJECTED_INPUT");
+    opts line = policy; line.minimum_epipolar_line_ratio = 1e-12;
+    check(has(outcome(ex, {100 + 1e-9, 50}, {130, 75}, line), "line quality"),
+          "near epipole below caller line quality REJECTED_CONDITIONING");
+    opts loose = permissive; loose.maximum_corrected_error_pixels = 1e-2;
+    const auto near_epipole = outcome(ex, {100 + 1e-9, 50}, {130, 75}, loose);
+#if CV_VERSION_MAJOR == 4
+    check(has(near_epipole, "one-sided"), "4.x near-epipole nonoptimal result REJECTED_NATIVE_OUTPUT");
+#else
+    check(near_epipole == "ACCEPTED", "5.0 near-epipole result within bound");
+#endif
+    check(outcome(ex, {101, 50}, {130, 75}, line) == "ACCEPTED", "line quality above threshold accepted");
+    // Coordinates: rectified large magnitudes; general-F native limits differ by version.
+    opts any_line = policy; any_line.minimum_epipolar_line_ratio = 0;
+    check(outcome(rect, {1e100, 2e100}, {9e99, 2.4e100}, any_line) == "ACCEPTED", "rectified 1e100 coordinates");
+    check(has(outcome(rect, {1e100, 2e100}, {9e99, 2.4e100}, policy), "line quality"),
+          "line-quality policy is also sensitive to coordinate magnitude");
+    const opencv_calib3d_fundamental general{0.54187449117452635, -0.14293082240506408, 0.59912146691828327,
+        0.27847452372631143, 0.45484288141974499, 0.50463305007126513, -0.057540494498384331,
+        0.18601277597112981, 0};
+    check(outcome(general, {1e3, 2e3}, {9e2, 2.4e3}, policy) == "ACCEPTED", "general F ordinary coordinates");
+    const auto big = outcome(general, {1e15, 2e15}, {9e14, 2.4e15}, policy);
+#if CV_VERSION_MAJOR == 4
+    check(has(big, "nonfinite"), "4.x general-F NaN output REJECTED_NATIVE_OUTPUT");
+#else
+    check(has(big, "corrected epipolar error"), "5.0 general-F large residual REJECTED_NATIVE_OUTPUT");
+#endif
+    check(outcome(rect, {5, 5}, {5, 5}, policy) == "ACCEPTED", "identical correspondence unchanged");
+    std::cout << "PASS: correct_matches research fixtures: rank-one/near-rank-one bound rejection, exact "
+                 "singular-ratio boundaries, epipoles, coordinates (version-specific dispositions)\n";
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+    const char *reasons[] = {"nonfinite", "corrected epipolar error", "one-sided", "schema", "nonfinite"};
+    for (int mode = 1; mode <= 5; ++mode) {
+        opencv_calib3d_test_correction_control(mode);
+        reset(out.get());
+        check(opencv_calib3d_correct_matches(&rect, fraw, sraw, &policy, out.get()) != 0 && sentinel(out.get()) &&
+              has(opencv_calib3d_last_error(), reasons[mode - 1]), "post-native output gate control");
+    }
+    for (int stage = 58; stage <= 61; ++stage)
+        for (int kind = 1; kind <= 5; ++kind) {
+            opencv_calib3d_test_fail(stage, kind);
+            reset(out.get());
+            check(opencv_calib3d_correct_matches(&rect, fraw, sraw, &policy, out.get()) != 0 &&
+                  sentinel(out.get()), "correction injected exception preserves output");
+            check(cv::norm(saved1, output(fraw), cv::NORM_INF) == 0 &&
+                  cv::norm(saved2, output(sraw), cv::NORM_INF) == 0, "correction fault inputs");
+            check(opencv_calib3d_correct_matches(&rect, fraw, sraw, &policy, out.get()) == 0 &&
+                  near(output(out.get()).at<cv::Vec2d>(0, 0), 100, 22) < 1e-12, "correction recovery");
+        }
+    std::cout << "PASS: correct_matches 5 post-native output controls + 20 raw fault injections (58..61)\n";
+#endif
+}
+
 int main() {
     try {
         run();
         compose_boundary();
         compose_rejections();
+        correction_boundary();
         triangulation_boundary();
         planar_boundary();
         visibility_boundary();

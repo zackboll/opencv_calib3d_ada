@@ -133,6 +133,21 @@ package OpenCV.Calib3D.Internal.C_API is
      with Import, Convention => C,
        External_Name => "opencv_calib3d_validate_fundamental_options";
 
+   type C_Correction_Options is record
+      Minimum_Second_Singular_Ratio       : Interfaces.C.double;
+      Maximum_Third_Singular_Ratio        : Interfaces.C.double;
+      Minimum_Epipolar_Line_Ratio         : Interfaces.C.double;
+      Maximum_Corrected_Error_Pixels      : Interfaces.C.double;
+      Absolute_Displacement_Excess_Pixels : Interfaces.C.double;
+      Relative_Displacement_Excess        : Interfaces.C.double;
+   end record with Convention => C;
+   function Correct_Matches
+     (Matrix  : access constant C_Fundamental;
+      First, Second : OpenCV.Core.Module_Interop.Input_Mat_Handle;
+      Options : access constant C_Correction_Options;
+      Corrected_Pairs : OpenCV.Core.Module_Interop.Output_Mat_Handle) return Status
+     with Import, Convention => C, External_Name => "opencv_calib3d_correct_matches";
+
    type C_Camera_Intrinsics is record
       Focal_X, Focal_Y, Center_X, Center_Y : Interfaces.C.double;
    end record with Convention => C;

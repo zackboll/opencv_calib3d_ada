@@ -234,3 +234,28 @@ void calib3d_test_fill_planar(opencv_calib3d_planar_decomposition *v) {
     v->count=4;
     for (int i=0;i<4;++i) v->candidates[i]=(opencv_calib3d_planar_motion){1+i*100,2+i*100,3+i*100,4+i*100,5+i*100,6+i*100,7+i*100,8+i*100,9+i*100,10+i*100,11+i*100,12+i*100,13+i*100,14+i*100,15+i*100};
 }
+
+int32_t calib3d_test_correction_options_layout(int32_t field) {
+    const size_t values[] = {sizeof(opencv_calib3d_correction_options),
+        _Alignof(opencv_calib3d_correction_options),
+        offsetof(opencv_calib3d_correction_options,minimum_second_singular_ratio),
+        offsetof(opencv_calib3d_correction_options,maximum_third_singular_ratio),
+        offsetof(opencv_calib3d_correction_options,minimum_epipolar_line_ratio),
+        offsetof(opencv_calib3d_correction_options,maximum_corrected_error_pixels),
+        offsetof(opencv_calib3d_correction_options,absolute_displacement_excess_pixels),
+        offsetof(opencv_calib3d_correction_options,relative_displacement_excess)};
+    return field >= 0 && field < 8 ? (int32_t)values[field] : -1;
+}
+void calib3d_test_fill_correction_options(opencv_calib3d_correction_options *v) {
+    *v = (opencv_calib3d_correction_options){0.125, 0.0625, 0.25, 3.5, 4.75, 0.5};
+}
+/* Ada-to-C interchange: returns 1 only if every field has the distinct value. */
+int32_t calib3d_test_read_correction_options(const opencv_calib3d_correction_options *v) {
+    return v->minimum_second_singular_ratio == 0.75 && v->maximum_third_singular_ratio == 0.375 &&
+           v->minimum_epipolar_line_ratio == 0.03125 && v->maximum_corrected_error_pixels == 6.5 &&
+           v->absolute_displacement_excess_pixels == 7.25 && v->relative_displacement_excess == 0.875;
+}
+int32_t calib3d_test_read_fundamental(const opencv_calib3d_fundamental *v) {
+    return v->f00 == 11 && v->f01 == 12 && v->f02 == 13 && v->f10 == 14 && v->f11 == 15 &&
+           v->f12 == 16 && v->f20 == 17 && v->f21 == 18 && v->f22 == 19;
+}

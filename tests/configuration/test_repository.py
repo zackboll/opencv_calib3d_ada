@@ -160,6 +160,24 @@ class RepositoryTests(unittest.TestCase):
         self.assertIn("X_second = R * X_first + lambda * t_hat", text)
         self.assertIn("normalize(-R^T*t_hat)", text)
 
+    def test_epipolar_correction_is_native_and_guarded(self):
+        cpp = (ROOT / "cpp/opencv_calib3d_shim.cpp").read_text()
+        start = cpp.index("opencv_calib3d_status opencv_calib3d_correct_matches(")
+        body = cpp[start:]
+        self.assertEqual(body.count("cv::correctMatches("), 1)
+        self.assertNotIn("solvePoly", cpp)
+        self.assertIn("cv::SVD::compute(normalized, singular, cv::SVD::NO_UV)", body)
+        self.assertLess(body.index("cv::correctMatches("), body.index("output = std::move(result)"))
+        ada = (ROOT / "src/opencv-calib3d.ads").read_text()
+        record = ada[ada.index("type Epipolar_Correction_Options is record"):]
+        record = record[:record.index("end record;")]
+        self.assertNotIn(":=", record, "correction options must have no library defaults")
+        contract = (ROOT / "docs/epipolar-correction-contract.md").read_text()
+        self.assertIn("necessary condition", contract)
+        self.assertIn("not a global-optimality certificate", contract)
+        review = (ROOT / "docs/epipolar-correction-source-review.md").read_text()
+        self.assertIn("SAFETY_GATE_NOT_ESTABLISHED", review)
+
     def test_topology_rejects_extra_windows_branch(self):
         cross = (ROOT / ".github/workflows/cross-platform.yml").read_text()
         windows = (ROOT / ".github/workflows/windows-post-merge.yml").read_text()

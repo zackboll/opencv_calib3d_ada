@@ -33,6 +33,62 @@ package OpenCV.Calib3D is
    function Maximum_Epipolar_Error
      (Matrix : Fundamental_Matrix; First_Point, Second_Point : Image_Point)
       return Epipolar_Error_Result;
+   --  Guarded native cv::correctMatches policy. EVERY field is caller-selected;
+   --  there is deliberately no default. With s1>=s2>=s3 the measured singular
+   --  values of F divided by its maximum |coefficient|:
+   --    s2/s1 >= Minimum_Second_Singular_Ratio   (0 < value <= 1)
+   --    s3/s1 <= Maximum_Third_Singular_Ratio    (0 <= value < 1, < minimum)
+   --  Input line quality (dimensionless, 0..1, scale invariant) is
+   --    min(|(F p1).xy|/(||F||_F ||p1||), |(F^T p2).xy|/(||F||_F ||p2||)),
+   --  p=(x,y,1), and must be >= Minimum_Epipolar_Line_Ratio (0..1).
+   --  Corrected Maximum_Epipolar_Error must be <= Maximum_Corrected_Error_Pixels.
+   --  Displacement D must satisfy D <= Bound*(1+Relative)+Absolute, Relative in
+   --  0..1, Absolute >= 0. These are numerical screens; no combination is a
+   --  guarantee of global optimality.
+   type Epipolar_Correction_Options is record
+      Minimum_Second_Singular_Ratio       : OpenCV.Float64_Value;
+      Maximum_Third_Singular_Ratio        : OpenCV.Float64_Value;
+      Minimum_Epipolar_Line_Ratio         : OpenCV.Float64_Value;
+      Maximum_Corrected_Error_Pixels      : OpenCV.Float64_Value;
+      Absolute_Displacement_Excess_Pixels : OpenCV.Float64_Value;
+      Relative_Displacement_Excess        : OpenCV.Float64_Value;
+   end record;
+
+   --  Measured geometric diagnostics, NOT an optimality certificate.
+   --  Errors are Maximum_Epipolar_Error values against the supplied F.
+   --  Total_Displacement_Pixels is the four-dimensional Euclidean correction
+   --  distance; One_Sided_Bound_Pixels = min(d1,d2) of the ORIGINAL pair.
+   type Epipolar_Correction_Diagnostic is record
+      Original_Error_Pixels     : OpenCV.Float64_Value := 0.0;
+      Corrected_Error_Pixels    : OpenCV.Float64_Value := 0.0;
+      Total_Displacement_Pixels : OpenCV.Float64_Value := 0.0;
+      One_Sided_Bound_Pixels    : OpenCV.Float64_Value := 0.0;
+   end record;
+   type Epipolar_Correction_Diagnostic_Array is
+     array (Positive range <>) of Epipolar_Correction_Diagnostic;
+
+   type Corrected_Epipolar_Matches (Count : Natural) is record
+      First_Points  : Image_Point_Array (1 .. Count);
+      Second_Points : Image_Point_Array (1 .. Count);
+      Diagnostics   : Epipolar_Correction_Diagnostic_Array (1 .. Count);
+   end record;
+
+   --  Native OpenCV cv::correctMatches (Hartley-Sturm) behind a guarded,
+   --  all-or-error contract. Does not estimate F, run RANSAC, undistort, or
+   --  select correspondences: F and the points must share one pixel domain.
+   --  Sources are paired by position (lower bounds may differ); every result
+   --  array is one-based. Invalid input/options, a policy rejection, nonfinite
+   --  or inconsistent native output, or any failed check raises OpenCV_Error and
+   --  publishes nothing. Success means the explicitly checked conditions held;
+   --  it does NOT certify the global optimum, 3-D accuracy, correspondence
+   --  identity, pose, metric scale or navigation quality.
+   function Correct_Epipolar_Matches
+     (Matrix        : Fundamental_Matrix;
+      First_Points  : Image_Point_Array;
+      Second_Points : Image_Point_Array;
+      Options       : Epipolar_Correction_Options)
+      return Corrected_Epipolar_Matches;
+
    type Fundamental_RANSAC_Options is record
       Epipolar_Threshold_Pixels : OpenCV.Float64_Value := 3.0;
       Confidence               : OpenCV.Float64_Value := 0.99;

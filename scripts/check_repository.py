@@ -56,8 +56,8 @@ def main() -> None:
 
     tests = (ROOT / "tests/src/calib3d_tests.adb").read_text()
     registrations = re.findall(r"Result\.Add_Test\s*\(Caller\.Create", tests)
-    check(len(registrations) == 115, "update documented AUnit inventory when changing tests")
-    check(len(declared) == 47, "update private ABI inventory when changing exports")
+    check(len(registrations) == 128, "update documented AUnit inventory when changing tests")
+    check(len(declared) == 48, "update private ABI inventory when changing exports")
     layout = (ROOT / "tests/layout/calib3d_layout.c").read_text()
     check("calib3d_test_triangulation_layout" in layout and
           "calib3d_test_fill_triangulation" in tests and
@@ -78,7 +78,7 @@ def main() -> None:
     helpers = {p.name for p in (ROOT / "tests/cpp").glob("*test.*")}
     check(helpers == {"header_test.c", "profile_test.cpp", "homography_profile_test.cpp",
                       "fundamental_profile_test.cpp", "essential_profile_test.cpp",
-                      "triangulation_profile_test.cpp"}, "update helper inventory")
+                      "triangulation_profile_test.cpp", "correction_profile_test.cpp"}, "update helper inventory")
     check("count >= 6" in cpp and "cv::findEssentialMat(first,second,identity,cv::RANSAC" in cpp,
           "Essential requires six for true subset RANSAC and identity intrinsics")
     check(re.search(r"#if CV_VERSION_MAJOR >= 5\s+//[^#]+"
@@ -110,6 +110,20 @@ def main() -> None:
           "ap3p_bearings_admissible" in (ROOT / "cpp/pnp_profile.hpp").read_text() and
           "cv::undistortPoints" in cpp,
           "missing AP3P source-derived admissibility profile")
+
+    # Task 015: native cv::correctMatches is the only correction algorithm.
+    start = cpp.index("opencv_calib3d_status opencv_calib3d_correct_matches(")
+    correction = cpp[start:]
+    check(correction.count("cv::correctMatches(") == 1 and "solvePoly" not in cpp,
+          "correction must call native correctMatches once and never solve polynomials")
+    check("opencv_calib3d_correct_matches" in declared, "missing guarded correction ABI")
+    profile = (ROOT / "cpp/correction_profile.hpp").read_text()
+    check("in[i] != 0 && std::abs(n[i]) < DBL_MIN" in profile,
+          "F normalization must reject silent coefficient underflow")
+    check("correctMatches" not in profile and "solvePoly" not in profile,
+          "correction profile must not contain a correction algorithm")
+    for name in ("58", "59", "60", "61"):
+        check(f"checkpoint({name})" in correction, f"missing correction checkpoint {name}")
 
     configure = (ROOT / "scripts/configure_opencv.sh").read_text()
     check("backend=calib3d" in configure and "backend=geometry" in configure,

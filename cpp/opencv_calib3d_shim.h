@@ -176,6 +176,32 @@ typedef struct opencv_calib3d_fundamental_options {
     double confidence;
 } opencv_calib3d_fundamental_options;
 
+/* Guarded native cv::correctMatches policy. All six values are caller-selected;
+ * there is no library default. With singular values s1>=s2>=s3 of the
+ * max-|coefficient|-normalized F: accept s2/s1 >= minimum_second_singular_ratio
+ * and s3/s1 <= maximum_third_singular_ratio. See epipolar-correction-contract.md. */
+typedef struct opencv_calib3d_correction_options {
+    double minimum_second_singular_ratio;
+    double maximum_third_singular_ratio;
+    double minimum_epipolar_line_ratio;
+    double maximum_corrected_error_pixels;
+    double absolute_displacement_excess_pixels;
+    double relative_displacement_excess;
+} opencv_calib3d_correction_options;
+
+/* Inputs: typed Nx1 CV_64FC2 (typed 0x1 allowed; strided Regions are snapshotted).
+ * Output: Nx2 CV_64FC2, column 0 corrected first point, column 1 corrected second
+ * point; typed 0x2 for an empty batch. Options, F normalization and the SVD policy
+ * are validated even for empty batches. The output handle must not alias either
+ * input. All-or-error: on any failure the output Mat is left unmodified.
+ * Success is NOT a global-optimality certificate. */
+OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_correct_matches(
+    const opencv_calib3d_fundamental *fundamental,
+    const opencv_core_mat_handle *first_points,
+    const opencv_core_mat_handle *second_points,
+    const opencv_calib3d_correction_options *options,
+    opencv_core_mat_handle *corrected_pairs);
+
 /* Shared exact native arithmetic profile, also used for Ada preflight. */
 OPENCV_CALIB3D_API opencv_calib3d_status opencv_calib3d_validate_fundamental_options(
     const opencv_calib3d_fundamental_options *options);
