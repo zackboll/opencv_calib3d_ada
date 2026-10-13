@@ -1,7 +1,19 @@
 # Epipolar correction (`cv::correctMatches`) — source review and safety research
 
-Status: RESEARCH ONLY. No production binding exists. Disposition: **SAFETY_GATE_NOT_ESTABLISHED**
-(pending independent review; see "Missing proof obligations").
+Status: the guarded native `cv::correctMatches` binding (`Correct_Epipolar_Matches`)
+is **implemented** by Task 015 under the contract in
+[`epipolar-correction-contract.md`](epipolar-correction-contract.md). See
+"Revised decision: guarded-binding contract" below.
+
+Original research disposition, retained for the stronger requirement of
+**universal numerical optimality**: **SAFETY_GATE_NOT_ESTABLISHED** (see "Missing
+proof obligations"). That disposition is unchanged. Guarded success is **not** a
+global-optimality certificate. The one-sided displacement bound is a necessary
+condition only.
+
+The research record below (provenance, native observations, evidence and
+conclusions) is preserved as originally written. At the time of writing, no
+production binding existed.
 
 ## Pinned sources (builds from shallow pinned tags, `WITH_ADE=OFF`, Release, GCC 14.2, C++17)
 

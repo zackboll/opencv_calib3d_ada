@@ -4702,8 +4702,8 @@ package body Calib3D_Tests is
       for I in 1 .. R.Count loop
          declare
             D : Epipolar_Correction_Diagnostic renames R.Diagnostics (I);
-            P1 : constant Image_Point := First (First'First + I - 1);
-            P2 : constant Image_Point := Second (Second'First + I - 1);
+            P1 : constant Image_Point := First (First'First + (I - 1));
+            P2 : constant Image_Point := Second (Second'First + (I - 1));
             Q1 : constant Image_Point := R.First_Points (I);
             Q2 : constant Image_Point := R.Second_Points (I);
             E : constant Epipolar_Error_Result := Maximum_Epipolar_Error (F, Q1, Q2);

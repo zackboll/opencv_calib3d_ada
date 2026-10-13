@@ -29,7 +29,7 @@ procedure Fundamental_Synthetic is
       for I in 1 .. R.Count loop
          declare
             In_Error : constant Epipolar_Error_Result :=
-              Maximum_Epipolar_Error (F, P1 (P1'First + I - 1), P2 (P2'First + I - 1));
+              Maximum_Epipolar_Error (F, P1 (P1'First + (I - 1)), P2 (P2'First + (I - 1)));
          begin
             if In_Error.Defined then
                Max_In := OpenCV.Float64_Value'Max (Max_In, In_Error.Maximum_Error_Pixels);
