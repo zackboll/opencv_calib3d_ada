@@ -1,3 +1,4 @@
+with Ada.Exceptions;
 with Ada.Numerics;
 with Ada.Numerics.Generic_Elementary_Functions;
 with Ada.Text_IO;
@@ -5098,6 +5099,43 @@ package body Calib3D_Tests is
       Assert (Rejected (C_Rect, First, Second (20 .. 23), C_Policy), "mismatched lengths");
    end Correction_Bounds;
 
+   procedure Correction_Upper_Bound (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Regression: production positional indexing must not compute
+      --  'First + I before subtracting 1. A lower bound of Positive'Last makes
+      --  that intermediate overflow. The assertions below index the inputs
+      --  only by their own 'First and never re-derive positions, so they test
+      --  the production expression rather than repeating it.
+      First : constant Image_Point_Array (Positive'Last .. Positive'Last) := [[100.0, 20.0]];
+      Second : constant Image_Point_Array (5 .. 5) := [[90.0, 24.0]];
+      Saved1 : constant Image_Point_Array := First;
+      Saved2 : constant Image_Point_Array := Second;
+   begin
+      declare
+         R : constant Corrected_Epipolar_Matches := Correct_Epipolar_Matches (C_Rect, First, Second, C_Policy);
+      begin
+         Assert (R.Count = 1, "Count = 1");
+         Assert (R.First_Points'First = 1 and then R.First_Points'Last = 1 and then
+                 R.Second_Points'First = 1 and then R.Second_Points'Last = 1 and then
+                 R.Diagnostics'First = 1 and then R.Diagnostics'Last = 1, "all result arrays 1 .. 1");
+         --  Analytic rectified optimum: x unchanged, both y at the midpoint 22.
+         Assert (Near (R.First_Points (1) (0), 100.0, 1.0E-12) and then
+                 Near (R.First_Points (1) (1), 22.0, 1.0E-12) and then
+                 Near (R.Second_Points (1) (0), 90.0, 1.0E-12) and then
+                 Near (R.Second_Points (1) (1), 22.0, 1.0E-12), "analytic midpoint at Positive'Last");
+         Assert (Near (R.Diagnostics (1).Total_Displacement_Pixels, Math.Sqrt (8.0), 1.0E-12) and then
+                 R.Diagnostics (1).One_Sided_Bound_Pixels = 4.0, "diagnostics at Positive'Last");
+      end;
+      Assert (First = Saved1 and then Second = Saved2 and then
+              First'First = Positive'Last and then Second'First = 5, "inputs unchanged");
+   exception
+      when Constraint_Error =>
+         Assert (False, "Constraint_Error escaped Correct_Epipolar_Matches at Positive'Last");
+      when E : OpenCV.OpenCV_Error =>
+         --  Production converts index-arithmetic Constraint_Error into this.
+         Assert (False, "valid Positive'Last batch rejected: " & Ada.Exceptions.Exception_Message (E));
+   end Correction_Upper_Bound;
+
    procedure Correction_Invalid (T : in out Fixture) is
       pragma Unreferenced (T);
       --  Deliberately nonfinite test data (same convention as other invalid tests).
@@ -5340,6 +5378,7 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("epipolar correction nonidentity noisy stereo", Correction_Stereo'Access));
       Result.Add_Test (Caller.Create ("epipolar correction after fundamental RANSAC", Correction_RANSAC'Access));
       Result.Add_Test (Caller.Create ("epipolar correction lower bounds and empty", Correction_Bounds'Access));
+      Result.Add_Test (Caller.Create ("epipolar correction Positive'Last lower bound", Correction_Upper_Bound'Access));
       Result.Add_Test (Caller.Create ("epipolar correction invalid inputs and options", Correction_Invalid'Access));
       Result.Add_Test (Caller.Create ("epipolar correction C/Ada layout and interchange", Correction_Layout'Access));
       return Result;

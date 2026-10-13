@@ -2,12 +2,13 @@
 
 ## Task 015 guarded native epipolar correction
 
-128 registrations preserve all 115 Task 014 cases and add 13 correction cases:
+129 registrations preserve all 115 Task 014 cases and add 14 correction cases:
 horizontal and vertical analytic oracles, F scale/sign/normalization underflow,
 SVD conditioning boundaries, one-sided-bound rejection of research native
 failures, epipoles and line quality, corrected residual policy, coordinate
 magnitudes, nonidentity noisy stereo, fundamental-RANSAC composition, different
-lower bounds and empty input, invalid inputs/options, and C/Ada layout with
+lower bounds and empty input, a `Positive'Last` lower-bound regression for the
+positional index arithmetic, invalid inputs/options, and C/Ada layout with
 bidirectional interchange. Checkpoints 58..61 are exercised by the raw and Ada
 fault runners (20 scenarios each) plus 5 post-native output controls. The private
 ABI is 48. Inventory is not a claim of success; see

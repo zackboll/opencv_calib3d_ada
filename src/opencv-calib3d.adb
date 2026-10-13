@@ -2364,11 +2364,11 @@ package body OpenCV.Calib3D is
             Defined : Boolean;
             D1, D2 : OpenCV.Float64_Value;
             Error : constant Epipolar_Error_Result := Maximum_Epipolar_Error
-              (Normalized, First_Points (First_Points'First + I - 1),
-               Second_Points (Second_Points'First + I - 1));
+              (Normalized, First_Points (First_Points'First + (I - 1)),
+               Second_Points (Second_Points'First + (I - 1)));
          begin
-            Epipolar_Distances (Normalized, First_Points (First_Points'First + I - 1),
-                                Second_Points (Second_Points'First + I - 1), Defined, D1, D2);
+            Epipolar_Distances (Normalized, First_Points (First_Points'First + (I - 1)),
+                                Second_Points (Second_Points'First + (I - 1)), Defined, D1, D2);
             if not Defined or else not Error.Defined then
                raise OpenCV.OpenCV_Error with "Input epipolar line is undefined";
             end if;
@@ -2403,8 +2403,8 @@ package body OpenCV.Calib3D is
       return Result : Corrected_Epipolar_Matches (Count) do
          for I in 1 .. Count loop
             declare
-               P1 : constant Image_Point := First_Points (First_Points'First + I - 1);
-               P2 : constant Image_Point := Second_Points (Second_Points'First + I - 1);
+               P1 : constant Image_Point := First_Points (First_Points'First + (I - 1));
+               P2 : constant Image_Point := Second_Points (Second_Points'First + (I - 1));
                Q1 : constant Image_Point := Vec2_Access.Get (Output, I - 1, 0);
                Q2 : constant Image_Point := Vec2_Access.Get (Output, I - 1, 1);
                Corrected : Epipolar_Error_Result;

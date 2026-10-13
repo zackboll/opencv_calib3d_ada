@@ -17,14 +17,14 @@ from the source-built research libraries in `/tmp/ocv/inst-<version>`, as noted.
 ## Local results (serial)
 
 ```text
-Repository check            PASS: 48 ABI declarations/imports, 128 AUnit registrations
+Repository check            PASS: 48 ABI declarations/imports, 129 AUnit registrations
 Python configuration        25 tests OK
 Profile helpers             4 C++ profile programs PASS (incl. correction_profile_test) + header C test
 Shell syntax                7 scripts PASS
 Production build            PASS (-Werror, -gnatwe)
-AUnit                       registered 128, run 128, passed 128,
-                            failed assertions 0, unexpected errors 0 (115 + 13 new)
-alr test                    PASS (128/128; native production/fault boundary PASS)
+AUnit                       registered 129, run 129, passed 129,
+                            failed assertions 0, unexpected errors 0 (115 + 14 new)
+alr test                    PASS (129/129; native production/fault boundary PASS)
 Raw native boundary         production + fault-injection PASS (uninstrumented and ASan/UBSan)
 Raw fault injection         20/20 (checkpoints 58..61 x 5 kinds) + 5 post-native output controls
 Ada exception translation   20/20 + 5 native-output rejections, inputs unchanged, recovery
@@ -84,6 +84,12 @@ No rejected numerical case is classified as memory corruption.
 ## Boundaries and ownership
 
 * Lower bounds `(7..11)` and `(20..24)`: Count 5, all arrays `1..5`, paired by position.
+* Regression: a one-element first array indexed `Positive'Last .. Positive'Last`
+  with a second array indexed `5 .. 5` succeeds with the analytic midpoint, Count 1,
+  all result arrays `1..1`, and unchanged inputs. Positional indexing is computed as
+  `'First + (I - 1)`. Before this was corrected, `'First + I - 1` overflowed and the
+  call raised `OpenCV_Error` ("arithmetic exceeds representable range"). The test
+  was observed failing against the uncorrected code.
 * Empty/empty: Count 0; invalid F, rank-one F (SVD policy), and invalid options all
   still raise; mismatched empty/nonempty raises.
 * Raw: null F/inputs/options/output; Float32 C2, Float64 C1/C3, 1xN and N-D inputs;
