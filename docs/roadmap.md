@@ -1,5 +1,14 @@
 # Roadmap
 
+## Task 015 approved scope
+
+Guarded native `cv::correctMatches` epipolar correspondence correction only,
+with caller-configured conditioning/quality/residual/bound policy and an
+all-or-error result. No F estimation, RANSAC changes, correspondence selection,
+undistortion, triangulation changes, pose, metric scale or navigation. The earlier
+research disposition `SAFETY_GATE_NOT_ESTABLISHED` for universal optimality
+stands. Task 016 is not started.
+
 ## Task 013 approved scope
 
 Independent-reference diagnostics for existing AP3P hypotheses only.

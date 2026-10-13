@@ -590,4 +590,49 @@ begin
        Ada.Text_IO.Put_Line ("PASS: Ada pose composition 20 exception translations and recovery");
     end;
 
+    declare
+       procedure Control (Mode : Interfaces.C.int)
+         with Import, Convention => C, External_Name => "opencv_calib3d_test_correction_control";
+       F : constant Fundamental_Matrix := [[0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]];
+       First : constant Image_Point_Array := [[100.0, 20.0], [300.0, 40.0]];
+       Second : constant Image_Point_Array := [[90.0, 24.0], [250.0, 30.0]];
+       Saved1 : constant Image_Point_Array := First;
+       Saved2 : constant Image_Point_Array := Second;
+       Policy : constant Epipolar_Correction_Options := (1.0E-3, 1.0E-9, 1.0E-12, 1.0E-9, 1.0E-9, 1.0E-9);
+       Expected : constant Corrected_Epipolar_Matches := Correct_Epipolar_Matches (F, First, Second, Policy);
+       Count : Natural := 0;
+       procedure Attempt (What : String) is
+       begin
+          declare
+             Value : constant Corrected_Epipolar_Matches := Correct_Epipolar_Matches (F, First, Second, Policy);
+             pragma Unreferenced (Value);
+          begin
+             raise Program_Error with What & " not translated";
+          end;
+       exception
+          when OpenCV.OpenCV_Error => Count := Count + 1;
+       end Attempt;
+    begin
+       for Stage in Interfaces.C.int range 58 .. 61 loop
+          for Kind in Interfaces.C.int range 1 .. 5 loop
+             Fail (Stage, Kind);
+             Attempt ("epipolar correction fault");
+             Check (First = Saved1 and then Second = Saved2, "correction fault changed inputs");
+             Check (Correct_Epipolar_Matches (F, First, Second, Policy) = Expected,
+                    "epipolar correction did not recover after injected fault");
+          end loop;
+       end loop;
+       Check (Count = 20, "epipolar correction expected 20 translated faults");
+       --  Post-native output gate after a REAL native call: NaN, residual,
+       --  excessive displacement, wrong shape, infinity. All raise; none publish.
+       for Mode in Interfaces.C.int range 1 .. 5 loop
+          Control (Mode);
+          Attempt ("epipolar correction output control");
+          Check (Correct_Epipolar_Matches (F, First, Second, Policy) = Expected, "recovery after output control");
+       end loop;
+       Check (Count = 25, "epipolar correction expected 5 rejected native outputs");
+       Ada.Text_IO.Put_Line ("PASS: Ada epipolar correction 20 exception translations + 5 native-output "
+                             & "rejections, inputs unchanged, recovery");
+    end;
+
 end Run_Refinement_Faults;

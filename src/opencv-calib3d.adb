@@ -2193,4 +2193,256 @@ package body OpenCV.Calib3D is
       when Constraint_Error =>
          raise OpenCV.OpenCV_Error with "Triangulation conversion exceeds representable range";
    end Triangulate_Normalized;
+
+   ---------------------------------------------------------------------------
+   --  Guarded native epipolar correspondence correction (Task 015).
+   --  Ada validates, measures and re-verifies; native cv::correctMatches is the
+   --  only correction algorithm. Nothing here solves for corrected points.
+   ---------------------------------------------------------------------------
+
+   type Scalar_Array is array (Positive range <>) of OpenCV.Float64_Value;
+
+   --  Scaled Euclidean norm: never squares an unscaled component.
+   function Scaled_Norm (Values : Scalar_Array) return OpenCV.Float64_Value is
+      Scale : OpenCV.Float64_Value := 0.0;
+      Sum   : OpenCV.Float64_Value := 0.0;
+   begin
+      for V of Values loop
+         if not Is_Finite (V) then
+            raise Constraint_Error;
+         end if;
+         Scale := OpenCV.Float64_Value'Max (Scale, abs V);
+      end loop;
+      if Scale = 0.0 then
+         return 0.0;
+      end if;
+      for V of Values loop
+         Sum := Sum + (V / Scale)**2;
+      end loop;
+      return Scale * Math.Sqrt (Sum);
+   end Scaled_Norm;
+
+   --  d1 = dist(p1, F^T p2), d2 = dist(p2, F p1); identical arithmetic to
+   --  Maximum_Epipolar_Error, but both distances are returned separately.
+   procedure Epipolar_Distances
+     (Matrix : Fundamental_Matrix; First_Point, Second_Point : Image_Point;
+      Defined : out Boolean; D1, D2 : out OpenCV.Float64_Value)
+   is
+      subtype Scalar is OpenCV.Float64_Value;
+      type Line is array (Natural range 0 .. 2) of Scalar;
+      L1, L2 : Line;
+      N1, N2 : Scalar;
+      function Sum3 (A, X, B, Y, C : Scalar) return Scalar is
+         AX : constant Scalar := A * X;
+         BY : constant Scalar := B * Y;
+         Sum : constant Scalar := AX + BY;
+         Value : constant Scalar := Sum + C;
+      begin
+         if not Is_Finite (AX) or else not Is_Finite (BY) or else
+           not Is_Finite (Sum) or else not Is_Finite (Value)
+         then
+            raise Constraint_Error;
+         end if;
+         return Value;
+      end Sum3;
+   begin
+      Defined := False;
+      D1 := 0.0;
+      D2 := 0.0;
+      for I in 0 .. 2 loop
+         L2 (I) := Sum3 (Matrix (I, 0), First_Point (0),
+                         Matrix (I, 1), First_Point (1), Matrix (I, 2));
+         L1 (I) := Sum3 (Matrix (0, I), Second_Point (0),
+                         Matrix (1, I), Second_Point (1), Matrix (2, I));
+      end loop;
+      N1 := Scaled_Norm ([L1 (0), L1 (1)]);
+      N2 := Scaled_Norm ([L2 (0), L2 (1)]);
+      if not Is_Finite (N1) or else not Is_Finite (N2) or else N1 = 0.0 or else N2 = 0.0 then
+         return;
+      end if;
+      D1 := abs Sum3 (L1 (0), First_Point (0), L1 (1), First_Point (1), L1 (2)) / N1;
+      D2 := abs Sum3 (L2 (0), Second_Point (0), L2 (1), Second_Point (1), L2 (2)) / N2;
+      Defined := Is_Finite (D1) and then Is_Finite (D2);
+   exception
+      when Constraint_Error =>
+         Defined := False;
+         D1 := 0.0;
+         D2 := 0.0;
+   end Epipolar_Distances;
+
+   procedure Validate (Value : Epipolar_Correction_Options) is
+   begin
+      if not (Is_Finite (Value.Minimum_Second_Singular_Ratio)
+              and then Is_Finite (Value.Maximum_Third_Singular_Ratio)
+              and then Is_Finite (Value.Minimum_Epipolar_Line_Ratio)
+              and then Is_Finite (Value.Maximum_Corrected_Error_Pixels)
+              and then Is_Finite (Value.Absolute_Displacement_Excess_Pixels)
+              and then Is_Finite (Value.Relative_Displacement_Excess))
+        or else not (Value.Minimum_Second_Singular_Ratio > 0.0
+                     and then Value.Minimum_Second_Singular_Ratio <= 1.0)
+        or else not (Value.Maximum_Third_Singular_Ratio >= 0.0
+                     and then Value.Maximum_Third_Singular_Ratio < 1.0)
+        or else not (Value.Maximum_Third_Singular_Ratio < Value.Minimum_Second_Singular_Ratio)
+        or else not (Value.Minimum_Epipolar_Line_Ratio >= 0.0
+                     and then Value.Minimum_Epipolar_Line_Ratio <= 1.0)
+        or else not (Value.Maximum_Corrected_Error_Pixels >= 0.0)
+        or else not (Value.Absolute_Displacement_Excess_Pixels >= 0.0)
+        or else not (Value.Relative_Displacement_Excess >= 0.0
+                     and then Value.Relative_Displacement_Excess <= 1.0)
+      then
+         raise OpenCV.OpenCV_Error with "Invalid epipolar correction options";
+      end if;
+   end Validate;
+
+   function Correct_Epipolar_Matches
+     (Matrix        : Fundamental_Matrix;
+      First_Points  : Image_Point_Array;
+      Second_Points : Image_Point_Array;
+      Options       : Epipolar_Correction_Options)
+      return Corrected_Epipolar_Matches
+   is
+      Count : constant Natural := First_Points'Length;
+      Normalized : Fundamental_Matrix;
+      Scale : OpenCV.Float64_Value := 0.0;
+      Native_Matrix : aliased C.C_Fundamental;
+      Native_Options : aliased C.C_Correction_Options;
+      First, Second, Output : OpenCV.Core.Mat;
+      Code : C.Status := C.Success;
+      Bounds : Scalar_Array (1 .. Natural'Max (Count, 1)) := [others => 0.0];
+      Originals : Scalar_Array (1 .. Natural'Max (Count, 1)) := [others => 0.0];
+      procedure First_Callback (First_Handle : Bridge.Input_Mat_Handle) is
+         procedure Second_Callback (Second_Handle : Bridge.Input_Mat_Handle) is
+            procedure Output_Callback (Destination : Bridge.Output_Mat_Handle) is
+            begin
+               Code := C.Correct_Matches (Native_Matrix'Access, First_Handle, Second_Handle,
+                                          Native_Options'Access, Destination);
+            end Output_Callback;
+         begin
+            Bridge.With_Output_Handle (Output, Output_Callback'Access);
+         end Second_Callback;
+      begin
+         Bridge.With_Input_Handle (Second, Second_Callback'Access);
+      end First_Callback;
+      function Typed (Points : Image_Point_Array) return OpenCV.Core.Mat is
+        (if Points'Length = 0
+         then OpenCV.Core.Create (0, 1, (Depth => OpenCV.Core.Float64, Channels => 2))
+         else Image_Matrix (Points));
+   begin
+      Validate (Options);
+      for Value of Matrix loop
+         if not Is_Finite (Value) then
+            raise OpenCV.OpenCV_Error with "Fundamental entries must be finite";
+         end if;
+         Scale := OpenCV.Float64_Value'Max (Scale, abs Value);
+      end loop;
+      if Scale = 0.0 then
+         raise OpenCV.OpenCV_Error with "Fundamental matrix is zero";
+      end if;
+      --  Homogeneous max-coefficient normalization, also used for diagnostics so
+      --  extreme-scale F does not cause avoidable overflow. Reject a nonzero
+      --  coefficient that would become zero/subnormal (a different matrix).
+      for Row in 0 .. 2 loop
+         for Col in 0 .. 2 loop
+            Normalized (Row, Col) := Matrix (Row, Col) / Scale;
+            if Matrix (Row, Col) /= 0.0 and then
+              abs Normalized (Row, Col) < OpenCV.Float64_Value'Model_Small
+            then
+               raise OpenCV.OpenCV_Error with
+                 "Fundamental normalization would underflow a nonzero coefficient";
+            end if;
+         end loop;
+      end loop;
+      if Second_Points'Length /= Count or else
+        First_Points'Length > Interfaces.Integer_32'Last
+      then
+         raise OpenCV.OpenCV_Error with "Epipolar correction requires equal counts fitting INT32";
+      end if;
+      Validate (First_Points);
+      Validate (Second_Points);
+      for I in 1 .. Count loop
+         declare
+            Defined : Boolean;
+            D1, D2 : OpenCV.Float64_Value;
+            Error : constant Epipolar_Error_Result := Maximum_Epipolar_Error
+              (Normalized, First_Points (First_Points'First + (I - 1)),
+               Second_Points (Second_Points'First + (I - 1)));
+         begin
+            Epipolar_Distances (Normalized, First_Points (First_Points'First + (I - 1)),
+                                Second_Points (Second_Points'First + (I - 1)), Defined, D1, D2);
+            if not Defined or else not Error.Defined then
+               raise OpenCV.OpenCV_Error with "Input epipolar line is undefined";
+            end if;
+            Bounds (I) := OpenCV.Float64_Value'Min (D1, D2);
+            Originals (I) := Error.Maximum_Error_Pixels;
+         end;
+      end loop;
+      Native_Matrix :=
+        (Interfaces.C.double (Matrix (0, 0)), Interfaces.C.double (Matrix (0, 1)),
+         Interfaces.C.double (Matrix (0, 2)), Interfaces.C.double (Matrix (1, 0)),
+         Interfaces.C.double (Matrix (1, 1)), Interfaces.C.double (Matrix (1, 2)),
+         Interfaces.C.double (Matrix (2, 0)), Interfaces.C.double (Matrix (2, 1)),
+         Interfaces.C.double (Matrix (2, 2)));
+      Native_Options :=
+        (Interfaces.C.double (Options.Minimum_Second_Singular_Ratio),
+         Interfaces.C.double (Options.Maximum_Third_Singular_Ratio),
+         Interfaces.C.double (Options.Minimum_Epipolar_Line_Ratio),
+         Interfaces.C.double (Options.Maximum_Corrected_Error_Pixels),
+         Interfaces.C.double (Options.Absolute_Displacement_Excess_Pixels),
+         Interfaces.C.double (Options.Relative_Displacement_Excess));
+      --  Empty requests still reach the shim (typed 0x1) so the native SVD policy
+      --  is enforced identically; the shim never runs correctMatches for them.
+      First := Typed (First_Points);
+      Second := Typed (Second_Points);
+      Bridge.With_Input_Handle (First, First_Callback'Access);
+      C.Check (Code, "Calib3D.Correct_Epipolar_Matches");
+      if Output.Rows /= Count or else Output.Columns /= 2
+        or else Output.Depth /= OpenCV.Core.Float64 or else Output.Channels /= 2
+      then
+         raise OpenCV.OpenCV_Error with "Invalid native correctMatches result";
+      end if;
+      return Result : Corrected_Epipolar_Matches (Count) do
+         for I in 1 .. Count loop
+            declare
+               P1 : constant Image_Point := First_Points (First_Points'First + (I - 1));
+               P2 : constant Image_Point := Second_Points (Second_Points'First + (I - 1));
+               Q1 : constant Image_Point := Vec2_Access.Get (Output, I - 1, 0);
+               Q2 : constant Image_Point := Vec2_Access.Get (Output, I - 1, 1);
+               Corrected : Epipolar_Error_Result;
+               Displacement, Allowed : OpenCV.Float64_Value;
+            begin
+               for V of Scalar_Array'[Q1 (0), Q1 (1), Q2 (0), Q2 (1)] loop
+                  if not Is_Finite (V) then
+                     raise OpenCV.OpenCV_Error with "Corrected coordinate is nonfinite";
+                  end if;
+               end loop;
+               Corrected := Maximum_Epipolar_Error (Normalized, Q1, Q2);
+               if not Corrected.Defined then
+                  raise OpenCV.OpenCV_Error with "Corrected epipolar line is undefined";
+               end if;
+               Displacement := Scaled_Norm
+                 ([Q1 (0) - P1 (0), Q1 (1) - P1 (1), Q2 (0) - P2 (0), Q2 (1) - P2 (1)]);
+               Allowed := Bounds (I) * (1.0 + Options.Relative_Displacement_Excess)
+                 + Options.Absolute_Displacement_Excess_Pixels;
+               --  Independent Ada re-verification of the native acceptance policy.
+               if not Is_Finite (Displacement) or else not Is_Finite (Allowed)
+                 or else Corrected.Maximum_Error_Pixels > Options.Maximum_Corrected_Error_Pixels
+                 or else Displacement > Allowed
+               then
+                  raise OpenCV.OpenCV_Error with
+                    "Corrected correspondence failed Ada re-verification";
+               end if;
+               Result.First_Points (I) := Q1;
+               Result.Second_Points (I) := Q2;
+               Result.Diagnostics (I) :=
+                 (Original_Error_Pixels     => Originals (I),
+                  Corrected_Error_Pixels    => Corrected.Maximum_Error_Pixels,
+                  Total_Displacement_Pixels => Displacement,
+                  One_Sided_Bound_Pixels    => Bounds (I));
+            end;
+         end loop;
+      end return;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Epipolar correction arithmetic exceeds representable range";
+   end Correct_Epipolar_Matches;
 end OpenCV.Calib3D;

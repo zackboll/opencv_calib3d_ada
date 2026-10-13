@@ -1,3 +1,4 @@
+with Ada.Exceptions;
 with Ada.Numerics;
 with Ada.Numerics.Generic_Elementary_Functions;
 with Ada.Text_IO;
@@ -6,6 +7,7 @@ with AUnit.Test_Caller;
 with AUnit.Test_Fixtures;
 with Interfaces;
 with Interfaces.C;
+with Interfaces.C.Strings;
 with OpenCV.Calib3D;
 with OpenCV.Calib3D.Internal.C_API;
 with OpenCV.Calib3D.Internal.Point_Refinement;
@@ -4658,6 +4660,588 @@ package body Calib3D_Tests is
               "alias result==second must be rejected without clearing");
    end Compose_Layout;
 
+   ---------------------------------------------------------------------------
+   --  Task 015 guarded native epipolar correction. Policy values below are
+   --  explicit TEST/EXAMPLE choices justified by the measured fixtures; they
+   --  are not library defaults or optimality guarantees.
+   ---------------------------------------------------------------------------
+   C_Policy : constant Epipolar_Correction_Options :=
+     (Minimum_Second_Singular_Ratio       => 1.0E-3,
+      Maximum_Third_Singular_Ratio        => 1.0E-9,
+      Minimum_Epipolar_Line_Ratio         => 1.0E-12,
+      Maximum_Corrected_Error_Pixels      => 1.0E-9,
+      Absolute_Displacement_Excess_Pixels => 1.0E-9,
+      Relative_Displacement_Excess        => 1.0E-9);
+   C_Rect : constant Fundamental_Matrix := [[0.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]];
+   C_Vert : constant Fundamental_Matrix := [[0.0, 0.0, 1.0], [0.0, 0.0, 0.0], [-1.0, 0.0, 0.0]];
+
+   function Rejected
+     (Matrix : Fundamental_Matrix; First, Second : Image_Point_Array;
+      Options : Epipolar_Correction_Options) return Boolean is
+   begin
+      declare
+         R : constant Corrected_Epipolar_Matches :=
+           Correct_Epipolar_Matches (Matrix, First, Second, Options);
+         pragma Unreferenced (R);
+      begin
+         return False;
+      end;
+   exception
+      when OpenCV.OpenCV_Error => return True;
+   end Rejected;
+
+   --  Shared structural checks: one-based, finite diagnostics, Ada-recomputed
+   --  residual/displacement agree with published diagnostics, bound satisfied.
+   procedure Check_Correction
+     (R : Corrected_Epipolar_Matches; F : Fundamental_Matrix;
+      First, Second : Image_Point_Array; Options : Epipolar_Correction_Options)
+   is
+   begin
+      Assert (R.Count = First'Length and then R.First_Points'First = 1 and then
+              R.Second_Points'First = 1 and then R.Diagnostics'First = 1, "one-based result");
+      for I in 1 .. R.Count loop
+         declare
+            D : Epipolar_Correction_Diagnostic renames R.Diagnostics (I);
+            P1 : constant Image_Point := First (First'First + (I - 1));
+            P2 : constant Image_Point := Second (Second'First + (I - 1));
+            Q1 : constant Image_Point := R.First_Points (I);
+            Q2 : constant Image_Point := R.Second_Points (I);
+            E : constant Epipolar_Error_Result := Maximum_Epipolar_Error (F, Q1, Q2);
+            Displacement : constant OpenCV.Float64_Value := Math.Sqrt
+              ((Q1 (0) - P1 (0))**2 + (Q1 (1) - P1 (1))**2 + (Q2 (0) - P2 (0))**2 + (Q2 (1) - P2 (1))**2);
+         begin
+            Assert (Finite (D.Original_Error_Pixels) and then Finite (D.Corrected_Error_Pixels) and then
+                    Finite (D.Total_Displacement_Pixels) and then Finite (D.One_Sided_Bound_Pixels),
+                    "finite diagnostics");
+            Assert (E.Defined and then E.Maximum_Error_Pixels <= Options.Maximum_Corrected_Error_Pixels,
+                    "independent Ada residual within policy");
+            Assert (Near (Displacement, D.Total_Displacement_Pixels,
+                          1.0E-12 * (1.0 + Displacement)), "displacement diagnostic agrees");
+            Assert (D.Total_Displacement_Pixels <= D.One_Sided_Bound_Pixels *
+                      (1.0 + Options.Relative_Displacement_Excess) +
+                      Options.Absolute_Displacement_Excess_Pixels, "one-sided necessary bound");
+         end;
+      end loop;
+   end Check_Correction;
+
+   procedure Correction_Rectified (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Image_Point_Array := [[100.0, 20.0], [300.0, 40.0], [-50.0, 7.0]];
+      Second : constant Image_Point_Array := [[90.0, 24.0], [250.0, 30.0], [-60.0, -3.0]];
+      Saved1 : constant Image_Point_Array := First;
+      R : constant Corrected_Epipolar_Matches := Correct_Epipolar_Matches (C_Rect, First, Second, C_Policy);
+      Midpoint : constant Reprojection_Error_Array := [22.0, 35.0, 2.0];
+   begin
+      Check_Correction (R, C_Rect, First, Second, C_Policy);
+      for I in 1 .. 3 loop
+         --  Independent analytic optimum: equal x, y moved to the midpoint.
+         Assert (Near (R.First_Points (I) (0), First (I) (0), 1.0E-12) and then
+                 Near (R.First_Points (I) (1), Midpoint (I), 1.0E-12) and then
+                 Near (R.Second_Points (I) (0), Second (I) (0), 1.0E-12) and then
+                 Near (R.Second_Points (I) (1), Midpoint (I), 1.0E-12), "rectified analytic oracle");
+      end loop;
+      Assert (Near (R.Diagnostics (1).Total_Displacement_Pixels, Math.Sqrt (8.0), 1.0E-12) and then
+              R.Diagnostics (1).One_Sided_Bound_Pixels = 4.0 and then
+              R.Diagnostics (1).Original_Error_Pixels = 4.0 and then
+              R.Diagnostics (1).Corrected_Error_Pixels = 0.0, "sqrt(8) displacement and 4-pixel bound");
+      Assert (First = Saved1, "inputs unchanged");
+      Ada.Text_IO.Put_Line ("correction rectified: displacement=" &
+        OpenCV.Float64_Value'Image (R.Diagnostics (1).Total_Displacement_Pixels) & " bound=4");
+   end Correction_Rectified;
+
+   procedure Correction_Vertical (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Image_Point_Array := [[20.0, 100.0], [5.0, 5.0]];
+      Second : constant Image_Point_Array := [[24.0, 90.0], [9.0, 40.0]];
+      R : constant Corrected_Epipolar_Matches := Correct_Epipolar_Matches (C_Vert, First, Second, C_Policy);
+   begin
+      Check_Correction (R, C_Vert, First, Second, C_Policy);
+      Assert (Near (R.First_Points (1) (0), 22.0, 1.0E-12) and then Near (R.First_Points (1) (1), 100.0, 1.0E-12)
+              and then Near (R.Second_Points (2) (0), 7.0, 1.0E-12)
+              and then Near (R.Second_Points (2) (1), 40.0, 1.0E-12), "vertical analytic oracle");
+   end Correction_Vertical;
+
+   procedure Correction_Scale (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Image_Point_Array := [[100.0, 20.0], [300.0, 40.0]];
+      Second : constant Image_Point_Array := [[90.0, 24.0], [250.0, 30.0]];
+      Reference : constant Corrected_Epipolar_Matches :=
+        Correct_Epipolar_Matches (C_Rect, First, Second, C_Policy);
+      F : Fundamental_Matrix;
+   begin
+      for Scale of Reprojection_Error_Array'[-1.0, 2.0, 0.5, 1.0E-100, 1.0E-40, 1.0E40, 1.0E100,
+                                             1.0E-300, 1.0E300]
+      loop
+         F := C_Rect;
+         for V of F loop
+            V := V * Scale;
+         end loop;
+         declare
+            R : constant Corrected_Epipolar_Matches := Correct_Epipolar_Matches (F, First, Second, C_Policy);
+         begin
+            Assert (R = Reference, "F scale/sign does not change the guarded result");
+         end;
+      end loop;
+      --  Coefficient ranges that cannot survive normalization are rejected,
+      --  not silently rounded into a different matrix.
+      F := [[0.0, 0.0, 0.0], [0.0, 0.0, -1.0E300], [0.0, 1.0E300, 4.0E-300]];
+      Assert (Rejected (F, First, Second, C_Policy), "normalization underflow rejected");
+   end Correction_Scale;
+
+   --  Research fixtures (rotated singular-value constructions, exact digits).
+   C_Rank_One : constant Fundamental_Matrix :=
+     [[0.45419899723237056, 0.14050021438031315, 0.59912146691828327],
+      [0.38256653778680805, 0.11834169802510941, 0.50463305007126513], [0.0, 0.0, 0.0]];
+   C_Near_Rank_One : constant Fundamental_Matrix :=
+     [[0.45419917258335846, 0.1404996475182396, 0.59912146691828327],
+      [0.38256632960277992, 0.1183423710274762, 0.50463305007126513],
+      [-1.1508098899676867E-07, 3.7202555194225961E-07, 0.0]];
+   C_General : constant Fundamental_Matrix :=
+     [[0.54187449117452635, -0.14293082240506408, 0.59912146691828327],
+      [0.27847452372631143, 0.45484288141974499, 0.50463305007126513],
+      [-0.057540494498384331, 0.18601277597112981, 0.0]];
+
+   procedure Correction_Conditioning (T : in out Fixture) is
+      pragma Unreferenced (T);
+      P1 : constant Image_Point_Array := [[100.0, 20.0]];
+      P2 : constant Image_Point_Array := [[90.0, 24.0]];
+      --  Exact diagonal singular values: boundary comparisons are inclusive.
+      D2 : constant Fundamental_Matrix := [[1.0, 0.0, 0.0], [0.0, 1.0E-3, 0.0], [0.0, 0.0, 0.0]];
+      D3 : constant Fundamental_Matrix := [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 2.0**(-30)]];
+      Full : constant Fundamental_Matrix := [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 10.0]];
+      O : Epipolar_Correction_Options := C_Policy;
+   begin
+      O.Minimum_Second_Singular_Ratio := 1.0E-3;
+      Assert (not Rejected (D2, P1, P2, O), "s2/s1 exactly at minimum accepted");
+      --  Succ of the stored machine value, not of the exact static literal 1/1000.
+      O.Minimum_Second_Singular_Ratio := OpenCV.Float64_Value'Succ (O.Minimum_Second_Singular_Ratio);
+      Assert (Rejected (D2, P1, P2, O), "s2/s1 one ulp below caller minimum rejected");
+      O := C_Policy;
+      O.Maximum_Third_Singular_Ratio := 2.0**(-30);
+      Assert (not Rejected (D3, P1, P2, O), "s3/s1 exactly at maximum accepted");
+      O.Maximum_Third_Singular_Ratio := OpenCV.Float64_Value'Pred (O.Maximum_Third_Singular_Ratio);
+      Assert (Rejected (D3, P1, P2, O), "s3/s1 one ulp above caller maximum rejected");
+      Assert (Rejected (Full, P1, P2, C_Policy), "full-rank F outside policy rejected");
+      Assert (Rejected (C_Rank_One, [[-30.0, 55.0]], [[12.0, 70.0]], C_Policy), "rank-one F rejected");
+      Assert (not Rejected (C_General, [[-30.0, 55.0]], [[12.0, 70.0]], C_Policy), "s2/s1=0.5 accepted");
+      --  Stricter caller policy rejects the same well-conditioned matrix.
+      O := C_Policy;
+      O.Minimum_Second_Singular_Ratio := 0.75;
+      Assert (Rejected (C_General, [[-30.0, 55.0]], [[12.0, 70.0]], O), "stricter policy rejects s2/s1=0.5");
+   end Correction_Conditioning;
+
+   procedure Correction_Native_Bound (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Valid but deliberately permissive policy: conditioning admits these
+      --  matrices so ONLY the post-native one-sided bound can reject them.
+      Permissive : constant Epipolar_Correction_Options := (1.0E-20, 1.0E-21, 0.0, 1.0E3, 1.0E-9, 1.0E-9);
+      Near_Policy : constant Epipolar_Correction_Options := (1.0E-7, 1.0E-15, 0.0, 1.0E3, 1.0E-9, 1.0E-9);
+   begin
+      --  Research: native displacement 54.27 vs feasible one-sided bound 11.15.
+      Assert (Rejected (C_Rank_One, [[-30.0, 55.0]], [[12.0, 70.0]], Permissive),
+              "rank-one finite-but-wrong native output rejected by one-sided bound");
+      Assert (Rejected (C_Near_Rank_One, [[-30.0, 55.0]], [[12.0, 70.0]], Near_Policy),
+              "near-rank-one native displacement above feasible bound rejected");
+      --  A point where native output stays within the bound is still accepted.
+      Assert (not Rejected (C_Near_Rank_One, [[100.0, 20.0]], [[90.0, 24.0]], Near_Policy),
+              "bound is necessary, not sufficient: some near-rank-one outputs pass");
+   end Correction_Native_Bound;
+
+   procedure Correction_Epipoles (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Ex : constant Fundamental_Matrix := [[0.0, -1.0, 50.0], [1.0, 0.0, -100.0], [-50.0, 100.0, 0.0]];
+      Line : Epipolar_Correction_Options := C_Policy;
+      Loose : constant Epipolar_Correction_Options := (1.0E-3, 1.0E-9, 0.0, 1.0E-2, 1.0E-9, 1.0E-9);
+      Near_Result : Boolean;
+   begin
+      Assert (Rejected (Ex, [[100.0, 50.0]], [[130.0, 75.0]], Loose), "exactly at epipole: undefined line");
+      Line.Minimum_Epipolar_Line_Ratio := 1.0E-12;
+      Assert (Rejected (Ex, [[100.0 + 1.0E-9, 50.0]], [[130.0, 75.0]], Line),
+              "near epipole below caller line quality rejected (quality 5.7e-14)");
+      Assert (not Rejected (Ex, [[101.0, 50.0]], [[130.0, 75.0]], Line),
+              "line quality 5.6e-5 above caller threshold accepted");
+      Line.Minimum_Epipolar_Line_Ratio := 1.0E-4;
+      Assert (Rejected (Ex, [[101.0, 50.0]], [[130.0, 75.0]], Line), "stricter line policy rejects");
+      Near_Result := Rejected (Ex, [[100.0 + 1.0E-9, 50.0]], [[130.0, 75.0]], Loose);
+      --  Version-specific native behaviour, read from the private metadata import.
+      if Interfaces.C.Strings.Value (ABI.Native_Version) (1) = '4' then
+         Assert (Near_Result, "4.x near-epipole nonoptimal output (0.17 vs 6.4e-10) rejected");
+      else
+         Assert (not Near_Result, "5.0 near-epipole output stays within the bound");
+      end if;
+   end Correction_Epipoles;
+
+   procedure Correction_Residual (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Image_Point_Array := [[-30.0, 55.0], [100.0, 20.0], [7.0, 8.0], [7.0, 8.0]];
+      Second : constant Image_Point_Array := [[12.0, 70.0], [90.0, 24.0], [9.0, 3.0], [9.0, 3.0]];
+      Tight : Epipolar_Correction_Options := C_Policy;
+      R : constant Corrected_Epipolar_Matches := Correct_Epipolar_Matches (C_General, First, Second, C_Policy);
+      Worst : OpenCV.Float64_Value := 0.0;
+   begin
+      Check_Correction (R, C_General, First, Second, C_Policy);
+      for D of R.Diagnostics loop
+         Worst := OpenCV.Float64_Value'Max (Worst, D.Corrected_Error_Pixels);
+         Assert (D.Corrected_Error_Pixels < D.Original_Error_Pixels, "inconsistency reduced");
+      end loop;
+      for K in 0 .. 1 loop
+         Assert (R.First_Points (3) (K) = R.First_Points (4) (K) and then
+                 R.Second_Points (3) (K) = R.Second_Points (4) (K), "repeated correspondences corrected identically");
+      end loop;
+      Ada.Text_IO.Put_Line ("correction general rank-two: maximum corrected error=" &
+        OpenCV.Float64_Value'Image (Worst));
+      --  Zero residual tolerance: measured general-F residual ~1e-14 is rejected,
+      --  while the exactly representable rectified case passes at 0.
+      Tight.Maximum_Corrected_Error_Pixels := 0.0;
+      Assert (Rejected (C_General, First, Second, Tight) or else Worst = 0.0,
+              "residual policy is enforced exactly as configured");
+      Assert (not Rejected (C_Rect, [[100.0, 20.0]], [[90.0, 24.0]], Tight), "exact residual 0 accepted");
+      --  Identical correspondence on a rectified line: unchanged, zero bound.
+      declare
+         Same : constant Corrected_Epipolar_Matches :=
+           Correct_Epipolar_Matches (C_Rect, [[5.0, 5.0]], [[5.0, 5.0]], Tight);
+      begin
+         Assert (Same.First_Points (1) (0) = 5.0 and then Same.First_Points (1) (1) = 5.0 and then Same.Diagnostics (1).One_Sided_Bound_Pixels = 0.0
+                 and then Same.Diagnostics (1).Total_Displacement_Pixels = 0.0, "already consistent pair");
+      end;
+   end Correction_Residual;
+
+   procedure Correction_Coordinates (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Any_Line : Epipolar_Correction_Options := C_Policy;
+      Big : Boolean;
+   begin
+      Any_Line.Minimum_Epipolar_Line_Ratio := 0.0;
+      declare
+         R : constant Corrected_Epipolar_Matches := Correct_Epipolar_Matches
+           (C_Rect, [[1.0E100, 2.0E100]], [[9.0E99, 2.4E100]], Any_Line);
+      begin
+         Assert (abs (R.First_Points (1) (1) / 2.2E100 - 1.0) < 1.0E-12 and then
+                 Finite (R.Diagnostics (1).Total_Displacement_Pixels),
+                 "rectified large representable coordinates: finite scaled diagnostics");
+      end;
+      Assert (Rejected (C_Rect, [[1.0E100, 2.0E100]], [[9.0E99, 2.4E100]], C_Policy),
+              "line-quality policy is coordinate-magnitude sensitive");
+      Assert (not Rejected (C_General, [[1.0E3, 2.0E3]], [[9.0E2, 2.4E3]], C_Policy), "ordinary coordinates");
+      --  Research: 4.x returns NaN from 1e5; 5.0 returns a large residual at 1e15.
+      Big := Rejected (C_General, [[1.0E15, 2.0E15]], [[9.0E14, 2.4E15]], C_Policy);
+      Assert (Big, "known native coordinate failure rejected on every version");
+   end Correction_Coordinates;
+
+   --  Independent nonidentity two-view oracle: E=[t]x R, F=K^-T E K^-1 built in
+   --  Ada; observations projected directly (positive depth in both cameras).
+   type M3 is array (0 .. 2, 0 .. 2) of OpenCV.Float64_Value;
+   function Mul (A, B : M3) return M3 is
+   begin
+      return C : M3 := [others => [others => 0.0]] do
+         for I in 0 .. 2 loop
+            for J in 0 .. 2 loop
+               for K in 0 .. 2 loop
+                  C (I, J) := C (I, J) + A (I, K) * B (K, J);
+               end loop;
+            end loop;
+         end loop;
+      end return;
+   end Mul;
+   Stereo_Rotation : constant M3 :=
+     Mul ([[Math.Cos (0.08), 0.0, Math.Sin (0.08)], [0.0, 1.0, 0.0], [-Math.Sin (0.08), 0.0, Math.Cos (0.08)]],
+          [[1.0, 0.0, 0.0], [0.0, Math.Cos (0.03), -Math.Sin (0.03)], [0.0, Math.Sin (0.03), Math.Cos (0.03)]]);
+   Stereo_T : constant Object_Point := [-0.75, 0.08, 0.12];
+   function Stereo_F return Fundamental_Matrix is
+      Tx : constant M3 := [[0.0, -Stereo_T (2), Stereo_T (1)], [Stereo_T (2), 0.0, -Stereo_T (0)],
+                           [-Stereo_T (1), Stereo_T (0), 0.0]];
+      K_Inv : constant M3 := [[1.0 / 800.0, 0.0, -320.0 / 800.0], [0.0, 1.0 / 820.0, -240.0 / 820.0],
+                              [0.0, 0.0, 1.0]];
+      K_Inv_T : constant M3 := [[K_Inv (0, 0), 0.0, 0.0], [0.0, K_Inv (1, 1), 0.0],
+                                [K_Inv (0, 2), K_Inv (1, 2), 1.0]];
+      F : constant M3 := Mul (K_Inv_T, Mul (Mul (Tx, Stereo_Rotation), K_Inv));
+   begin
+      return [for I in 0 .. 2 => [for J in 0 .. 2 => F (I, J)]];
+   end Stereo_F;
+   procedure Stereo_Views (Count : Positive; Noise : OpenCV.Float64_Value;
+                           First, Second : out Image_Point_Array) is
+   begin
+      for J in 0 .. Count - 1 loop
+         declare
+            X : constant Object_Point := [OpenCV.Float64_Value ((J * 7) mod 17 - 8) * 0.24,
+                                          OpenCV.Float64_Value ((J * 11) mod 19 - 9) * 0.19,
+                                          4.0 + OpenCV.Float64_Value ((J * 13) mod 23) * 0.17];
+            Y : Object_Point := Stereo_T;
+            Sign : constant OpenCV.Float64_Value := (if J mod 2 = 0 then 1.0 else -1.0);
+         begin
+            for I in 0 .. 2 loop
+               for K in 0 .. 2 loop
+                  Y (I) := Y (I) + Stereo_Rotation (I, K) * X (K);
+               end loop;
+            end loop;
+            Assert (X (2) > 0.0 and then Y (2) > 0.0, "positive depth in both cameras");
+            First (First'First + J) := [800.0 * X (0) / X (2) + 320.0 + Sign * 0.7 * Noise,
+                                        820.0 * X (1) / X (2) + 240.0 - 0.4 * Noise];
+            Second (Second'First + J) := [800.0 * Y (0) / Y (2) + 320.0 - 0.3 * Noise,
+                                          820.0 * Y (1) / Y (2) + 240.0 + Sign * 0.9 * Noise];
+         end;
+      end loop;
+   end Stereo_Views;
+
+   --  Measured on 4.1/4.10/5.0: s2/s1=0.0165, s3/s1~1e-22 for this pixel F.
+   Stereo_Policy : constant Epipolar_Correction_Options := (1.0E-3, 1.0E-12, 1.0E-6, 1.0E-9, 1.0E-9, 1.0E-9);
+
+   procedure Correction_Stereo (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F : constant Fundamental_Matrix := Stereo_F;
+   begin
+      for Count of Inlier_Index_Array'[1, 6, 25] loop
+         declare
+            Clean1, Clean2, Noisy1, Noisy2 : Image_Point_Array (1 .. Count);
+         begin
+            Stereo_Views (Count, 0.0, Clean1, Clean2);
+            Stereo_Views (Count, 1.0, Noisy1, Noisy2);
+            declare
+               Clean : constant Corrected_Epipolar_Matches :=
+                 Correct_Epipolar_Matches (F, Clean1, Clean2, Stereo_Policy);
+               Noisy : constant Corrected_Epipolar_Matches :=
+                 Correct_Epipolar_Matches (F, Noisy1, Noisy2, Stereo_Policy);
+               Max_Clean, Max_Noisy_In, Max_Noisy_Out : OpenCV.Float64_Value := 0.0;
+            begin
+               Check_Correction (Clean, F, Clean1, Clean2, Stereo_Policy);
+               Check_Correction (Noisy, F, Noisy1, Noisy2, Stereo_Policy);
+               for I in 1 .. Count loop
+                  Max_Clean := OpenCV.Float64_Value'Max (Max_Clean, Clean.Diagnostics (I).Total_Displacement_Pixels);
+                  Max_Noisy_In := OpenCV.Float64_Value'Max (Max_Noisy_In, Noisy.Diagnostics (I).Original_Error_Pixels);
+                  Max_Noisy_Out := OpenCV.Float64_Value'Max
+                    (Max_Noisy_Out, Noisy.Diagnostics (I).Corrected_Error_Pixels);
+                  --  Independent geometry: corrected noisy points stay near the true projections.
+                  Assert (Math.Sqrt ((Noisy.First_Points (I) (0) - Clean1 (I) (0))**2 +
+                                     (Noisy.First_Points (I) (1) - Clean1 (I) (1))**2) < 2.0,
+                          "corrected point near independent noiseless projection");
+               end loop;
+               Assert (Max_Clean < 1.0E-9, "noiseless observations essentially unchanged");
+               Assert (Max_Noisy_Out < Max_Noisy_In, "controlled noise inconsistency reduced");
+               Ada.Text_IO.Put_Line ("correction stereo N=" & Natural'Image (Count) & ": clean max disp=" &
+                 OpenCV.Float64_Value'Image (Max_Clean) & " noisy max error in/out=" &
+                 OpenCV.Float64_Value'Image (Max_Noisy_In) & "/" & OpenCV.Float64_Value'Image (Max_Noisy_Out));
+            end;
+         end;
+      end loop;
+   end Correction_Stereo;
+
+   procedure Correction_RANSAC (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First, Second : Image_Point_Array (1 .. 32);
+   begin
+      Stereo_Views (32, 0.0, First, Second);
+      for I of Inlier_Index_Array'[2, 7, 15] loop
+         Second (I) := [Second (I) (0) + 50.0, Second (I) (1) + 500.0];
+      end loop;
+      declare
+         Saved1 : constant Image_Point_Array := First;
+         Saved2 : constant Image_Point_Array := Second;
+         Estimate : constant Fundamental_Estimate :=
+           Estimate_Fundamental_RANSAC (First, Second, (0.1, 0.999));
+      begin
+         Assert (Found (Estimate), "existing native fundamental RANSAC found a model");
+         declare
+            F : constant Fundamental_Matrix := Fundamental (Estimate);
+            Saved_F : constant Fundamental_Matrix := F;
+            Selected : constant Inlier_Index_Array := Inliers (Estimate);
+            Sel1, Sel2 : Image_Point_Array (101 .. 100 + Selected'Length);
+            --  RANSAC fits observations to <=0.1 px; measured residual after
+            --  native correction is well under the explicit 1e-6 tolerance.
+            Policy : constant Epipolar_Correction_Options := (1.0E-3, 1.0E-6, 1.0E-6, 1.0E-6, 1.0E-9, 1.0E-9);
+         begin
+            for K in Selected'Range loop
+               Sel1 (100 + K) := First (Selected (K));
+               Sel2 (100 + K) := Second (Selected (K));
+            end loop;
+            declare
+               R : constant Corrected_Epipolar_Matches := Correct_Epipolar_Matches (F, Sel1, Sel2, Policy);
+            begin
+               Check_Correction (R, F, Sel1, Sel2, Policy);
+               Assert (R.Count = Selected'Length, "one output pair per selected inlier");
+               Assert (F = Saved_F and then First = Saved1 and then Second = Saved2,
+                       "F and original correspondences unchanged");
+               Assert (Inliers (Estimate) = Selected, "inlier ordering unchanged");
+               for K in 1 .. R.Count loop
+                  Assert (R.Diagnostics (K).Original_Error_Pixels <= 0.1, "selected pairs are final-F inliers");
+               end loop;
+               Ada.Text_IO.Put_Line ("correction after RANSAC: selected=" & Natural'Image (R.Count));
+            end;
+         end;
+      end;
+   end Correction_RANSAC;
+
+   procedure Correction_Bounds (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant Image_Point_Array (7 .. 11) :=
+        [[100.0, 20.0], [300.0, 40.0], [-50.0, 7.0], [5.0, 5.0], [8.0, 1.0]];
+      Second : constant Image_Point_Array (20 .. 24) :=
+        [[90.0, 24.0], [250.0, 30.0], [-60.0, -3.0], [5.0, 5.0], [2.0, 3.0]];
+      R : constant Corrected_Epipolar_Matches := Correct_Epipolar_Matches (C_Rect, First, Second, C_Policy);
+      Empty : constant Image_Point_Array (5 .. 4) := [others => [0.0, 0.0]];
+   begin
+      Assert (R.Count = 5 and then R.First_Points'First = 1 and then R.First_Points'Last = 5 and then
+              R.Second_Points'Last = 5 and then R.Diagnostics'Last = 5, "Count=5, all arrays 1 .. 5");
+      for I in 1 .. 5 loop
+         --  Paired by position: midpoint of the I-th elements of each source.
+         Assert (Near (R.First_Points (I) (1),
+                       (First (6 + I) (1) + Second (19 + I) (1)) / 2.0, 1.0E-12), "paired by position");
+      end loop;
+      Check_Correction (R, C_Rect, First, Second, C_Policy);
+      declare
+         E : constant Corrected_Epipolar_Matches := Correct_Epipolar_Matches (C_Rect, Empty, Empty, C_Policy);
+      begin
+         Assert (E.Count = 0 and then E.First_Points'Length = 0 and then E.Diagnostics'Length = 0,
+                 "empty/empty valid");
+      end;
+      Assert (Rejected ([others => [others => 0.0]], Empty, Empty, C_Policy), "invalid F not empty success");
+      Assert (Rejected (C_Rank_One, Empty, Empty, C_Policy), "empty batch still enforces SVD policy");
+      Assert (Rejected (C_Rect, Empty, [[1.0, 2.0]], C_Policy), "mismatched empty/nonempty");
+      Assert (Rejected (C_Rect, First, Second (20 .. 23), C_Policy), "mismatched lengths");
+   end Correction_Bounds;
+
+   procedure Correction_Upper_Bound (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Regression: production positional indexing must not compute
+      --  'First + I before subtracting 1. A lower bound of Positive'Last makes
+      --  that intermediate overflow. The assertions below index the inputs
+      --  only by their own 'First and never re-derive positions, so they test
+      --  the production expression rather than repeating it.
+      First : constant Image_Point_Array (Positive'Last .. Positive'Last) := [[100.0, 20.0]];
+      Second : constant Image_Point_Array (5 .. 5) := [[90.0, 24.0]];
+      Saved1 : constant Image_Point_Array := First;
+      Saved2 : constant Image_Point_Array := Second;
+   begin
+      declare
+         R : constant Corrected_Epipolar_Matches := Correct_Epipolar_Matches (C_Rect, First, Second, C_Policy);
+      begin
+         Assert (R.Count = 1, "Count = 1");
+         Assert (R.First_Points'First = 1 and then R.First_Points'Last = 1 and then
+                 R.Second_Points'First = 1 and then R.Second_Points'Last = 1 and then
+                 R.Diagnostics'First = 1 and then R.Diagnostics'Last = 1, "all result arrays 1 .. 1");
+         --  Analytic rectified optimum: x unchanged, both y at the midpoint 22.
+         Assert (Near (R.First_Points (1) (0), 100.0, 1.0E-12) and then
+                 Near (R.First_Points (1) (1), 22.0, 1.0E-12) and then
+                 Near (R.Second_Points (1) (0), 90.0, 1.0E-12) and then
+                 Near (R.Second_Points (1) (1), 22.0, 1.0E-12), "analytic midpoint at Positive'Last");
+         Assert (Near (R.Diagnostics (1).Total_Displacement_Pixels, Math.Sqrt (8.0), 1.0E-12) and then
+                 R.Diagnostics (1).One_Sided_Bound_Pixels = 4.0, "diagnostics at Positive'Last");
+      end;
+      Assert (First = Saved1 and then Second = Saved2 and then
+              First'First = Positive'Last and then Second'First = 5, "inputs unchanged");
+   exception
+      when Constraint_Error =>
+         Assert (False, "Constraint_Error escaped Correct_Epipolar_Matches at Positive'Last");
+      when E : OpenCV.OpenCV_Error =>
+         --  Production converts index-arithmetic Constraint_Error into this.
+         Assert (False, "valid Positive'Last batch rejected: " & Ada.Exceptions.Exception_Message (E));
+   end Correction_Upper_Bound;
+
+   procedure Correction_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Deliberately nonfinite test data (same convention as other invalid tests).
+      pragma Suppress (Validity_Check);
+      P1 : constant Image_Point_Array := [[100.0, 20.0]];
+      P2 : constant Image_Point_Array := [[90.0, 24.0]];
+      F : Fundamental_Matrix;
+      O : Epipolar_Correction_Options;
+   begin
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         declare
+            Invalid : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Kind));
+            Bad1 : Image_Point_Array := P1;
+            Bad2 : Image_Point_Array := P2;
+         begin
+            F := C_Rect;
+            F (1, 2) := Invalid;
+            Assert (Rejected (F, P1, P2, C_Policy), "nonfinite F");
+            Bad1 (1) (0) := Invalid;
+            Assert (Rejected (C_Rect, Bad1, P2, C_Policy), "nonfinite first coordinate");
+            Bad2 (1) (1) := Invalid;
+            Assert (Rejected (C_Rect, P1, Bad2, C_Policy), "nonfinite second coordinate");
+         end;
+      end loop;
+      Assert (Rejected ([others => [others => 0.0]], P1, P2, C_Policy), "zero F");
+      --  Each option: nonfinite (all three kinds) and negative are invalid;
+      --  1.5 is valid only for the two unbounded pixel tolerances.
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         for Field in 1 .. 6 loop
+            declare
+               Invalid : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Kind));
+            begin
+               O := C_Policy;
+               case Field is
+                  when 1 => O.Minimum_Second_Singular_Ratio := Invalid;
+                  when 2 => O.Maximum_Third_Singular_Ratio := Invalid;
+                  when 3 => O.Minimum_Epipolar_Line_Ratio := Invalid;
+                  when 4 => O.Maximum_Corrected_Error_Pixels := Invalid;
+                  when 5 => O.Absolute_Displacement_Excess_Pixels := Invalid;
+                  when others => O.Relative_Displacement_Excess := Invalid;
+               end case;
+               Assert (Rejected (C_Rect, P1, P2, O), "nonfinite option rejected");
+            end;
+         end loop;
+      end loop;
+      for Field in 1 .. 6 loop
+         for Value of Reprojection_Error_Array'[-1.0E-300, 1.5] loop
+            O := C_Policy;
+            case Field is
+               when 1 => O.Minimum_Second_Singular_Ratio := Value;
+               when 2 => O.Maximum_Third_Singular_Ratio := Value;
+               when 3 => O.Minimum_Epipolar_Line_Ratio := Value;
+               when 4 => O.Maximum_Corrected_Error_Pixels := Value;
+               when 5 => O.Absolute_Displacement_Excess_Pixels := Value;
+               when others => O.Relative_Displacement_Excess := Value;
+            end case;
+            Assert (Rejected (C_Rect, P1, P2, O) = (Value /= 1.5 or else Field in 1 | 2 | 3 | 6),
+                    "documented option range enforced");
+         end loop;
+      end loop;
+      O := C_Policy;
+      O.Minimum_Second_Singular_Ratio := 0.0;
+      Assert (Rejected (C_Rect, P1, P2, O), "zero minimum second ratio");
+      O := C_Policy;
+      O.Maximum_Third_Singular_Ratio := C_Policy.Minimum_Second_Singular_Ratio;
+      Assert (Rejected (C_Rect, P1, P2, O), "third ratio must be below second ratio");
+      --  Very large finite observations whose input-line arithmetic overflows.
+      Assert (Rejected ([[0.0, -1.0, 50.0], [1.0, 0.0, -100.0], [-50.0, 100.0, 0.0]],
+                        [[1.0E308, 1.0E308]], [[1.0, 1.0]], C_Policy), "nonrepresentable input line");
+   end Correction_Invalid;
+
+   procedure Correction_Layout (T : in out Fixture) is
+      pragma Unreferenced (T);
+      function Layout (Field : Interfaces.Integer_32) return Interfaces.Integer_32
+        with Import, Convention => C, External_Name => "calib3d_test_correction_options_layout";
+      procedure Fill (Value : access ABI.C_Correction_Options)
+        with Import, Convention => C, External_Name => "calib3d_test_fill_correction_options";
+      function Read (Value : access constant ABI.C_Correction_Options) return Interfaces.Integer_32
+        with Import, Convention => C, External_Name => "calib3d_test_read_correction_options";
+      function Read_F (Value : access constant ABI.C_Fundamental) return Interfaces.Integer_32
+        with Import, Convention => C, External_Name => "calib3d_test_read_fundamental";
+      Value : aliased ABI.C_Correction_Options := (others => 0.0);
+      Sent : aliased constant ABI.C_Correction_Options := (0.75, 0.375, 0.03125, 6.5, 7.25, 0.875);
+      Sent_F : aliased constant ABI.C_Fundamental := (11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0);
+      type Positions is array (Natural range <>) of Natural;
+      Offsets : constant Positions :=
+        [Value.Minimum_Second_Singular_Ratio'Position, Value.Maximum_Third_Singular_Ratio'Position,
+         Value.Minimum_Epipolar_Line_Ratio'Position, Value.Maximum_Corrected_Error_Pixels'Position,
+         Value.Absolute_Displacement_Excess_Pixels'Position, Value.Relative_Displacement_Excess'Position];
+   begin
+      Assert (ABI.C_Correction_Options'Size = Natural (Layout (0)) * System.Storage_Unit, "options size");
+      Assert (ABI.C_Correction_Options'Alignment = Natural (Layout (1)), "options alignment");
+      for I in Offsets'Range loop
+         Assert (Offsets (I) = Natural (Layout (Interfaces.Integer_32 (I + 2))), "options field offset");
+      end loop;
+      Fill (Value'Access);
+      Assert (Value.Minimum_Second_Singular_Ratio = 0.125 and then Value.Maximum_Third_Singular_Ratio = 0.0625
+              and then Value.Minimum_Epipolar_Line_Ratio = 0.25 and then Value.Maximum_Corrected_Error_Pixels = 3.5
+              and then Value.Absolute_Displacement_Excess_Pixels = 4.75
+              and then Value.Relative_Displacement_Excess = 0.5, "C-to-Ada options interchange, all six fields");
+      Assert (Read (Sent'Access) = 1, "Ada-to-C options interchange, all six fields");
+      Assert (Read_F (Sent_F'Access) = 1, "Ada-to-C fundamental interchange, all nine fields");
+      Ada.Text_IO.Put_Line ("correction options layout: size=" & Interfaces.Integer_32'Image (Layout (0)) &
+        " alignment=" & Interfaces.Integer_32'Image (Layout (1)) & "; six offsets + both interchanges PASS");
+   end Correction_Layout;
+
 
 
 
@@ -4782,6 +5366,21 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("pose composition Rodrigues boundary cases", Compose_Rodrigues'Access));
       Result.Add_Test (Caller.Create ("pose composition numerical and invalid inputs", Compose_Numbers'Access));
       Result.Add_Test (Caller.Create ("pose composition C/Ada layout, interchange and aliasing", Compose_Layout'Access));
+      Result.Add_Test (Caller.Create ("epipolar correction horizontal analytic oracle", Correction_Rectified'Access));
+      Result.Add_Test (Caller.Create ("epipolar correction vertical analytic oracle", Correction_Vertical'Access));
+      Result.Add_Test (Caller.Create ("epipolar correction F scale, sign and normalization", Correction_Scale'Access));
+      Result.Add_Test (Caller.Create ("epipolar correction SVD conditioning policy", Correction_Conditioning'Access));
+      Result.Add_Test (Caller.Create ("epipolar correction one-sided bound rejects native output",
+                                      Correction_Native_Bound'Access));
+      Result.Add_Test (Caller.Create ("epipolar correction epipole and line-quality policy", Correction_Epipoles'Access));
+      Result.Add_Test (Caller.Create ("epipolar correction corrected residual policy", Correction_Residual'Access));
+      Result.Add_Test (Caller.Create ("epipolar correction coordinate magnitudes", Correction_Coordinates'Access));
+      Result.Add_Test (Caller.Create ("epipolar correction nonidentity noisy stereo", Correction_Stereo'Access));
+      Result.Add_Test (Caller.Create ("epipolar correction after fundamental RANSAC", Correction_RANSAC'Access));
+      Result.Add_Test (Caller.Create ("epipolar correction lower bounds and empty", Correction_Bounds'Access));
+      Result.Add_Test (Caller.Create ("epipolar correction Positive'Last lower bound", Correction_Upper_Bound'Access));
+      Result.Add_Test (Caller.Create ("epipolar correction invalid inputs and options", Correction_Invalid'Access));
+      Result.Add_Test (Caller.Create ("epipolar correction C/Ada layout and interchange", Correction_Layout'Access));
       return Result;
    end Suite;
 end Calib3D_Tests;

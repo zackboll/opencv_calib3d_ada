@@ -4,6 +4,7 @@
 #include "fundamental_profile.hpp"
 #include "essential_profile.hpp"
 #include "triangulation_profile.hpp"
+#include "correction_profile.hpp"
 #include "opencv_core_module_bridge.hpp"
 
 #include <opencv2/core.hpp>
@@ -108,6 +109,7 @@ thread_local double triangulation_h[4]{};
 thread_local int planar_control = 0;
 thread_local int visibility_control = 0;
 thread_local int ap3p_control = 0;
+thread_local int correction_control = 0;
 void checkpoint(int stage) {
     if (failure_stage != stage) return;
     const int kind = failure_kind;
@@ -293,6 +295,10 @@ const char *opencv_calib3d_last_error(void) { return error_text; }
 void opencv_calib3d_test_planar_control(int mode) { planar_control = mode; }
 void opencv_calib3d_test_visibility_control(int mode) { visibility_control = mode; }
 void opencv_calib3d_test_ap3p_control(int mode) { ap3p_control = mode; }
+// Test-only: alter the REAL native correctMatches output after the call so the
+// output gate can be exercised. 1 NaN, 2 large residual, 3 epipolar-consistent
+// but excessive displacement, 4 wrong output shape, 5 infinity.
+void opencv_calib3d_test_correction_control(int mode) { correction_control = mode; }
 #endif
 const char *opencv_calib3d_native_version(void) { return CV_VERSION; }
 const char *opencv_calib3d_native_backend(void) {
@@ -1417,5 +1423,151 @@ opencv_calib3d_status opencv_calib3d_triangulation_result_point(
 }
 void opencv_calib3d_triangulation_result_destroy(opencv_calib3d_triangulation_result_handle *result) {
     try { delete result; } catch (...) {}
+}
+
+// Guarded native cv::correctMatches. OpenCV performs the correction; this shim
+// validates, normalizes F, screens conditioning/input lines with CALLER policy,
+// executes the native call once, verifies finite output, corrected epipolar
+// residual and the one-sided displacement bound (a NECESSARY optimality condition
+// only), then publishes a complete Nx2 result once. No fallback solver.
+opencv_calib3d_status opencv_calib3d_correct_matches(
+    const opencv_calib3d_fundamental *fundamental,
+    const opencv_core_mat_handle *first_points,
+    const opencv_core_mat_handle *second_points,
+    const opencv_calib3d_correction_options *options,
+    opencv_core_mat_handle *corrected_pairs) {
+    return guarded([&] {
+        namespace d = opencv_calib3d_detail;
+        require(fundamental && options && first_points && second_points && corrected_pairs,
+                "null epipolar correction argument");
+        // Direct handle aliasing is rejected before any output resolution.
+        require(corrected_pairs != first_points && corrected_pairs != second_points,
+                "corrected output must not alias an input handle");
+        require(d::correction_options_fit(*options), "invalid epipolar correction options");
+        double f[9];
+        switch (d::normalize_fundamental(*fundamental, f)) {
+        case d::fundamental_normalization::ok: break;
+        case d::fundamental_normalization::nonfinite: require(false, "fundamental entries must be finite"); break;
+        case d::fundamental_normalization::zero: require(false, "fundamental matrix is zero"); break;
+        default: require(false, "fundamental normalization would underflow a nonzero coefficient");
+        }
+        // Native Float64 SVD of the normalized F: measured values, never a rank-2 projection.
+        cv::Mat normalized(3, 3, CV_64FC1);
+        for (int i = 0; i < 9; ++i) normalized.at<double>(i / 3, i % 3) = f[i];
+        cv::Mat singular;
+        cv::SVD::compute(normalized, singular, cv::SVD::NO_UV);
+        require(singular.total() == 3 && singular.type() == CV_64FC1, "native SVD schema differs");
+        const double s1 = singular.at<double>(0), s2 = singular.at<double>(1),
+                     s3 = singular.at<double>(2);
+        require(std::isfinite(s1) && std::isfinite(s2) && std::isfinite(s3) &&
+                s1 > 0 && s2 > 0 && s3 >= 0 && s1 >= s2 && s2 >= s3,
+                "fundamental singular values are not admissible");
+        const double second_ratio = s2 / s1, third_ratio = s3 / s1;
+        require(std::isfinite(second_ratio) && std::isfinite(third_ratio),
+                "fundamental singular ratios are not representable");
+        require(second_ratio >= options->minimum_second_singular_ratio,
+                "fundamental second singular ratio below caller policy");
+        require(third_ratio <= options->maximum_third_singular_ratio,
+                "fundamental third singular ratio above caller policy");
+
+        const cv::Mat &a = resolve_input(first_points), &b = resolve_input(second_points);
+        const auto schema = [](const cv::Mat &m) {
+            require(m.dims == 2 && m.type() == CV_64FC2 && m.cols == 1 && m.rows >= 0,
+                    "correction points must be typed Nx1 Float64 C2");
+        };
+        schema(a); schema(b);
+        require(a.rows == b.rows, "correction counts differ");
+        validate_finite_image_points(a); validate_finite_image_points(b);
+        cv::Mat &output = resolve_output(corrected_pairs);
+        require(&output != &a && &output != &b, "corrected output must not alias an input Mat");
+        const int count = a.rows;
+
+        // Independent contiguous snapshots in the legacy 1xN layout for every version.
+        cv::Mat p1(1, std::max(count, 1), CV_64FC2), p2(1, std::max(count, 1), CV_64FC2);
+        std::vector<double> bound(static_cast<std::size_t>(count));
+        for (int i = 0; i < count; ++i) {
+            const cv::Vec2d u = a.at<cv::Vec2d>(i, 0), v = b.at<cv::Vec2d>(i, 0);
+            // Component stores: OpenCV 4.1 Vec copy-assignment is -Wdeprecated-copy.
+            for (int k = 0; k < 2; ++k) {
+                p1.at<cv::Vec2d>(0, i)[k] = u[k];
+                p2.at<cv::Vec2d>(0, i)[k] = v[k];
+            }
+            double n1, n2, d1, d2, quality;
+            switch (d::epipolar_distances(f, u[0], u[1], v[0], v[1], n1, n2, d1, d2)) {
+            case d::epipolar_geometry::ok: break;
+            case d::epipolar_geometry::undefined_line: require(false, "input epipolar line is undefined"); break;
+            default: require(false, "input epipolar arithmetic is not representable");
+            }
+            require(d::epipolar_line_quality(f, u[0], u[1], v[0], v[1], n1, n2, quality),
+                    "input epipolar-line quality is not representable");
+            require(quality >= options->minimum_epipolar_line_ratio,
+                    "input epipolar-line quality below caller policy");
+            bound[static_cast<std::size_t>(i)] = std::min(d1, d2);
+        }
+        if (count == 0) {
+            // Valid typed empty request: native correctMatches is never executed.
+            cv::Mat empty(0, 2, CV_64FC2);
+            checkpoint(61);
+            output = std::move(empty);
+            return;
+        }
+        cv::Mat c1, c2;
+        checkpoint(58);
+        cv::correctMatches(normalized, p1, p2, c1, c2);
+        checkpoint(59);
+#ifdef OPENCV_CALIB3D_TEST_HOOKS
+        if (correction_control != 0) {
+            const int mode = correction_control;
+            correction_control = 0;
+            if (c1.dims == 2 && c1.rows == 1 && c1.cols == count && c1.type() == CV_64FC2 &&
+                c2.dims == 2 && c2.rows == 1 && c2.cols == count && c2.type() == CV_64FC2) {
+                cv::Vec2d &x = c1.at<cv::Vec2d>(0, 0), &y = c2.at<cv::Vec2d>(0, 0);
+                switch (mode) {
+                case 1: x[0] = std::numeric_limits<double>::quiet_NaN(); break;
+                case 2: y[1] += 1000; break;
+                case 3: x[0] += 1000; y[0] += 1000; break;
+                case 4: c1 = cv::Mat(1, count + 1, CV_64FC2, cv::Scalar(0, 0)); break;
+                default: y[0] = std::numeric_limits<double>::infinity(); break;
+                }
+            }
+        }
+#endif
+        checkpoint(60);
+        const auto native_schema = [count](const cv::Mat &m) {
+            require(m.dims == 2 && m.rows == 1 && m.cols == count && m.type() == CV_64FC2,
+                    "native correctMatches output schema differs");
+        };
+        native_schema(c1); native_schema(c2);
+        cv::Mat result(count, 2, CV_64FC2);
+        for (int i = 0; i < count; ++i) {
+            const cv::Vec2d u = p1.at<cv::Vec2d>(0, i), v = p2.at<cv::Vec2d>(0, i);
+            const cv::Vec2d q1 = c1.at<cv::Vec2d>(0, i), q2 = c2.at<cv::Vec2d>(0, i);
+            require(std::isfinite(q1[0]) && std::isfinite(q1[1]) &&
+                    std::isfinite(q2[0]) && std::isfinite(q2[1]),
+                    "native correctMatches returned a nonfinite coordinate");
+            double n1, n2, e1, e2;
+            require(d::epipolar_distances(f, q1[0], q1[1], q2[0], q2[1], n1, n2, e1, e2) ==
+                    d::epipolar_geometry::ok, "corrected epipolar line is undefined");
+            require(std::max(e1, e2) <= options->maximum_corrected_error_pixels,
+                    "corrected epipolar error exceeds caller policy");
+            const double delta[4] = {q1[0] - u[0], q1[1] - u[1], q2[0] - v[0], q2[1] - v[1]};
+            double displacement = 0, allowed = 0;
+            require(d::displacement_norm4(delta, displacement),
+                    "correction displacement is not representable");
+            require(d::displacement_allowance(bound[static_cast<std::size_t>(i)],
+                                              options->relative_displacement_excess,
+                                              options->absolute_displacement_excess_pixels,
+                                              allowed),
+                    "one-sided displacement allowance is not representable");
+            require(displacement <= allowed,
+                    "native correction displacement exceeds the one-sided feasible bound");
+            for (int k = 0; k < 2; ++k) {
+                result.at<cv::Vec2d>(i, 0)[k] = q1[k];
+                result.at<cv::Vec2d>(i, 1)[k] = q2[k];
+            }
+        }
+        checkpoint(61);
+        output = std::move(result);
+    });
 }
 } // extern "C"

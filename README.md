@@ -1,5 +1,19 @@
 # OpenCV Calib3D for Ada
 
+## Task 015: guarded native epipolar correspondence correction
+
+`Correct_Epipolar_Matches` binds native OpenCV `cv::correctMatches` under a
+guarded, all-or-error contract. OpenCV performs the Hartley–Sturm correction;
+Ada and the shim validate inputs, normalize F, apply **caller-selected** SVD
+conditioning and input-line-quality policies (no defaults), and verify finite
+output, the corrected epipolar residual and a one-sided displacement bound. That
+bound is a **necessary** optimality condition only: success is not a
+global-optimality certificate, and native output may be rejected even when OpenCV
+returns normally. No pose, metric scale or position is recovered. See the
+[contract](docs/epipolar-correction-contract.md), [source review and research
+findings](docs/epipolar-correction-source-review.md) and
+[qualification](docs/epipolar-correction-validation.md).
+
 ## Task 014: native pose composition
 
 `Compose_Poses (First, Second)` chains two world-to-camera rigid transforms

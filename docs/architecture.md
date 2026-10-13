@@ -1,5 +1,22 @@
 # Architecture
 
+## Task 015 guarded native epipolar correction
+
+`Correct_Epipolar_Matches` calls native `cv::correctMatches` exactly once per
+nonempty request through one new guarded private operation,
+`opencv_calib3d_correct_matches`; the private ABI is now **48** imports and
+exports. The shim validates options, normalizes F by its maximum absolute
+coefficient (rejecting silent coefficient underflow), measures native Float64 SVD
+ratios against caller policy, screens input epipolar-line quality, snapshots
+strided Nx1 inputs into contiguous 1xN matrices (the legacy 4.x layout), and
+verifies native output (schema, finiteness, corrected residual, one-sided
+displacement bound) before publishing one Nx2 CV_64FC2 result. The pure checks
+live in `cpp/correction_profile.hpp`, which contains no correction algorithm.
+Ada independently validates, re-verifies every published pair and computes
+diagnostics; it never solves for corrected points. Checkpoints 58..61 and a
+test-only post-native output control exist only in fault builds. See the
+[contract](epipolar-correction-contract.md).
+
 ## Task 014 native pose composition
 
 `Compose_Poses (First, Second)` calls native `cv::composeRT` (no Jacobians)
