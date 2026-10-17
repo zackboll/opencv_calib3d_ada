@@ -34,9 +34,10 @@ class RepositoryTests(unittest.TestCase):
         self.assertIn("X_camera = R * X_world + t", text)
         self.assertIn("C_world = -R^T * t", text)
 
-    def test_windows_has_no_pr_or_manual_trigger(self):
+    def test_windows_pr_is_limited_to_its_workflow_file(self):
         text = (ROOT / ".github/workflows/windows-post-merge.yml").read_text()
-        self.assertNotIn("pull_request:", text)
+        self.assertIn("pull_request:", text)
+        self.assertIn("- .github/workflows/windows-post-merge.yml", text)
         self.assertNotIn("workflow_dispatch:", text)
 
     def test_compatibility_is_manual(self):
@@ -182,8 +183,27 @@ class RepositoryTests(unittest.TestCase):
         cross = (ROOT / ".github/workflows/cross-platform.yml").read_text()
         windows = (ROOT / ".github/workflows/windows-post-merge.yml").read_text()
         compatibility = (ROOT / ".github/workflows/opencv-compatibility.yml").read_text()
+        widened = windows.replace(
+            "  push:\n    branches:\n      - main\n",
+            "  push:\n    branches:\n      - main\n      - feature/**\n",
+            1,
+        )
+        self.assertNotEqual(widened, windows)
         with self.assertRaises(ValueError):
-            check_topology(cross, windows.replace("- main", "- main\n      - feature/**"), compatibility)
+            check_topology(cross, widened, compatibility)
+
+    def test_topology_rejects_broad_windows_pr(self):
+        cross = (ROOT / ".github/workflows/cross-platform.yml").read_text()
+        windows = (ROOT / ".github/workflows/windows-post-merge.yml").read_text()
+        compatibility = (ROOT / ".github/workflows/opencv-compatibility.yml").read_text()
+        broad = windows.replace(
+            "      - .github/workflows/windows-post-merge.yml",
+            "      - '**'",
+        )
+        with self.assertRaises(ValueError):
+            check_topology(cross, broad, compatibility)
+        with self.assertRaises(ValueError):
+            check_topology(cross, windows + "  workflow_dispatch:\n", compatibility)
 
     def test_topology_rejects_extra_pr_job(self):
         cross = (ROOT / ".github/workflows/cross-platform.yml").read_text()

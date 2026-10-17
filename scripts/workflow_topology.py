@@ -61,15 +61,31 @@ def _jobs(text: str) -> dict[str, str]:
     return result
 
 
+def _windows_pr_is_workflow_file_only(text: str) -> bool:
+    """Allow only a main PR trigger filtered to this workflow file."""
+    if "workflow_dispatch:" in text:
+        return False
+    lines = [line.strip() for line in _section(text, "pull_request")
+             if line.strip() and not line.lstrip().startswith("#")]
+    return lines == [
+        "branches:",
+        "- main",
+        "paths:",
+        "- .github/workflows/windows-post-merge.yml",
+    ]
+
+
 def check_topology(cross_text: str, windows_text: str, compatibility_text: str) -> None:
     if _event_names(cross_text) != {"pull_request", "push", "workflow_dispatch"}:
         raise ValueError("cross-platform workflow triggers changed")
     if not _push_is_main_only(cross_text):
         raise ValueError("cross-platform push must target main only")
-    if _event_names(windows_text) != {"push"} or not _push_is_main_only(windows_text):
-        raise ValueError("Windows must be push-to-main only")
-    if "pull_request:" in windows_text or "workflow_dispatch:" in windows_text:
-        raise ValueError("Windows may not run on PR or manual dispatch")
+    if (_event_names(windows_text) != {"push", "pull_request"}
+            or not _push_is_main_only(windows_text)
+            or not _windows_pr_is_workflow_file_only(windows_text)):
+        raise ValueError("Windows PR scope must stay limited to its workflow file")
+    if "workflow_dispatch:" in windows_text:
+        raise ValueError("Windows may not run on manual dispatch")
     if _event_names(compatibility_text) != {"workflow_dispatch"}:
         raise ValueError("compatibility matrix must be manual-only")
 
