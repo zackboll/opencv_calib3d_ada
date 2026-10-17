@@ -45,6 +45,10 @@ poses. Aliased output is rejected before clearing. See the
 [contract](pose-composition-contract.md), [source review](pose-composition-source-review.md)
 and [qualification](pose-composition-validation.md).
 
+## Task 018 relative camera motion
+
+No new C ABI operation. Inversion, relative pose, and baseline diagnostics reuse native Rodrigues, camera-center, and `composeRT`. The private ABI remains 48 operations. See the [contract](relative-camera-motion-contract.md).
+
 ## Task 013 reference diagnostics
 
 No new C ABI operation. The private ABI remains 46 imports and exports.

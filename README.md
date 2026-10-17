@@ -48,6 +48,10 @@ This is coordinate-frame composition, not navigation fusion or geolocation.
 See the [contract](docs/pose-composition-contract.md) and
 [qualification](docs/pose-composition-validation.md).
 
+## Task 018: camera pose inversion and relative motion
+
+`Invert_Pose` inverts a rigid source-to-destination transform stored in `World_To_Camera_Pose`. `Camera_To_Camera_Pose (First, Second)` maps first-camera coordinates to second-camera coordinates by composing the inverse of `First` with `Second`. `Measure_Camera_Motion` reports both world camera centers, the world displacement `C2 - C1`, and its scaled baseline length. Relative translation is in the second camera frame and is not that displacement. `t` is not a camera position. Scale exists only because both absolute poses use the same caller Cartesian frame. No estimator, geographic frame, or navigation uncertainty is implied. See the [contract](docs/relative-camera-motion-contract.md) and [qualification](docs/relative-camera-motion-validation.md).
+
 ## Task 013: AP3P independent-reference diagnostics
 
 `Evaluate_AP3P_References` classifies additional world/pixel observations

@@ -85,6 +85,6 @@ See [contract](triangulation-refinement-contract.md) and
 [qualification](triangulation-refinement-validation.md). It does not add bundle
 adjustment, metric scale, covariance, depth uncertainty or navigation conversion.
 
-Task 014 adds native `cv::composeRT` pose composition only: no pose inversion,
-Jacobians, SLAM, geolocation or navigation fusion. See
-[contract](pose-composition-contract.md).
+Task 014 adds native `cv::composeRT` pose composition only: no Jacobians, SLAM, geolocation or navigation fusion. See [contract](pose-composition-contract.md).
+
+Task 018 adds pose inversion, relative camera-to-camera motion, and baseline diagnostics on top of that composition. It does not add an estimator, covariance, or geographic conversion. See [contract](relative-camera-motion-contract.md).

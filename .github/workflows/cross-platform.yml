@@ -52,6 +52,7 @@ jobs:
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/fundamental_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/essential_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/triangulation_synthetic
+          alr -n -C examples exec -- sh ../scripts/run_native.sh bin/relative_motion_synthetic
   linux-sanitizers:
     runs-on: ubuntu-24.04
     steps:
@@ -110,3 +111,4 @@ jobs:
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/fundamental_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/essential_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/triangulation_synthetic
+          alr -n -C examples exec -- sh ../scripts/run_native.sh bin/relative_motion_synthetic

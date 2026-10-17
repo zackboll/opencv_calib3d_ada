@@ -637,6 +637,36 @@ package body OpenCV.Calib3D is
          raise OpenCV.OpenCV_Error with "Pose composition exceeds Float64 range";
    end Compose_Poses;
 
+   function Checked_Difference
+     (Left, Right : OpenCV.Float64_Value) return OpenCV.Float64_Value
+   is
+      Result : OpenCV.Float64_Value;
+   begin
+      Result := Left - Right;
+      if not Is_Finite (Result) then
+         raise OpenCV.OpenCV_Error with "Pose difference exceeds Float64 range";
+      end if;
+      return Result;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Pose difference exceeds Float64 range";
+   end Checked_Difference;
+
+   function Checked_Sum
+     (Left, Right : OpenCV.Float64_Value) return OpenCV.Float64_Value
+   is
+      Result : OpenCV.Float64_Value;
+   begin
+      Result := Left + Right;
+      if not Is_Finite (Result) then
+         raise OpenCV.OpenCV_Error with "Pose sum exceeds Float64 range";
+      end if;
+      return Result;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Pose sum exceeds Float64 range";
+   end Checked_Sum;
+
    function Rotation_Matrix_Of (Pose : World_To_Camera_Pose) return Rotation_Matrix is
       Native_Pose : aliased C.C_Pose;
       Matrix : aliased C.C_Rotation_Matrix := (others => 0.0);
@@ -669,6 +699,48 @@ package body OpenCV.Calib3D is
          end if;
       end loop;
    end Validate_Vector;
+
+   --  Scaled Euclidean norm. A zero vector returns exactly 0.0. Components
+   --  are scaled before squaring, and Scale * Sqrt is rejected when the
+   --  mathematical norm itself cannot be represented.
+   function Scaled_Vector_Norm (Value : Object_Point) return OpenCV.Float64_Value is
+      Scale : OpenCV.Float64_Value := 0.0;
+      Sum   : OpenCV.Float64_Value := 0.0;
+      Norm  : OpenCV.Float64_Value;
+   begin
+      Validate_Vector (Value);
+      for Component of Value loop
+         Scale := OpenCV.Float64_Value'Max (Scale, abs Component);
+      end loop;
+      if Scale = 0.0 then
+         return 0.0;
+      end if;
+      for Component of Value loop
+         declare
+            Scaled : constant OpenCV.Float64_Value := Component / Scale;
+         begin
+            Sum := Checked_Sum (Sum, Scaled * Scaled);
+         end;
+      end loop;
+      Norm := Math.Sqrt (Sum);
+      if not Is_Finite (Norm) or else Norm < 0.0 then
+         raise OpenCV.OpenCV_Error with "Baseline norm is not representable";
+      end if;
+      if Norm = 0.0 then
+         return 0.0;
+      end if;
+      declare
+         Result : constant OpenCV.Float64_Value := Scale * Norm;
+      begin
+         if not Is_Finite (Result) then
+            raise OpenCV.OpenCV_Error with "Baseline magnitude exceeds Float64 range";
+         end if;
+         return Result;
+      end;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Baseline magnitude exceeds Float64 range";
+   end Scaled_Vector_Norm;
 
    function Rotate
      (Matrix : Rotation_Matrix; Value : Object_Point; Transpose : Boolean := False)
@@ -773,6 +845,122 @@ package body OpenCV.Calib3D is
       when Constraint_Error =>
          raise OpenCV.OpenCV_Error with "Direction normalization exceeds Float64 range";
    end Unit_Vector;
+
+   function Invert_Pose (Pose : World_To_Camera_Pose) return World_To_Camera_Pose is
+      Matrix   : Rotation_Matrix;
+      Center   : Object_Point;
+      Negated  : World_To_Camera_Pose;
+      Composed : World_To_Camera_Pose;
+   begin
+      Validate (Pose);
+      --  Native camera center is the inverse translation -R^T * t.
+      Center := Camera_Center (Pose);
+      Validate_Vector (Center);
+      Matrix := Rotation_Matrix_Of (Pose);
+      --  A negated Rodrigues vector represents the inverse rotation only when
+      --  native Rodrigues of that vector reproduces R^T.
+      Negated :=
+        (Rotation => [-Pose.Rotation (0), -Pose.Rotation (1), -Pose.Rotation (2)],
+         Translation => Center);
+      Validate (Negated);
+      declare
+         Negated_Matrix : constant Rotation_Matrix := Rotation_Matrix_Of (Negated);
+      begin
+         for Row in 0 .. 2 loop
+            for Col in 0 .. 2 loop
+               if not Is_Finite (Negated_Matrix (Row, Col))
+                 or else abs (Negated_Matrix (Row, Col) - Matrix (Col, Row)) > 1.0E-12
+               then
+                  raise OpenCV.OpenCV_Error with
+                    "Negated Rodrigues vector does not reproduce the inverse rotation";
+               end if;
+            end loop;
+         end loop;
+      end;
+      --  Publish through native composeRT rather than an Ada-built vector.
+      Composed := Compose_Poses
+        ((Rotation => Negated.Rotation, Translation => [others => 0.0]),
+         (Rotation => [others => 0.0], Translation => Center));
+      for Axis in 0 .. 2 loop
+         --  Composition with zero translation adds Center without scaling.
+         if Composed.Translation (Axis) /= Center (Axis) then
+            raise OpenCV.OpenCV_Error with "Inverse translation was not preserved";
+         end if;
+      end loop;
+      Validate (Composed);
+      declare
+         Published_Matrix : constant Rotation_Matrix := Rotation_Matrix_Of (Composed);
+      begin
+         for Row in 0 .. 2 loop
+            for Col in 0 .. 2 loop
+               --  Rotation entries are bounded by one, so an absolute
+               --  dimensionless tolerance is appropriate here.
+               if abs (Published_Matrix (Row, Col) - Matrix (Col, Row)) > 1.0E-12 then
+                  raise OpenCV.OpenCV_Error with "Published inverse rotation disagrees with transpose";
+               end if;
+            end loop;
+         end loop;
+      end;
+      return Composed;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Pose inversion exceeds Float64 range";
+   end Invert_Pose;
+
+   function Camera_To_Camera_Pose
+     (First, Second : World_To_Camera_Pose) return World_To_Camera_Pose
+   is
+   begin
+      Validate (First);
+      Validate (Second);
+      --  Apply the inverse of First, then Second.
+      return Compose_Poses (Invert_Pose (First), Second);
+   end Camera_To_Camera_Pose;
+
+   function Measure_Camera_Motion
+     (First, Second : World_To_Camera_Pose) return Camera_Motion_Result
+   is
+      Relative : World_To_Camera_Pose;
+      C1, C2, Displacement, In_First : Object_Point;
+      Baseline : OpenCV.Float64_Value;
+   begin
+      Validate (First);
+      Validate (Second);
+      Relative := Camera_To_Camera_Pose (First, Second);
+      C1 := Camera_Center (First);
+      C2 := Camera_Center (Second);
+      Validate_Vector (C1);
+      Validate_Vector (C2);
+      for Axis in 0 .. 2 loop
+         Displacement (Axis) := Checked_Difference (C2 (Axis), C1 (Axis));
+      end loop;
+      Validate_Vector (Displacement);
+      --  Second center expressed in the first camera frame.
+      In_First := Rotate (Rotation_Matrix_Of (First), Displacement);
+      Baseline := Scaled_Vector_Norm (Displacement);
+      if Displacement (0) = 0.0 and then Displacement (1) = 0.0
+        and then Displacement (2) = 0.0
+      then
+         return (Baseline_Direction_Defined => False,
+                 Relative_Pose => Relative,
+                 First_Center_World => C1,
+                 Second_Center_World => C2,
+                 Second_Center_In_First => In_First,
+                 Displacement_World => Displacement,
+                 Baseline_Distance => Baseline);
+      end if;
+      return (Baseline_Direction_Defined => True,
+              Relative_Pose => Relative,
+              First_Center_World => C1,
+              Second_Center_World => C2,
+              Second_Center_In_First => In_First,
+              Displacement_World => Displacement,
+              Baseline_Distance => Baseline,
+              Baseline_Direction_World => Unit_Vector (Displacement));
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Camera motion exceeds Float64 range";
+   end Measure_Camera_Motion;
 
    function Undistort_To_Normalized
      (Points : Image_Point_Array; Intrinsics : Camera_Intrinsics;

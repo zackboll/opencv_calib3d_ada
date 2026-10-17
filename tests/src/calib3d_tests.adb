@@ -6047,6 +6047,449 @@ package body Calib3D_Tests is
    end Compose_Layout;
 
    ---------------------------------------------------------------------------
+   --  Task 018. These analytic matrices and centers are test oracles. They
+   --  are not the production inversion, composition, or baseline algorithm.
+   ---------------------------------------------------------------------------
+   function Transpose (M : Rotation_Matrix) return Rotation_Matrix is
+     ([[M (0, 0), M (1, 0), M (2, 0)],
+       [M (0, 1), M (1, 1), M (2, 1)],
+       [M (0, 2), M (1, 2), M (2, 2)]]);
+
+   function Oracle_Center (R : Rotation_Matrix; T : Object_Point) return Object_Point is
+     ([-R (0, 0) * T (0) - R (1, 0) * T (1) - R (2, 0) * T (2),
+       -R (0, 1) * T (0) - R (1, 1) * T (1) - R (2, 1) * T (2),
+       -R (0, 2) * T (0) - R (1, 2) * T (1) - R (2, 2) * T (2)]);
+
+   function Point_Gap (Left, Right : Object_Point) return OpenCV.Float64_Value is
+      Worst : OpenCV.Float64_Value := 0.0;
+   begin
+      for Axis in 0 .. 2 loop
+         Worst := OpenCV.Float64_Value'Max (Worst, abs (Left (Axis) - Right (Axis)));
+      end loop;
+      return Worst;
+   end Point_Gap;
+
+   --  Closed-form axis-angle oracle for moderate test vectors only.
+   function Oracle_Rotation (Vector : Rotation_Vector) return Rotation_Matrix is
+      Angle : constant OpenCV.Float64_Value :=
+        Math.Sqrt (Vector (0) ** 2 + Vector (1) ** 2 + Vector (2) ** 2);
+      Axis : constant Object_Point :=
+        [Vector (0) / Angle, Vector (1) / Angle, Vector (2) / Angle];
+      Cosine : constant OpenCV.Float64_Value := Math.Cos (Angle);
+      Sine : constant OpenCV.Float64_Value := Math.Sin (Angle);
+      Cross : constant Rotation_Matrix :=
+        [[0.0, -Axis (2), Axis (1)], [Axis (2), 0.0, -Axis (0)],
+         [-Axis (1), Axis (0), 0.0]];
+   begin
+      return Result : Rotation_Matrix do
+         for Row in 0 .. 2 loop
+            for Col in 0 .. 2 loop
+               Result (Row, Col) := (1.0 - Cosine) * Axis (Row) * Axis (Col)
+                 + Sine * Cross (Row, Col);
+               if Row = Col then
+                  Result (Row, Col) := Result (Row, Col) + Cosine;
+               end if;
+            end loop;
+         end loop;
+      end return;
+   end Oracle_Rotation;
+
+   procedure Assert_Rigid
+     (Pose : World_To_Camera_Pose; Expected_R : Rotation_Matrix;
+      Expected_T : Object_Point; Message : String)
+   is
+   begin
+      Assert (Matrix_Difference (Rotation_Matrix_Of (Pose), Expected_R) < 1.0E-12, Message);
+      Assert (Point_Gap (Object_Point (Pose.Translation), Expected_T) < 1.0E-12, Message);
+   end Assert_Rigid;
+
+   procedure Motion_Rejects (First, Second : World_To_Camera_Pose; Message : String) is
+   begin
+      declare
+         Value : constant Camera_Motion_Result := Measure_Camera_Motion (First, Second);
+         pragma Unreferenced (Value);
+      begin
+         Assert (False, Message);
+      end;
+   exception
+      when OpenCV.OpenCV_Error => null;
+   end Motion_Rejects;
+
+   procedure Motion_Identity (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Identity : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, 0.0], Translation => [0.0, 0.0, 0.0]);
+      Inverse : constant World_To_Camera_Pose := Invert_Pose (Identity);
+      Relative : constant World_To_Camera_Pose := Camera_To_Camera_Pose (Identity, Identity);
+      Motion : constant Camera_Motion_Result := Measure_Camera_Motion (Identity, Identity);
+      Eye : constant Rotation_Matrix :=
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+   begin
+      Assert_Rigid (Inverse, Eye, [0.0, 0.0, 0.0], "identity inverse");
+      Assert_Rigid (Relative, Eye, [0.0, 0.0, 0.0], "identical relative pose");
+      Assert (not Motion.Baseline_Direction_Defined, "identity baseline direction is defined");
+      Assert (Motion.Baseline_Distance = 0.0, "identity baseline is not exact zero");
+      Assert (Motion.Displacement_World = Object_Point'[0.0, 0.0, 0.0],
+              "identity displacement is not exact zero");
+      declare
+         Pose : constant World_To_Camera_Pose :=
+           (Rotation => [0.3, -0.2, 0.5], Translation => [1.2, -0.7, 3.4]);
+         Same : constant Camera_Motion_Result := Measure_Camera_Motion (Pose, Pose);
+      begin
+         Assert (Same.Baseline_Distance = 0.0 and then not Same.Baseline_Direction_Defined,
+                 "identical nonidentity poses must have exact zero baseline");
+         Assert_Rigid (Same.Relative_Pose, Eye, [0.0, 0.0, 0.0],
+                       "identical nonidentity relative pose");
+      end;
+   end Motion_Identity;
+
+   procedure Motion_Translation (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Identity rotations: analytic centers are exactly -t.
+      First : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, 0.0], Translation => [1.0, -2.0, 4.0]);
+      Second : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, 0.0], Translation => [5.0, 1.0, -3.0]);
+      Relative : constant World_To_Camera_Pose := Camera_To_Camera_Pose (First, Second);
+      Motion : constant Camera_Motion_Result := Measure_Camera_Motion (First, Second);
+      Eye : constant Rotation_Matrix :=
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+      Expected_T : constant Object_Point := [4.0, 3.0, -7.0];
+      Expected_C1 : constant Object_Point := [-1.0, 2.0, -4.0];
+      Expected_C2 : constant Object_Point := [-5.0, -1.0, 3.0];
+      Expected_D : constant Object_Point := [-4.0, -3.0, 7.0];
+   begin
+      Assert_Rigid (Relative, Eye, Expected_T, "translation-only relative pose");
+      Assert (Point_Gap (Motion.First_Center_World, Expected_C1) < 1.0E-12, "first center");
+      Assert (Point_Gap (Motion.Second_Center_World, Expected_C2) < 1.0E-12, "second center");
+      Assert (Point_Gap (Motion.Displacement_World, Expected_D) < 1.0E-12, "world displacement");
+      Assert (Point_Gap (Motion.Second_Center_In_First, Expected_D) < 1.0E-12,
+              "identity-frame center in first camera");
+      Assert (Near (Motion.Baseline_Distance, Math.Sqrt (74.0), 1.0E-12), "baseline sqrt(74)");
+      Assert (Motion.Baseline_Direction_Defined, "nonzero baseline direction missing");
+      Assert (Point_Gap (Motion.Baseline_Direction_World,
+                         [Expected_D (0) / Motion.Baseline_Distance,
+                          Expected_D (1) / Motion.Baseline_Distance,
+                          Expected_D (2) / Motion.Baseline_Distance]) < 1.0E-12,
+              "baseline direction");
+      Assert (abs (Motion.Relative_Pose.Translation (0) - Motion.Displacement_World (0)) > 1.0,
+              "relative translation must not be copied from world displacement");
+   end Motion_Translation;
+
+   procedure Motion_Noncommuting (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  R1 = Rz(pi/3), t1 = (1, 0, 0); R2 = Rx(pi/4), t2 = (0, 2, 0).
+      R1 : constant Rotation_Matrix := Rot_Z (Pi_Value / 3.0);
+      R2 : constant Rotation_Matrix := Rot_X (Pi_Value / 4.0);
+      T1 : constant Object_Point := [1.0, 0.0, 0.0];
+      T2 : constant Object_Point := [0.0, 2.0, 0.0];
+      First : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, Pi_Value / 3.0], Translation => Translation_Vector (T1));
+      Second : constant World_To_Camera_Pose :=
+        (Rotation => [Pi_Value / 4.0, 0.0, 0.0], Translation => Translation_Vector (T2));
+      Relative : constant World_To_Camera_Pose :=
+        Camera_To_Camera_Pose (First => First, Second => Second);
+      Reversed : constant World_To_Camera_Pose :=
+        Camera_To_Camera_Pose (First => Second, Second => First);
+      Expected_R : constant Rotation_Matrix := Mul (R2, Transpose (R1));
+      Expected_T : constant Object_Point :=
+        [T2 (0) - (Expected_R (0, 0) * T1 (0) + Expected_R (0, 1) * T1 (1) + Expected_R (0, 2) * T1 (2)),
+         T2 (1) - (Expected_R (1, 0) * T1 (0) + Expected_R (1, 1) * T1 (1) + Expected_R (1, 2) * T1 (2)),
+         T2 (2) - (Expected_R (2, 0) * T1 (0) + Expected_R (2, 1) * T1 (1) + Expected_R (2, 2) * T1 (2))];
+      Swapped_R : constant Rotation_Matrix := Mul (R1, Transpose (R2));
+   begin
+      Assert_Rigid (Relative, Expected_R, Expected_T, "Rz then Rx relative pose");
+      Assert (Matrix_Difference (Rotation_Matrix_Of (Reversed), Swapped_R) < 1.0E-12,
+              "reversed cameras do not invert the rotation order");
+      Assert (Matrix_Difference (Expected_R, Swapped_R) > 0.1, "rotation order was commutative");
+      Assert (Matrix_Difference (Rotation_Matrix_Of (Compose_Poses (Invert_Pose (First), Second)),
+                                 Expected_R) < 1.0E-12,
+              "relative pose disagrees with Compose_Poses");
+   end Motion_Noncommuting;
+
+   procedure Motion_Pure_Rotation (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Build t = -R_native * C for a common mathematical center;
+      --  native center evaluation may retain a floating-point residue.
+      Center : constant Object_Point := [3.0, -1.0, 2.0];
+      First_Rotation : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, Pi_Value / 3.0], Translation => [0.0, 0.0, 0.0]);
+      Second_Rotation : constant World_To_Camera_Pose :=
+        (Rotation => [Pi_Value / 4.0, 0.0, 0.0], Translation => [0.0, 0.0, 0.0]);
+      R1 : constant Rotation_Matrix := Rotation_Matrix_Of (First_Rotation);
+      R2 : constant Rotation_Matrix := Rotation_Matrix_Of (Second_Rotation);
+      T1 : constant Object_Point :=
+        [-(R1 (0, 0) * Center (0) + R1 (0, 1) * Center (1) + R1 (0, 2) * Center (2)),
+         -(R1 (1, 0) * Center (0) + R1 (1, 1) * Center (1) + R1 (1, 2) * Center (2)),
+         -(R1 (2, 0) * Center (0) + R1 (2, 1) * Center (1) + R1 (2, 2) * Center (2))];
+      T2 : constant Object_Point :=
+        [-(R2 (0, 0) * Center (0) + R2 (0, 1) * Center (1) + R2 (0, 2) * Center (2)),
+         -(R2 (1, 0) * Center (0) + R2 (1, 1) * Center (1) + R2 (1, 2) * Center (2)),
+         -(R2 (2, 0) * Center (0) + R2 (2, 1) * Center (1) + R2 (2, 2) * Center (2))];
+      First : constant World_To_Camera_Pose :=
+        (Rotation => First_Rotation.Rotation, Translation => Translation_Vector (T1));
+      Second : constant World_To_Camera_Pose :=
+        (Rotation => Second_Rotation.Rotation, Translation => Translation_Vector (T2));
+      Motion : constant Camera_Motion_Result := Measure_Camera_Motion (First, Second);
+   begin
+      Assert (Point_Gap (Motion.First_Center_World, Center) < 1.0E-12, "shared first center");
+      Assert (Point_Gap (Motion.Second_Center_World, Center) < 1.0E-12, "shared second center");
+      Assert (Point_Gap (Motion.Displacement_World, [0.0, 0.0, 0.0]) < 1.0E-15,
+              "pure rotation displacement");
+      Assert (Motion.Baseline_Distance < 1.0E-15, "pure rotation baseline");
+      Assert (Motion.Baseline_Direction_Defined = (Motion.Baseline_Distance /= 0.0),
+              "direction must follow exact zero, not a platform-specific rounding residue");
+      declare
+         At_Origin : constant Camera_Motion_Result :=
+           Measure_Camera_Motion (First_Rotation, Second_Rotation);
+      begin
+         Assert (At_Origin.Baseline_Distance = 0.0
+                 and then not At_Origin.Baseline_Direction_Defined
+                 and then At_Origin.Displacement_World = Object_Point'[0.0, 0.0, 0.0],
+                 "pure rotation at common origin must have exact zero baseline");
+      end;
+      Assert (Matrix_Difference (Rotation_Matrix_Of (Motion.Relative_Pose),
+                                 Mul (R2, Transpose (R1))) < 1.0E-12,
+              "pure rotation relative orientation");
+      Assert (Point_Gap (Object_Point (Motion.Relative_Pose.Translation), [0.0, 0.0, 0.0]) < 1.0E-12,
+              "pure rotation relative translation");
+   end Motion_Pure_Rotation;
+
+   procedure Motion_General (T : in out Fixture) is
+      pragma Unreferenced (T);
+      T1 : constant Object_Point := [0.2, -0.3, 0.8];
+      T2 : constant Object_Point := [-1.5, 0.4, 2.2];
+      First : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.35, 0.22], Translation => Translation_Vector (T1));
+      Second : constant World_To_Camera_Pose :=
+        (Rotation => [0.41, 0.0, -0.17], Translation => Translation_Vector (T2));
+      R1 : constant Rotation_Matrix := Oracle_Rotation (First.Rotation);
+      R2 : constant Rotation_Matrix := Oracle_Rotation (Second.Rotation);
+      C1 : constant Object_Point := Oracle_Center (R1, T1);
+      C2 : constant Object_Point := Oracle_Center (R2, T2);
+      Displacement : constant Object_Point :=
+        [C2 (0) - C1 (0), C2 (1) - C1 (1), C2 (2) - C1 (2)];
+      Relative_R : constant Rotation_Matrix := Mul (R2, Transpose (R1));
+      Relative_T : constant Object_Point :=
+        [T2 (0) - (Relative_R (0, 0) * T1 (0) + Relative_R (0, 1) * T1 (1) + Relative_R (0, 2) * T1 (2)),
+         T2 (1) - (Relative_R (1, 0) * T1 (0) + Relative_R (1, 1) * T1 (1) + Relative_R (1, 2) * T1 (2)),
+         T2 (2) - (Relative_R (2, 0) * T1 (0) + Relative_R (2, 1) * T1 (1) + Relative_R (2, 2) * T1 (2))];
+      In_First : constant Object_Point := Apply (R1, Displacement);
+      Motion : constant Camera_Motion_Result := Measure_Camera_Motion (First, Second);
+      Point : constant Object_Point := [1.25, -0.5, 3.5];
+      Direction : constant World_Direction := [0.2, 0.4, -0.7];
+      Direct_Second : constant Object_Point :=
+        [R2 (0, 0) * Point (0) + R2 (0, 1) * Point (1) + R2 (0, 2) * Point (2) + T2 (0),
+         R2 (1, 0) * Point (0) + R2 (1, 1) * Point (1) + R2 (1, 2) * Point (2) + T2 (1),
+         R2 (2, 0) * Point (0) + R2 (2, 1) * Point (1) + R2 (2, 2) * Point (2) + T2 (2)];
+   begin
+      Assert_Rigid (Motion.Relative_Pose, Relative_R, Relative_T, "general relative pose");
+      Assert (Point_Gap (Motion.First_Center_World, C1) < 1.0E-12, "general first center");
+      Assert (Point_Gap (Motion.Second_Center_World, C2) < 1.0E-12, "general second center");
+      Assert (Point_Gap (Motion.Displacement_World, Displacement) < 1.0E-12, "general displacement");
+      Assert (Point_Gap (Motion.Second_Center_In_First, In_First) < 1.0E-12, "center in first frame");
+      Assert (Near (Motion.Baseline_Distance,
+                    Math.Sqrt (Displacement (0) ** 2 + Displacement (1) ** 2
+                               + Displacement (2) ** 2), 1.0E-12), "general baseline");
+      Assert (Point_Gap (World_To_Camera_Point (Motion.Relative_Pose,
+                                                World_To_Camera_Point (First, Point)),
+                         Direct_Second) < 1.0E-11,
+              "relative point transform disagrees with the second camera");
+      Assert (Point_Gap (Object_Point (World_To_Camera_Direction (Motion.Relative_Pose,
+                            World_Direction (World_To_Camera_Direction (First, Direction)))),
+                         Apply (R2, Object_Point (Direction))) < 1.0E-12,
+              "relative direction transform");
+   end Motion_General;
+
+   procedure Motion_Roundtrip (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Pose : constant World_To_Camera_Pose :=
+        (Rotation => [0.3, -0.2, 0.5], Translation => [1.2, -0.7, 3.4]);
+      Inverse : constant World_To_Camera_Pose := Invert_Pose (Pose);
+      Twice : constant World_To_Camera_Pose := Invert_Pose (Inverse);
+      Point : constant Object_Point := [0.4, -1.1, 2.0];
+      Direction : constant World_Direction := [0.6, 0.1, -0.3];
+      Camera_Point : constant Object_Point := World_To_Camera_Point (Pose, Point);
+      Restored : constant Object_Point := World_To_Camera_Point (Inverse, Camera_Point);
+      Camera_Direction_Value : constant Camera_Direction :=
+        World_To_Camera_Direction (Pose, Direction);
+      Restored_Direction : constant World_Direction :=
+        World_Direction (World_To_Camera_Direction
+          (Inverse, World_Direction (Camera_Direction_Value)));
+      First : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, Pi_Value / 3.0], Translation => [1.0, 2.0, 3.0]);
+      Second : constant World_To_Camera_Pose :=
+        (Rotation => [Pi_Value / 4.0, 0.0, 0.0], Translation => [-2.0, 0.5, 1.5]);
+      Forward : constant World_To_Camera_Pose :=
+        Camera_To_Camera_Pose (First => First, Second => Second);
+      Backward : constant World_To_Camera_Pose :=
+        Camera_To_Camera_Pose (First => Second, Second => First);
+      Swapped : constant Camera_Motion_Result :=
+        Measure_Camera_Motion (First => Second, Second => First);
+      Original : constant Camera_Motion_Result :=
+        Measure_Camera_Motion (First => First, Second => Second);
+   begin
+      Assert (Matrix_Difference (Rotation_Matrix_Of (Twice), Rotation_Matrix_Of (Pose)) < 1.0E-12,
+              "double inversion changed the rotation");
+      Assert (Point_Gap (Object_Point (Twice.Translation), Object_Point (Pose.Translation)) < 1.0E-12,
+              "double inversion changed the translation");
+      Assert (Point_Gap (Restored, Point) < 1.0E-11, "pose then inverse did not restore the point");
+      Assert (Point_Gap (Object_Point (Restored_Direction), Object_Point (Direction)) < 1.0E-12,
+              "pose then inverse did not restore the direction");
+      Assert (Point_Gap (World_To_Camera_Point (Backward, World_To_Camera_Point (Forward, Point)),
+                         Point) < 1.0E-11,
+              "forward then backward relative motion");
+      Assert (Matrix_Difference (Rotation_Matrix_Of (Backward),
+                                 Transpose (Rotation_Matrix_Of (Forward))) < 1.0E-12,
+              "swapped cameras are not the inverse rotation");
+      for Axis in 0 .. 2 loop
+         Assert (Near (Swapped.Displacement_World (Axis), -Original.Displacement_World (Axis), 1.0E-12),
+                 "swapped displacement is not negated");
+      end loop;
+      Assert (Near (Swapped.Baseline_Distance, Original.Baseline_Distance, 1.0E-12),
+              "swapped baseline magnitude changed");
+   end Motion_Roundtrip;
+
+   procedure Motion_Projection (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant World_To_Camera_Pose :=
+        (Rotation => [0.05, -0.04, 0.10], Translation => [0.10, -0.05, 0.30]);
+      Second : constant World_To_Camera_Pose :=
+        (Rotation => [-0.03, 0.06, 0.02], Translation => [-0.20, 0.10, 5.00]);
+      World_Points : constant Object_Point_Array :=
+        [[0.4, -0.3, 1.0], [-0.8, 0.5, 0.2], [1.1, 0.9, 0.7], [-0.2, -0.9, 1.4]];
+      Intrinsics : constant Camera_Intrinsics := (800.0, 820.0, 320.0, 240.0);
+      Brown : constant Distortion_Coefficients :=
+        (K1 => -0.12, K2 => 0.03, P1 => 0.001, P2 => -0.0015, K3 => 0.004);
+      Relative : constant World_To_Camera_Pose := Camera_To_Camera_Pose (First, Second);
+      Worst : OpenCV.Float64_Value := 0.0;
+   begin
+      for Model in 1 .. 2 loop
+         declare
+            D : constant Distortion_Coefficients := (if Model = 1 then No_Distortion else Brown);
+            Direct : constant Image_Point_Array :=
+              Project_Points (World_Points, Intrinsics, D, Second);
+         begin
+            for I in World_Points'Range loop
+               declare
+                  In_First : constant Object_Point := World_To_Camera_Point (First, World_Points (I));
+                  In_Second : constant Object_Point := World_To_Camera_Point (Relative, In_First);
+                  Expected : constant Image_Point := Scalar_Project (In_Second, Intrinsics, D);
+               begin
+                  Worst := OpenCV.Float64_Value'Max
+                    (Worst, OpenCV.Float64_Value'Max
+                       (abs (Direct (I) (0) - Expected (0)), abs (Direct (I) (1) - Expected (1))));
+               end;
+            end loop;
+         end;
+      end loop;
+      Ada.Text_IO.Put_Line ("Relative motion projection maximum pixel difference:" &
+                            OpenCV.Float64_Value'Image (Worst));
+      Assert (Worst < 1.0E-8, "relative projection disagrees with the second camera");
+   end Motion_Projection;
+
+   procedure Motion_Range (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      Max : constant OpenCV.Float64_Value := OpenCV.Float64_Value'Last;
+      Mild : constant World_To_Camera_Pose :=
+        (Rotation => [0.2, -0.1, 0.3], Translation => [1.0, -2.0, 3.0]);
+      Tiny : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, 0.0], Translation => [1.0E-300, -2.0E-300, 4.0E-300]);
+      Large : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, 0.0], Translation => [1.0E15, -2.0E15, 2.0E15]);
+      Shifted : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, 0.0], Translation => [1.0E15 + 3.0, -2.0E15, 2.0E15]);
+      Identity : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, 0.0], Translation => [0.0, 0.0, 0.0]);
+      Tiny_Motion : constant Camera_Motion_Result := Measure_Camera_Motion (Identity, Tiny);
+      Huge : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, 0.0], Translation => [3.0E300, -4.0E300, 0.0]);
+      Huge_Motion : constant Camera_Motion_Result := Measure_Camera_Motion (Identity, Huge);
+      Large_Motion : constant Camera_Motion_Result := Measure_Camera_Motion (Large, Shifted);
+   begin
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         for Slot in 0 .. 5 loop
+            declare
+               Bad : World_To_Camera_Pose := Mild;
+               Bad_Value : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Kind));
+            begin
+               if Slot < 3 then
+                  Bad.Rotation (Slot) := Bad_Value;
+               else
+                  Bad.Translation (Slot - 3) := Bad_Value;
+               end if;
+               Motion_Rejects (Bad, Mild, "nonfinite first motion accepted");
+               Motion_Rejects (Mild, Bad, "nonfinite second motion accepted");
+            end;
+         end loop;
+      end loop;
+      Motion_Rejects ((Rotation => [1.0E160, 0.0, 0.0], Translation => [0.0, 0.0, 0.0]), Mild,
+                      "unrepresentable rotation accepted");
+      Motion_Rejects ((Rotation => [0.0, 0.0, 0.0], Translation => [Max, 0.0, 0.0]),
+                      (Rotation => [0.0, 0.0, 0.0], Translation => [-Max, 0.0, 0.0]),
+                      "unrepresentable center difference accepted");
+      declare
+         --  World displacement is 1.2*Last along X, but the second camera
+         --  rotates it into two representable components (~0.849*Last).
+         Extent : constant OpenCV.Float64_Value := 0.6 * Max;
+         Component : constant OpenCV.Float64_Value := Extent / Math.Sqrt (2.0);
+         First : constant World_To_Camera_Pose :=
+           (Rotation => [0.0, 0.0, 0.0], Translation => [Extent, 0.0, 0.0]);
+         Second : constant World_To_Camera_Pose :=
+           (Rotation => [0.0, 0.0, Pi_Value / 4.0],
+            Translation => [-Component, -Component, 0.0]);
+         Relative : constant World_To_Camera_Pose := Camera_To_Camera_Pose (First, Second);
+      begin
+         Assert (Finite (Relative.Translation (0)) and then Finite (Relative.Translation (1)),
+                 "displacement-overflow fixture must have representable relative translation");
+         Motion_Rejects (First, Second, "world displacement overflow accepted");
+      end;
+      Motion_Rejects (Identity,
+                      (Rotation => [0.0, 0.0, 0.0], Translation => [Max, Max, 0.0]),
+                      "finite displacement with overflowing norm accepted");
+      Assert (Finite (Tiny_Motion.Baseline_Distance)
+              and then abs (Tiny_Motion.Baseline_Distance / 1.0E-300 - Math.Sqrt (21.0)) < 1.0E-12
+              and then Tiny_Motion.Baseline_Direction_Defined,
+              "tiny finite baseline was lost");
+      Assert (Point_Gap (Tiny_Motion.Baseline_Direction_World,
+                        [-1.0 / Math.Sqrt (21.0), 2.0 / Math.Sqrt (21.0),
+                         -4.0 / Math.Sqrt (21.0)]) < 1.0E-12, "tiny baseline direction");
+      Assert (Finite (Huge_Motion.Baseline_Distance)
+              and then abs (Huge_Motion.Baseline_Distance / 1.0E300 - 5.0) < 1.0E-12,
+              "large 3-4-5 baseline overflowed during squaring");
+      Assert (Point_Gap (Huge_Motion.Baseline_Direction_World, [-0.6, 0.8, 0.0]) < 1.0E-12,
+              "large baseline direction");
+      Assert (Near (Large_Motion.Displacement_World (0), -3.0, 1.0E-6)
+              and then Large_Motion.Displacement_World (1) = 0.0
+              and then Large_Motion.Displacement_World (2) = 0.0,
+              "large finite translation difference");
+      Assert (Near (Large_Motion.Baseline_Distance, 3.0, 1.0E-6), "large finite baseline");
+   end Motion_Range;
+
+   procedure Motion_Frame_Order (T : in out Fixture) is
+      pragma Unreferenced (T);
+      First : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, Pi_Value / 2.0], Translation => [2.0, 0.0, 0.0]);
+      Second : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, 0.0], Translation => [0.0, 3.0, 0.0]);
+      Forward : constant Camera_Motion_Result :=
+        Measure_Camera_Motion (First => First, Second => Second);
+      Backward : constant Camera_Motion_Result :=
+        Measure_Camera_Motion (First => Second, Second => First);
+      --  Rz(pi/2): C1 = -R^T t = (0, 2, 0); C2 = (0, -3, 0).
+      Expected : constant Object_Point := [0.0, -5.0, 0.0];
+   begin
+      Assert (Point_Gap (Forward.Displacement_World, Expected) < 1.0E-12, "frame-order displacement");
+      Assert (Point_Gap (Backward.Displacement_World, [0.0, 5.0, 0.0]) < 1.0E-12,
+              "reversed frame displacement sign");
+      Assert (Forward.Relative_Pose.Translation (1) > 0.0, "relative translation sign");
+      Assert (Forward.Displacement_World (1) < 0.0, "world displacement sign");
+      Assert (abs (Forward.Relative_Pose.Translation (1) - Forward.Displacement_World (1)) > 1.0,
+              "relative translation was given the world-displacement sign");
+   end Motion_Frame_Order;
+
+   ---------------------------------------------------------------------------
    --  Task 015 guarded native epipolar correction. Policy values below are
    --  explicit TEST/EXAMPLE choices justified by the measured fixtures; they
    --  are not library defaults or optimality guarantees.
@@ -6777,6 +7220,15 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("pose composition Rodrigues boundary cases", Compose_Rodrigues'Access));
       Result.Add_Test (Caller.Create ("pose composition numerical and invalid inputs", Compose_Numbers'Access));
       Result.Add_Test (Caller.Create ("pose composition C/Ada layout, interchange and aliasing", Compose_Layout'Access));
+      Result.Add_Test (Caller.Create ("pose inversion and identical relative motion", Motion_Identity'Access));
+      Result.Add_Test (Caller.Create ("translation-only relative pose and baseline", Motion_Translation'Access));
+      Result.Add_Test (Caller.Create ("noncommuting relative camera rotation", Motion_Noncommuting'Access));
+      Result.Add_Test (Caller.Create ("pure rotation zero baseline", Motion_Pure_Rotation'Access));
+      Result.Add_Test (Caller.Create ("general relative motion and point composition", Motion_General'Access));
+      Result.Add_Test (Caller.Create ("pose inversion and inverse relative motion", Motion_Roundtrip'Access));
+      Result.Add_Test (Caller.Create ("relative motion native projection with Brown distortion", Motion_Projection'Access));
+      Result.Add_Test (Caller.Create ("relative motion numerical and invalid inputs", Motion_Range'Access));
+      Result.Add_Test (Caller.Create ("relative motion frame order and displacement sign", Motion_Frame_Order'Access));
       Result.Add_Test (Caller.Create ("epipolar correction horizontal analytic oracle", Correction_Rectified'Access));
       Result.Add_Test (Caller.Create ("epipolar correction vertical analytic oracle", Correction_Vertical'Access));
       Result.Add_Test (Caller.Create ("epipolar correction F scale, sign and normalization", Correction_Scale'Access));
