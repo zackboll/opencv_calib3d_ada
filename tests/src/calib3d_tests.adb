@@ -11,6 +11,7 @@ with Interfaces.C.Strings;
 with OpenCV.Calib3D;
 with OpenCV.Calib3D.Internal.C_API;
 with OpenCV.Calib3D.Internal.Point_Refinement;
+with OpenCV.Calib3D.Internal.Refinement_Policy;
 with System;
 
 package body Calib3D_Tests is
@@ -5574,6 +5575,47 @@ package body Calib3D_Tests is
         "upper-bound indexing still evaluates the held-out point");
    end AP3P_Refine_Upper;
 
+   procedure AP3P_Refine_Worsening_Arithmetic (T : in out Fixture) is
+      pragma Unreferenced (T);
+      function Within
+        (Original_RMS, Refined_RMS, Allowance : OpenCV.Float64_Value) return Boolean
+        renames OpenCV.Calib3D.Internal.Refinement_Policy.Holdout_RMS_Worsening_Within_Allowance;
+      Exact : constant OpenCV.Float64_Value := 7.0;
+      Just_Above : constant OpenCV.Float64_Value := 7.000000000000002;
+      Allowance : constant OpenCV.Float64_Value := 1.6E-15;
+      Large_Original : constant OpenCV.Float64_Value := 1.0E307;
+      Large_Refined : constant OpenCV.Float64_Value := 1.5E307;
+      Near_Limit : constant OpenCV.Float64_Value := OpenCV.Float64_Value'Last;
+      Near_Predecessor : constant OpenCV.Float64_Value :=
+        OpenCV.Float64_Value'Adjacent (Near_Limit, 0.0);
+   begin
+      Assert (Within (4.0, 4.0, 0.0), "exact zero worsening is within a zero allowance");
+      Assert (Within (5.0, 4.5, 0.0), "genuine improvement is within a zero allowance");
+      Assert (Within (2.0, 2.25, 0.25), "worsening exactly equal to the allowance is accepted");
+      Assert (not Within (2.0, 2.25, 0.24999999999999997),
+        "worsening just above the allowance is rejected");
+      Assert (Within (2.0, 2.25, 0.25000000000000006),
+        "worsening just below the allowance is accepted");
+      Assert (not Within (Exact, Just_Above, Allowance),
+        "7.0 to 7.000000000000002 exceeds a 1.6E-15 allowance");
+      Assert (Within (Exact, Exact + OpenCV.Float64_Value'Succ (Exact) - Exact, Allowance),
+        "one ULP above 7.0 remains within 1.6E-15");
+      Assert (Within (Large_Original, Large_Refined, 0.5E307),
+        "large finite worsening exactly equal to the allowance is accepted");
+      Assert (not Within
+                (Large_Original, Large_Refined,
+                 OpenCV.Float64_Value'Pred (Large_Refined - Large_Original)),
+        "large finite worsening above the adjacent smaller allowance is rejected");
+      Assert (not Within (Near_Predecessor, Near_Limit, 0.0),
+        "a positive worsening near Float64'Last exceeds a zero allowance");
+      Assert (Within (Near_Limit, Near_Predecessor, 0.0),
+        "a large finite improvement remains within a zero allowance");
+      Assert (Within (0.0, Near_Limit, Near_Limit),
+        "worsening from zero to Float64'Last equals that allowance");
+      Assert (not Within (0.0, Near_Limit, Near_Predecessor),
+        "worsening from zero to Float64'Last exceeds the predecessor allowance");
+   end AP3P_Refine_Worsening_Arithmetic;
+
    procedure AP3P_Refine_Order (T : in out Fixture) is
       pragma Unreferenced (T);
       Forward : constant AP3P_Refined_Pose :=
@@ -6725,6 +6767,7 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("AP3P refinement invalid inputs and thresholds", AP3P_Refine_Invalid'Access));
       Result.Add_Test (Caller.Create ("AP3P refinement different lower bounds", AP3P_Refine_Bounds'Access));
       Result.Add_Test (Caller.Create ("AP3P refinement Positive'Last lower bound", AP3P_Refine_Upper'Access));
+      Result.Add_Test (Caller.Create ("AP3P direct held-out RMS worsening comparison", AP3P_Refine_Worsening_Arithmetic'Access));
       Result.Add_Test (Caller.Create ("AP3P refinement order and owned provenance", AP3P_Refine_Order'Access));
       Result.Add_Test (Caller.Create ("pose composition identity oracle", Compose_Identity'Access));
       Result.Add_Test (Caller.Create ("pose composition noncommutative order oracle", Compose_Order'Access));

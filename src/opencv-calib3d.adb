@@ -8,6 +8,7 @@ with OpenCV.Core.Float64_Vec3_Access;
 with OpenCV.Core.Module_Interop;
 with OpenCV.Calib3D.Internal.C_API;
 with OpenCV.Calib3D.Internal.Point_Refinement;
+with OpenCV.Calib3D.Internal.Refinement_Policy;
 with System;
 
 package body OpenCV.Calib3D is
@@ -2103,30 +2104,9 @@ package body OpenCV.Calib3D is
       end Holdout_Summary;
 
       function Within_Allowance
-        (Original_RMS, Refined_RMS, Allowance : OpenCV.Float64_Value) return Boolean
-      is
-         --  A nonpositive change cannot exceed a nonnegative allowance.
-         --  Otherwise compare the positive delta with the allowance before
-         --  forming an unscaled subtraction that may overflow Float64.
-         Scale : OpenCV.Float64_Value;
-         Change : OpenCV.Float64_Value;
-      begin
-         if Refined_RMS <= Original_RMS then
-            return True;
-         end if;
-         Scale := OpenCV.Float64_Value'Max
-           (OpenCV.Float64_Value'Max (abs Refined_RMS, abs Original_RMS), 1.0);
-         Change := Scale * ((Refined_RMS / Scale) - (Original_RMS / Scale));
-         if not Is_Finite (Change) then
-            raise OpenCV.OpenCV_Error
-              with "AP3P held-out RMS worsening is not representable";
-         end if;
-         return Change <= Allowance;
-      exception
-         when Constraint_Error =>
-            raise OpenCV.OpenCV_Error
-              with "AP3P held-out RMS worsening is not representable";
-      end Within_Allowance;
+        (Original_RMS, Refined_RMS, Allowance : OpenCV.Float64_Value) return Boolean is
+        (OpenCV.Calib3D.Internal.Refinement_Policy.Holdout_RMS_Worsening_Within_Allowance
+           (Original_RMS, Refined_RMS, Allowance));
    begin
       Validate (Selection);
       Validate (Acceptance);

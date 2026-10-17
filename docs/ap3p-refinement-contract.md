@@ -53,10 +53,11 @@ The refined result is accepted only when all of the following hold:
 - the maximum held-out pixel error is at or below the caller's maximum;
 - held-out RMS does not worsen by more than the caller's allowance.
 
-Worsening is `refined RMS - original RMS`. A nonpositive change always
-satisfies a nonnegative allowance. A positive change is scaled before
-subtraction so a large finite RMS does not overflow `Float64` unnecessarily.
-A nonrepresentable worsening raises `OpenCV_Error` and publishes nothing.
+Worsening is the direct subtraction `refined RMS - original RMS`. A
+nonpositive change always satisfies a nonnegative allowance. When
+`0 <= original < refined <= Float64'Last`, that subtraction is representable
+and is not scaled, clamped, or compared through an epsilon. The comparison is
+inclusive. A nonrepresentable input raises `OpenCV_Error` and publishes nothing.
 
 Native success alone does not mean the pose is better or accepted.
 

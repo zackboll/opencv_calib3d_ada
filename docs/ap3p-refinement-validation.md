@@ -12,8 +12,12 @@ matrix. Windows was not run; its workflow file was not changed.
   `PASS: fault-injection ASan+UBSan actual-shim boundary`, with leak detection
   and halt-on-error enabled. No ASan or UBSan diagnostic was printed.
 - `alr -n -C tests exec -- sh ../scripts/run_native.sh bin/run_tests` exited 0.
-  AUnit: 153 run, 153 passed, 0 failed assertions, 0 unexpected errors.
-  This preserves the previous 140 registrations and adds 13 refinement cases.
+  AUnit: 154 run, 154 passed, 0 failed assertions, 0 unexpected errors.
+  This preserves the previous 153 registrations and adds the direct RMS-worsening
+  comparison. That case calls the production helper, not a test copy. It covers
+  exact zero change, genuine improvement, equality with the allowance, one step
+  above and below that allowance, the 7.0 / 7.000000000000002 / 1.6E-15 case,
+  and large finite values through `Float64'Last`.
 - `alr -n -C tests exec -- sh ../scripts/run_ada_faults.sh` passed, including
   `synthetic AP3P refinement false and projection/refinement faults publish no partial result`.
   The false result is a test-only fault injection. It is not a naturally

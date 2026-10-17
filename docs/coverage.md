@@ -2,11 +2,12 @@
 
 ## Task 017 reference-validated AP3P refinement
 
-153 registrations preserve all 140 Task 016 cases and add 13 refinement cases:
+154 registrations preserve all 140 Task 016 cases and add 14 refinement cases:
 known nonidentity geometry, deterministic fitting noise, five nonzero Brown
 coefficients, held-out worsening, caller maximum rejection, nonpositive held-out
 depth, numerical unavailability, no unique selection, duplicate world points,
-invalid inputs and extreme finite thresholds, different lower bounds,
+invalid inputs and extreme finite thresholds, direct RMS-worsening arithmetic,
+different lower bounds,
 `Positive'Last`, and candidate-order/owned-pose provenance. Synthetic native
 false and projection/refinement exceptions are exercised by the fault runner,
 not by an AUnit registration. The private ABI remains 48. Inventory is not a
