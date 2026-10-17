@@ -3,6 +3,11 @@ on:
   push:
     branches:
       - main
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/windows-post-merge.yml
 permissions:
   contents: read
 concurrency:
@@ -23,10 +28,22 @@ jobs:
           msys2: true
       - name: Select Ada toolchain
         run: alr -n --force toolchain --select gnat_native=16.1.0 gprbuild=26.0.1
-      - name: Install MSYS2 native dependencies
+      - name: Verify Alire-deployed MSYS2 packages
         run: |
-          alr exec -- pacman -Sy --noconfirm --needed \
-            mingw-w64-x86_64-opencv mingw-w64-x86_64-pkg-config mingw-w64-x86_64-gcc
+          set -eu
+
+          echo "=== Installed MSYS2 dependency versions ==="
+          alr exec -- pacman -Q \
+            mingw-w64-x86_64-gcc \
+            mingw-w64-x86_64-gcc-libs \
+            mingw-w64-x86_64-cc-libs \
+            mingw-w64-x86_64-libgfortran \
+            mingw-w64-x86_64-libquadmath \
+            mingw-w64-x86_64-opencv \
+            mingw-w64-x86_64-pkgconf
+
+          echo "=== MSYS2 package database consistency ==="
+          alr exec -- pacman -Dk
       - name: Build and run with isolated runtime
         run: sh scripts/test.sh
       - name: Inspect external Calib3D DLL
