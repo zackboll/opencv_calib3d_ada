@@ -1658,6 +1658,290 @@ package body OpenCV.Calib3D is
           raise OpenCV.OpenCV_Error with "AP3P reference summary is unrepresentable";
     end Summarize_AP3P_References;
 
+   procedure Validate (Value : AP3P_Selection_Options) is
+   begin
+      if not (Is_Finite (Value.Maximum_RMS_Error_Pixels)
+              and then Is_Finite (Value.Maximum_Point_Error_Pixels)
+              and then Is_Finite (Value.Minimum_RMS_Separation_Pixels)
+              and then Value.Maximum_RMS_Error_Pixels >= 0.0
+              and then Value.Maximum_Point_Error_Pixels >= 0.0
+              and then Value.Minimum_RMS_Separation_Pixels >= 0.0)
+      then
+         raise OpenCV.OpenCV_Error
+           with "AP3P selection options must be finite and nonnegative";
+      end if;
+   end Validate;
+
+   function Same_World_Point (Left, Right : Object_Point) return Boolean is
+     (Left (0) = Right (0) and then Left (1) = Right (1) and then Left (2) = Right (2));
+
+   function Selected (Result : AP3P_Selection_Result) return Boolean is
+     (Result.Disposition = Unique_Selected_Hypothesis
+      and then Result.Candidate_Index in 1 .. Result.Count);
+
+   function Selected_Hypothesis_Index (Result : AP3P_Selection_Result) return Positive is
+   begin
+      if not Selected (Result) then
+         raise OpenCV.OpenCV_Error
+           with "AP3P selection has no unique hypothesis";
+      end if;
+      return Result.Candidate_Index;
+   end Selected_Hypothesis_Index;
+
+   function Selected_Pose
+     (Result : AP3P_Selection_Result;
+      Hypotheses : AP3P_Pose_Hypothesis_Array;
+      Index : Positive) return World_To_Camera_Pose
+   is
+      Position : constant Positive := Selected_Hypothesis_Index (Result);
+   begin
+      if Hypotheses'Length /= Result.Count
+        or else Index not in Hypotheses'Range
+        or else Index - Hypotheses'First + 1 /= Position
+      then
+         raise OpenCV.OpenCV_Error
+           with "AP3P selected pose index does not name the selected hypothesis";
+      end if;
+      Validate (Hypotheses (Index).Pose);
+      return Hypotheses (Index).Pose;
+   end Selected_Pose;
+
+   function Disposition (Result : AP3P_Pose_Selection) return AP3P_Selection_Disposition is
+     (Result.Disposition);
+
+   function Candidate_Index (Result : AP3P_Pose_Selection) return Natural is
+     (Result.Candidate_Index);
+
+   function Separation_Pixels (Result : AP3P_Pose_Selection) return OpenCV.Float64_Value is
+     (Result.Separation_Pixels);
+
+   function Candidates (Result : AP3P_Pose_Selection) return AP3P_Candidate_Qualification_Array is
+     (Result.Candidates);
+
+   function Selected (Result : AP3P_Pose_Selection) return Boolean is
+     (Result.Disposition = Unique_Selected_Hypothesis
+      and then Result.Has_Pose
+      and then Result.Candidate_Index in 1 .. Result.Count);
+
+   function Selected_Pose (Result : AP3P_Pose_Selection) return World_To_Camera_Pose is
+   begin
+      if not Selected (Result) then
+         raise OpenCV.OpenCV_Error
+           with "AP3P selection has no owned unique pose";
+      end if;
+      Validate (Result.Pose);
+      return Result.Pose;
+   end Selected_Pose;
+
+   function Select_AP3P_Hypothesis
+     (Results : AP3P_Reference_Result_Matrix;
+      Options : AP3P_Selection_Options) return AP3P_Selection_Result
+   is
+      Summaries : constant AP3P_Hypothesis_Reference_Summary_Array :=
+        Summarize_AP3P_References (Results);
+      Eligible_Count : Natural := 0;
+      Best_Index : Natural := 0;
+      Second_Index : Natural := 0;
+   begin
+      Validate (Options);
+      if Summaries'Length /= Results'Length (1) then
+         raise OpenCV.OpenCV_Error with "AP3P selection summary length mismatch";
+      end if;
+      return Result : AP3P_Selection_Result (Results'Length (1)) do
+         if Results'Length (1) = 0 then
+            Result.Disposition := No_Hypotheses;
+            return;
+         elsif Results'Length (2) = 0 then
+            Result.Disposition := No_Independent_References;
+            return;
+         end if;
+
+         for Row in Summaries'Range loop
+            declare
+               Summary : constant AP3P_Hypothesis_Reference_Summary := Summaries (Row);
+               Slot : constant Positive := Row - Summaries'First + 1;
+               Within : Boolean;
+            begin
+               if Summary.Total_References /= Results'Length (2)
+                 or else not Is_Finite (Summary.Reprojection.RMS_Error_Pixels)
+                 or else not Is_Finite (Summary.Reprojection.Maximum_Error_Pixels)
+                 or else Summary.Reprojection.RMS_Error_Pixels < 0.0
+                 or else Summary.Reprojection.Maximum_Error_Pixels < 0.0
+               then
+                  raise OpenCV.OpenCV_Error with "Malformed AP3P reference summary";
+               end if;
+               Within :=
+                 Summary.Reprojection.RMS_Error_Pixels <= Options.Maximum_RMS_Error_Pixels
+                 and then Summary.Reprojection.Maximum_Error_Pixels
+                   <= Options.Maximum_Point_Error_Pixels;
+               if Summary.Entire_Set_Evaluable and then Within then
+                  Result.Candidates (Slot) :=
+                    (Eligible => True,
+                     Rank => 0,
+                     RMS_Error_Pixels => Summary.Reprojection.RMS_Error_Pixels,
+                     Maximum_Error_Pixels => Summary.Reprojection.Maximum_Error_Pixels);
+                  Eligible_Count := Eligible_Count + 1;
+               end if;
+            end;
+         end loop;
+
+         if Eligible_Count = 0 then
+            Result.Disposition := No_Eligible_Hypotheses;
+            return;
+         end if;
+
+         declare
+            Remaining : array (1 .. Result.Count) of Boolean := [others => False];
+         begin
+            for Slot in Result.Candidates'Range loop
+               Remaining (Slot) := Result.Candidates (Slot).Eligible;
+            end loop;
+            for Place in 1 .. Eligible_Count loop
+               declare
+                  Chosen : Natural := 0;
+               begin
+                  for Slot in Remaining'Range loop
+                     if Remaining (Slot) and then
+                       (Chosen = 0
+                        or else Result.Candidates (Slot).RMS_Error_Pixels
+                          < Result.Candidates (Chosen).RMS_Error_Pixels
+                        or else (Result.Candidates (Slot).RMS_Error_Pixels
+                                   = Result.Candidates (Chosen).RMS_Error_Pixels
+                                 and then Slot < Chosen))
+                     then
+                        Chosen := Slot;
+                     end if;
+                  end loop;
+                  if Chosen = 0 then
+                     raise OpenCV.OpenCV_Error with "AP3P selection ranking failed";
+                  end if;
+                  Result.Candidates (Chosen).Rank := Place;
+                  Remaining (Chosen) := False;
+                  if Place = 1 then
+                     Best_Index := Chosen;
+                  elsif Place = 2 then
+                     Second_Index := Chosen;
+                  end if;
+               end;
+            end loop;
+         end;
+
+         if Eligible_Count = 1 then
+            Result.Disposition := Unique_Selected_Hypothesis;
+            Result.Candidate_Index := Best_Index;
+            return;
+         end if;
+
+         declare
+            Best_RMS : constant OpenCV.Float64_Value :=
+              Result.Candidates (Best_Index).RMS_Error_Pixels;
+            Second_RMS : constant OpenCV.Float64_Value :=
+              Result.Candidates (Second_Index).RMS_Error_Pixels;
+            Gap : OpenCV.Float64_Value;
+         begin
+            Gap := Second_RMS - Best_RMS;
+            if not Is_Finite (Gap) then
+               raise OpenCV.OpenCV_Error
+                 with "AP3P RMS separation is not representable";
+            end if;
+            Result.Separation_Pixels := Gap;
+            if Gap > Options.Minimum_RMS_Separation_Pixels then
+               Result.Disposition := Unique_Selected_Hypothesis;
+               Result.Candidate_Index := Best_Index;
+            else
+               Result.Disposition := Ambiguous_Qualified_Hypotheses;
+               Result.Candidate_Index := 0;
+            end if;
+         end;
+      end return;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "AP3P selection is unrepresentable";
+   end Select_AP3P_Hypothesis;
+
+   function Select_AP3P_Pose
+     (Seed_World       : Object_Point_Array;
+      Seed_Pixels      : Image_Point_Array;
+      Reference_World  : Object_Point_Array;
+      Reference_Pixels : Image_Point_Array;
+      Intrinsics       : Camera_Intrinsics;
+      Distortion       : Distortion_Coefficients := No_Distortion;
+      Options          : AP3P_Selection_Options) return AP3P_Pose_Selection
+   is
+      function Without_Pose (Value : AP3P_Selection_Result) return AP3P_Pose_Selection is
+        (Count => Value.Count,
+         Disposition => Value.Disposition,
+         Candidate_Index => Value.Candidate_Index,
+         Separation_Pixels => Value.Separation_Pixels,
+         Candidates => Value.Candidates,
+         Has_Pose => False,
+         Pose => (Rotation => [others => 0.0], Translation => [others => 0.0]));
+   begin
+      Validate (Options);
+      Validate (Intrinsics);
+      Validate (Distortion);
+      Validate (Seed_World);
+      Validate (Seed_Pixels);
+      Validate (Reference_World);
+      Validate (Reference_Pixels);
+      if Seed_World'Length /= 3 or else Seed_Pixels'Length /= 3 then
+         raise OpenCV.OpenCV_Error
+           with "Select_AP3P_Pose requires exactly three seed correspondences";
+      end if;
+      if Reference_World'Length /= Reference_Pixels'Length then
+         raise OpenCV.OpenCV_Error with "AP3P reference world/pixel counts differ";
+      end if;
+      if Reference_World'Length = 0 then
+         return (Count => 0,
+                 Disposition => No_Independent_References,
+                 Candidate_Index => 0,
+                 Separation_Pixels => 0.0,
+                 Candidates => [1 .. 0 => <>],
+                 Has_Pose => False,
+                 Pose => (Rotation => [others => 0.0], Translation => [others => 0.0]));
+      end if;
+      for Left in Reference_World'Range loop
+         for Seed of Seed_World loop
+            if Same_World_Point (Reference_World (Left), Seed) then
+               raise OpenCV.OpenCV_Error
+                 with "AP3P reference repeats a seed world point";
+            end if;
+         end loop;
+         for Right in Reference_World'First .. Left - 1 loop
+            if Same_World_Point (Reference_World (Left), Reference_World (Right)) then
+               raise OpenCV.OpenCV_Error
+                 with "AP3P reference world points are not independent";
+            end if;
+         end loop;
+      end loop;
+
+      declare
+         Hypotheses : constant AP3P_Pose_Hypothesis_Array :=
+           Solve_AP3P_Hypotheses (Seed_World, Seed_Pixels, Intrinsics, Distortion);
+         Evaluated : constant AP3P_Reference_Result_Matrix :=
+           Evaluate_AP3P_References
+             (Hypotheses, Reference_World, Reference_Pixels, Intrinsics, Distortion);
+         Decision : constant AP3P_Selection_Result :=
+           Select_AP3P_Hypothesis (Evaluated, Options);
+      begin
+         if Decision.Disposition /= Unique_Selected_Hypothesis then
+            return Without_Pose (Decision);
+         end if;
+         return
+           (Count => Decision.Count,
+            Disposition => Decision.Disposition,
+            Candidate_Index => Decision.Candidate_Index,
+            Separation_Pixels => Decision.Separation_Pixels,
+            Candidates => Decision.Candidates,
+            Has_Pose => True,
+            Pose => Hypotheses (Hypotheses'First + Decision.Candidate_Index - 1).Pose);
+      end;
+   end Select_AP3P_Pose;
+
+
+
+
+
 
 
 
