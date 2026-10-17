@@ -8,6 +8,7 @@ with OpenCV.Core.Float64_Vec3_Access;
 with OpenCV.Core.Module_Interop;
 with OpenCV.Calib3D.Internal.C_API;
 with OpenCV.Calib3D.Internal.Point_Refinement;
+with OpenCV.Calib3D.Internal.Refinement_Policy;
 with System;
 
 package body OpenCV.Calib3D is
@@ -1938,12 +1939,315 @@ package body OpenCV.Calib3D is
       end;
    end Select_AP3P_Pose;
 
+   procedure Validate (Value : AP3P_Refinement_Acceptance_Options) is
+   begin
+      if not (Is_Finite (Value.Maximum_Holdout_RMS_Pixels)
+              and then Is_Finite (Value.Maximum_Holdout_Point_Error_Pixels)
+              and then Is_Finite (Value.Maximum_Holdout_RMS_Worsening_Pixels)
+              and then Value.Maximum_Holdout_RMS_Pixels >= 0.0
+              and then Value.Maximum_Holdout_Point_Error_Pixels >= 0.0
+              and then Value.Maximum_Holdout_RMS_Worsening_Pixels >= 0.0)
+      then
+         raise OpenCV.OpenCV_Error
+           with "AP3P refinement acceptance options must be finite and nonnegative";
+      end if;
+   end Validate;
 
+   function Selection_Disposition
+     (Result : AP3P_Refined_Pose) return AP3P_Selection_Disposition is
+     (Result.Selection_State);
 
+   function Refinement_Disposition
+     (Result : AP3P_Refined_Pose) return AP3P_Refinement_Disposition is
+     (Result.Refinement_State);
 
+   function Refinement_Attempted (Result : AP3P_Refined_Pose) return Boolean is
+     (Result.Attempted);
 
+   function Native_Refinement_Succeeded (Result : AP3P_Refined_Pose) return Boolean is
+     (Result.Native_Succeeded);
 
+   function Accepted (Result : AP3P_Refined_Pose) return Boolean is
+     (Result.Refinement_State = OpenCV.Calib3D.Accepted
+      and then Result.Has_Accepted
+      and then Result.Native_Succeeded
+      and then Result.Refined_Valid);
 
+   function Initial_Pose (Result : AP3P_Refined_Pose) return World_To_Camera_Pose is
+   begin
+      if not Result.Has_Initial then
+         raise OpenCV.OpenCV_Error
+           with "AP3P refinement has no owned initial pose";
+      end if;
+      Validate (Result.Initial);
+      return Result.Initial;
+   end Initial_Pose;
+
+   function Accepted_Pose (Result : AP3P_Refined_Pose) return World_To_Camera_Pose is
+   begin
+      if not Accepted (Result) then
+         raise OpenCV.OpenCV_Error
+           with "AP3P refinement was not accepted";
+      end if;
+      Validate (Result.Accepted_Value);
+      return Result.Accepted_Value;
+   end Accepted_Pose;
+
+   function Initial_Holdout_Valid (Result : AP3P_Refined_Pose) return Boolean is
+     (Result.Initial_Valid);
+
+   function Refined_Holdout_Valid (Result : AP3P_Refined_Pose) return Boolean is
+     (Result.Refined_Valid);
+
+   function Initial_Holdout (Result : AP3P_Refined_Pose) return Reprojection_Summary is
+   begin
+      if not Result.Initial_Valid then
+         raise OpenCV.OpenCV_Error
+           with "AP3P initial held-out summary is not valid";
+      end if;
+      return Result.Initial_Summary;
+   end Initial_Holdout;
+
+   function Refined_Holdout (Result : AP3P_Refined_Pose) return Reprojection_Summary is
+   begin
+      if not Result.Refined_Valid then
+         raise OpenCV.OpenCV_Error
+           with "AP3P refined held-out summary is not valid";
+      end if;
+      return Result.Refined_Summary;
+   end Refined_Holdout;
+
+   function Select_Refine_AP3P_Pose
+     (Seed_World        : Object_Point_Array;
+      Seed_Pixels       : Image_Point_Array;
+      Selection_World   : Object_Point_Array;
+      Selection_Pixels  : Image_Point_Array;
+      Holdout_World     : Object_Point_Array;
+      Holdout_Pixels    : Image_Point_Array;
+      Intrinsics        : Camera_Intrinsics;
+      Distortion        : Distortion_Coefficients := No_Distortion;
+      Selection         : AP3P_Selection_Options;
+      Acceptance        : AP3P_Refinement_Acceptance_Options)
+      return AP3P_Refined_Pose
+   is
+      function From_Selection
+        (Value : AP3P_Pose_Selection;
+         State : AP3P_Refinement_Disposition;
+         Attempted : Boolean := False;
+         Native_Succeeded : Boolean := False;
+         Initial_Valid : Boolean := False;
+         Refined_Valid : Boolean := False;
+         Accepted_Value : World_To_Camera_Pose :=
+           (Rotation => [others => 0.0], Translation => [others => 0.0]);
+         Initial_Summary : Reprojection_Summary := (others => <>);
+         Refined_Summary : Reprojection_Summary := (others => <>);
+         Has_Accepted : Boolean := False) return AP3P_Refined_Pose is
+        (Count => Value.Count,
+         Selection_State => Value.Disposition,
+         Refinement_State => State,
+         Attempted => Attempted,
+         Native_Succeeded => Native_Succeeded,
+         Has_Initial => Value.Has_Pose,
+         Has_Accepted => Has_Accepted,
+         Initial_Valid => Initial_Valid,
+         Refined_Valid => Refined_Valid,
+         Initial => Value.Pose,
+         Accepted_Value => Accepted_Value,
+         Initial_Summary => Initial_Summary,
+         Refined_Summary => Refined_Summary,
+         Candidates => Value.Candidates);
+
+      procedure Require_Disjoint
+        (Left_Name : String;
+         Left : Object_Point_Array;
+         Right_Name : String;
+         Right : Object_Point_Array) is
+      begin
+         for Item of Left loop
+            for Other of Right loop
+               if Same_World_Point (Item, Other) then
+                  raise OpenCV.OpenCV_Error
+                    with Left_Name & " repeats a " & Right_Name & " world point";
+               end if;
+            end loop;
+         end loop;
+      end Require_Disjoint;
+
+      procedure Require_Unique (Name : String; Points : Object_Point_Array) is
+      begin
+         for Left in Points'Range loop
+            for Right in Points'First .. Left - 1 loop
+               if Same_World_Point (Points (Left), Points (Right)) then
+                  raise OpenCV.OpenCV_Error
+                    with Name & " world points are not independent";
+               end if;
+            end loop;
+         end loop;
+      end Require_Unique;
+
+      function Holdout_Summary
+        (Pose : World_To_Camera_Pose;
+         Usable : out Boolean) return Reprojection_Summary
+      is
+         Rows : constant AP3P_Pose_Hypothesis_Array := [(Pose => Pose)];
+         Evaluated : constant AP3P_Reference_Result_Matrix :=
+           Evaluate_AP3P_References
+             (Rows, Holdout_World, Holdout_Pixels, Intrinsics, Distortion);
+         Summaries : constant AP3P_Hypothesis_Reference_Summary_Array :=
+           Summarize_AP3P_References (Evaluated);
+      begin
+         Usable := Summaries (Summaries'First).Entire_Set_Evaluable;
+         if Usable then
+            return Summaries (Summaries'First).Reprojection;
+         end if;
+         return (others => <>);
+      end Holdout_Summary;
+
+      function Within_Allowance
+        (Original_RMS, Refined_RMS, Allowance : OpenCV.Float64_Value) return Boolean is
+        (OpenCV.Calib3D.Internal.Refinement_Policy.Holdout_RMS_Worsening_Within_Allowance
+           (Original_RMS, Refined_RMS, Allowance));
+   begin
+      Validate (Selection);
+      Validate (Acceptance);
+      Validate (Intrinsics);
+      Validate (Distortion);
+      Validate (Seed_World);
+      Validate (Seed_Pixels);
+      Validate (Selection_World);
+      Validate (Selection_Pixels);
+      Validate (Holdout_World);
+      Validate (Holdout_Pixels);
+      if Seed_World'Length /= Seed_Pixels'Length
+        or else Selection_World'Length /= Selection_Pixels'Length
+        or else Holdout_World'Length /= Holdout_Pixels'Length
+      then
+         raise OpenCV.OpenCV_Error
+           with "AP3P refinement world/pixel counts differ";
+      end if;
+      if Seed_World'Length /= 3 then
+         raise OpenCV.OpenCV_Error
+           with "Select_Refine_AP3P_Pose requires exactly three seed correspondences";
+      end if;
+      if Holdout_World'Length = 0 then
+         raise OpenCV.OpenCV_Error
+           with "AP3P refinement requires at least one held-out reference";
+      end if;
+      if Selection_World'Length > Natural (Interfaces.Integer_32'Last) - 3
+        or else Holdout_World'Length > Natural (Interfaces.Integer_32'Last)
+      then
+         raise OpenCV.OpenCV_Error
+           with "AP3P refinement correspondence count exceeds native range";
+      end if;
+      Require_Unique ("AP3P seed", Seed_World);
+      Require_Disjoint ("AP3P selection reference", Selection_World, "seed", Seed_World);
+      Require_Unique ("AP3P selection reference", Selection_World);
+      Require_Disjoint ("AP3P held-out reference", Holdout_World, "seed", Seed_World);
+      Require_Disjoint
+        ("AP3P held-out reference", Holdout_World, "selection", Selection_World);
+      Require_Unique ("AP3P held-out reference", Holdout_World);
+
+      declare
+         Chosen : constant AP3P_Pose_Selection :=
+           Select_AP3P_Pose
+             (Seed_World, Seed_Pixels, Selection_World, Selection_Pixels,
+              Intrinsics, Distortion, Selection);
+      begin
+         if not Selected (Chosen) then
+            return From_Selection (Chosen, Selection_Only);
+         end if;
+
+         declare
+            Initial : constant World_To_Camera_Pose := Selected_Pose (Chosen);
+            Fitting_World : Object_Point_Array (1 .. 3 + Selection_World'Length);
+            Fitting_Pixels : Image_Point_Array (1 .. Fitting_World'Length);
+            Initial_Usable : Boolean := False;
+            Initial_Score : constant Reprojection_Summary :=
+              Holdout_Summary (Initial, Initial_Usable);
+         begin
+            if not Initial_Usable then
+               return From_Selection
+                 (Chosen, Initial_Holdout_Unusable, Initial_Valid => False);
+            end if;
+
+            for Offset in 0 .. 2 loop
+               Fitting_World (1 + Offset) :=
+                 Seed_World (Seed_World'First + Offset);
+               Fitting_Pixels (1 + Offset) :=
+                 Seed_Pixels (Seed_Pixels'First + Offset);
+            end loop;
+            for Offset in 0 .. Selection_World'Length - 1 loop
+               Fitting_World (4 + Offset) :=
+                 Selection_World (Selection_World'First + Offset);
+               Fitting_Pixels (4 + Offset) :=
+                 Selection_Pixels (Selection_Pixels'First + Offset);
+            end loop;
+
+            declare
+               Candidate : World_To_Camera_Pose := Initial;
+               Native_OK : Boolean := False;
+            begin
+               Refine_Pose_Iterative
+                 (Fitting_World, Fitting_Pixels, Intrinsics, Distortion,
+                  Pose => Candidate, Refined => Native_OK);
+               if not Native_OK then
+                  if Candidate /= Initial then
+                     raise OpenCV.OpenCV_Error
+                       with "False native refinement changed the initial pose";
+                  end if;
+                  return From_Selection
+                    (Chosen, Native_Refinement_False,
+                     Attempted => True,
+                     Initial_Valid => True,
+                     Initial_Summary => Initial_Score);
+               end if;
+
+               declare
+                  Refined_Usable : Boolean := False;
+                  Refined_Score : constant Reprojection_Summary :=
+                    Holdout_Summary (Candidate, Refined_Usable);
+               begin
+                  if not Refined_Usable then
+                     return From_Selection
+                       (Chosen, Refined_Holdout_Unusable,
+                        Attempted => True,
+                        Native_Succeeded => True,
+                        Initial_Valid => True,
+                        Initial_Summary => Initial_Score);
+                  end if;
+                  if Refined_Score.RMS_Error_Pixels
+                       <= Acceptance.Maximum_Holdout_RMS_Pixels
+                    and then Refined_Score.Maximum_Error_Pixels
+                       <= Acceptance.Maximum_Holdout_Point_Error_Pixels
+                    and then Within_Allowance
+                      (Initial_Score.RMS_Error_Pixels,
+                       Refined_Score.RMS_Error_Pixels,
+                       Acceptance.Maximum_Holdout_RMS_Worsening_Pixels)
+                  then
+                     return From_Selection
+                       (Chosen, OpenCV.Calib3D.Accepted,
+                        Attempted => True,
+                        Native_Succeeded => True,
+                        Initial_Valid => True,
+                        Refined_Valid => True,
+                        Accepted_Value => Candidate,
+                        Initial_Summary => Initial_Score,
+                        Refined_Summary => Refined_Score,
+                        Has_Accepted => True);
+                  end if;
+                  return From_Selection
+                    (Chosen, Rejected_By_Policy,
+                     Attempted => True,
+                     Native_Succeeded => True,
+                     Initial_Valid => True,
+                     Refined_Valid => True,
+                     Initial_Summary => Initial_Score,
+                     Refined_Summary => Refined_Score);
+               end;
+            end;
+         end;
+      end;
+   end Select_Refine_AP3P_Pose;
 
    overriding procedure Finalize (Self : in out Essential_Estimate) is
    begin

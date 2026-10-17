@@ -679,6 +679,87 @@ package OpenCV.Calib3D is
       Distortion       : Distortion_Coefficients := No_Distortion;
       Options          : AP3P_Selection_Options) return AP3P_Pose_Selection;
 
+   --  Caller-controlled acceptance of one native iterative refinement.
+   --  Every field is required; there is no library default. All three
+   --  values must be finite and nonnegative. RMS and maximum are inclusive.
+   --  Worsening is the refined held-out RMS minus the original held-out RMS;
+   --  a nonpositive difference always satisfies a nonnegative allowance.
+   --  Acceptance uses only the held-out set, never the fitting observations.
+   type AP3P_Refinement_Acceptance_Options is record
+      Maximum_Holdout_RMS_Pixels           : OpenCV.Float64_Value;
+      Maximum_Holdout_Point_Error_Pixels   : OpenCV.Float64_Value;
+      Maximum_Holdout_RMS_Worsening_Pixels : OpenCV.Float64_Value;
+   end record;
+
+   --  Why refinement was not published as the camera pose. Selection_Only
+   --  means Task 016 did not uniquely select, so refinement was not called.
+   --  The other values require a unique selection. Native_Refinement_False
+   --  is an expected native false return, not an ABI error.
+   type AP3P_Refinement_Disposition is
+     (Selection_Only,
+      Initial_Holdout_Unusable,
+      Native_Refinement_False,
+      Refined_Holdout_Unusable,
+      Rejected_By_Policy,
+      Accepted);
+
+   --  End-to-end result. The initial pose is the owned pose from one
+   --  Select_AP3P_Pose call. The refined pose is published only when every
+   --  acceptance check succeeds. Callers cannot construct this type.
+   --  Held-out summaries exist only when that pose was fully evaluated at
+   --  positive depth. A stored zero is not a perfect score.
+   type AP3P_Refined_Pose (Count : Natural) is private;
+
+   function Selection_Disposition
+     (Result : AP3P_Refined_Pose) return AP3P_Selection_Disposition;
+   function Refinement_Disposition
+     (Result : AP3P_Refined_Pose) return AP3P_Refinement_Disposition;
+   function Refinement_Attempted (Result : AP3P_Refined_Pose) return Boolean;
+   function Native_Refinement_Succeeded (Result : AP3P_Refined_Pose) return Boolean;
+   function Accepted (Result : AP3P_Refined_Pose) return Boolean;
+
+   --  Raises OpenCV_Error unless selection uniquely owned a pose.
+   function Initial_Pose (Result : AP3P_Refined_Pose) return World_To_Camera_Pose;
+
+   --  Raises OpenCV_Error unless refinement was accepted. An unaccepted
+   --  native result is never exposed as the camera pose.
+   function Accepted_Pose (Result : AP3P_Refined_Pose) return World_To_Camera_Pose;
+
+   function Initial_Holdout_Valid (Result : AP3P_Refined_Pose) return Boolean;
+   function Refined_Holdout_Valid (Result : AP3P_Refined_Pose) return Boolean;
+
+   --  Raise OpenCV_Error unless the corresponding holdout is valid.
+   function Initial_Holdout (Result : AP3P_Refined_Pose) return Reprojection_Summary;
+   function Refined_Holdout (Result : AP3P_Refined_Pose) return Reprojection_Summary;
+
+   --  Exactly three seed pairs, zero or more selection references, and one
+   --  or more held-out references. An empty selection set preserves the
+   --  Task 016 No_Independent_References disposition and does not refine.
+   --  The three sets must be disjoint under
+   --  exact world-point equality, including duplicates inside a set.
+   --  Selection references may be used for refinement; held-out pairs are
+   --  never supplied to AP3P, candidate selection, or iterative refinement.
+   --  Disjoint inputs are not statistical independence when measurements
+   --  share systematic error. Arrays are paired by position regardless of
+   --  lower bounds. Native refinement is existing SOLVEPNP_ITERATIVE with
+   --  the selected pose as the guess. It is not a new optimizer.
+   --  X_camera = R * X_world + t. Translation remains t in the caller's
+   --  Cartesian frame, not a camera position and not an Earth or DTED frame.
+   --  Pixel residuals are not position uncertainty, covariance, or metric
+   --  accuracy. OpenCV_Error propagates and publishes no partial result.
+   function Select_Refine_AP3P_Pose
+     (Seed_World        : Object_Point_Array;
+      Seed_Pixels       : Image_Point_Array;
+      Selection_World   : Object_Point_Array;
+      Selection_Pixels  : Image_Point_Array;
+      Holdout_World     : Object_Point_Array;
+      Holdout_Pixels    : Image_Point_Array;
+      Intrinsics        : Camera_Intrinsics;
+      Distortion        : Distortion_Coefficients := No_Distortion;
+      Selection         : AP3P_Selection_Options;
+      Acceptance        : AP3P_Refinement_Acceptance_Options)
+      return AP3P_Refined_Pose;
+
    --  Euclidean pixel errors, one-based in correspondence order. Equal counts
    --  are required; empty/empty returns 1 .. 0. These diagnostics are not pose
    --  uncertainty and do not establish globally correct localization.
@@ -717,6 +798,28 @@ private
       Has_Pose          : Boolean := False;
       Pose              : World_To_Camera_Pose :=
         (Rotation => [others => 0.0], Translation => [others => 0.0]);
+   end record;
+
+   --  Has_Initial is true only when selection uniquely owned a pose.
+   --  Has_Accepted is true only after native success and held-out acceptance.
+   --  Holdout flags are independent: an unusable refined evaluation does not
+   --  erase a valid initial summary, and neither flag publishes a pose.
+   type AP3P_Refined_Pose (Count : Natural) is record
+      Selection_State    : AP3P_Selection_Disposition := No_Hypotheses;
+      Refinement_State   : AP3P_Refinement_Disposition := Selection_Only;
+      Attempted          : Boolean := False;
+      Native_Succeeded   : Boolean := False;
+      Has_Initial        : Boolean := False;
+      Has_Accepted       : Boolean := False;
+      Initial_Valid      : Boolean := False;
+      Refined_Valid      : Boolean := False;
+      Initial            : World_To_Camera_Pose :=
+        (Rotation => [others => 0.0], Translation => [others => 0.0]);
+      Accepted_Value     : World_To_Camera_Pose :=
+        (Rotation => [others => 0.0], Translation => [others => 0.0]);
+      Initial_Summary    : Reprojection_Summary := (others => <>);
+      Refined_Summary    : Reprojection_Summary := (others => <>);
+      Candidates         : AP3P_Candidate_Qualification_Array (1 .. Count);
    end record;
 
    type Inlier_Buffer is access Inlier_Index_Array;

@@ -11,6 +11,7 @@ with Interfaces.C.Strings;
 with OpenCV.Calib3D;
 with OpenCV.Calib3D.Internal.C_API;
 with OpenCV.Calib3D.Internal.Point_Refinement;
+with OpenCV.Calib3D.Internal.Refinement_Policy;
 with System;
 
 package body Calib3D_Tests is
@@ -4955,6 +4956,708 @@ package body Calib3D_Tests is
       end;
    end AP3P_Select_Provenance;
 
+   --  Task 017. Held-out acceptance is independent of fitting error.
+   --  Geometric helpers below are test oracles only.
+
+   function Refine_Rot_Y (Angle : OpenCV.Float64_Value) return Rotation_Matrix is
+      C : constant OpenCV.Float64_Value := Math.Cos (Angle);
+      S : constant OpenCV.Float64_Value := Math.Sin (Angle);
+   begin
+      return [[C, 0.0, S], [0.0, 1.0, 0.0], [-S, 0.0, C]];
+   end Refine_Rot_Y;
+
+   function Refine_Rot_Z (Angle : OpenCV.Float64_Value) return Rotation_Matrix is
+      C : constant OpenCV.Float64_Value := Math.Cos (Angle);
+      S : constant OpenCV.Float64_Value := Math.Sin (Angle);
+   begin
+      return [[C, -S, 0.0], [S, C, 0.0], [0.0, 0.0, 1.0]];
+   end Refine_Rot_Z;
+
+   function Refine_Multiply (Left, Right : Rotation_Matrix) return Rotation_Matrix is
+      Result : Rotation_Matrix := [others => [others => 0.0]];
+   begin
+      for Row in 0 .. 2 loop
+         for Column in 0 .. 2 loop
+            for K in 0 .. 2 loop
+               Result (Row, Column) :=
+                 Result (Row, Column) + Left (Row, K) * Right (K, Column);
+            end loop;
+         end loop;
+      end loop;
+      return Result;
+   end Refine_Multiply;
+
+   function Refine_Apply (Matrix : Rotation_Matrix; Point : Object_Point) return Object_Point is
+     ([Matrix (0, 0) * Point (0) + Matrix (0, 1) * Point (1) + Matrix (0, 2) * Point (2),
+      Matrix (1, 0) * Point (0) + Matrix (1, 1) * Point (1) + Matrix (1, 2) * Point (2),
+      Matrix (2, 0) * Point (0) + Matrix (2, 1) * Point (1) + Matrix (2, 2) * Point (2)]);
+
+   function Refine_Transpose (Matrix : Rotation_Matrix) return Rotation_Matrix is
+     ([[Matrix (0, 0), Matrix (1, 0), Matrix (2, 0)],
+       [Matrix (0, 1), Matrix (1, 1), Matrix (2, 1)],
+       [Matrix (0, 2), Matrix (1, 2), Matrix (2, 2)]]);
+
+   Refine_Truth_R : constant Rotation_Matrix :=
+     Refine_Multiply (Refine_Rot_Z (0.22), Refine_Rot_Y (0.35));
+   Refine_Truth_T : constant Translation_Vector := [0.2, -0.3, 0.8];
+   Refine_Calibration : constant Camera_Intrinsics := (800.0, 820.0, 640.0, 360.0);
+   Refine_Seeds : constant Object_Point_Array :=
+     [[0.3, -0.2, 3.5], [1.4, 0.1, 4.0], [-0.5, 1.2, 5.3]];
+   Refine_Selection_World : constant Object_Point_Array :=
+     [[0.7, -0.8, 6.1], [1.1, 0.4, 5.2]];
+   Refine_Holdout_World : constant Object_Point_Array :=
+     [[-0.9, -0.6, 4.4], [0.2, 1.3, 7.0], [-1.5, 0.5, 3.8]];
+   Refine_Select_Policy : constant AP3P_Selection_Options := (1.0E-3, 1.0E-3, 1.0E-3);
+   Refine_Accept_Policy : constant AP3P_Refinement_Acceptance_Options :=
+     (1.0, 2.0, 0.25);
+
+   function Refine_Project (Point : Object_Point) return Image_Point is
+      Camera : constant Object_Point :=
+        [Refine_Apply (Refine_Truth_R, Point) (0) + Refine_Truth_T (0),
+         Refine_Apply (Refine_Truth_R, Point) (1) + Refine_Truth_T (1),
+         Refine_Apply (Refine_Truth_R, Point) (2) + Refine_Truth_T (2)];
+   begin
+      return [Refine_Calibration.Focal_X * (Camera (0) / Camera (2)) + Refine_Calibration.Center_X,
+              Refine_Calibration.Focal_Y * (Camera (1) / Camera (2)) + Refine_Calibration.Center_Y];
+   end Refine_Project;
+   function Refine_Brown
+     (Point : Object_Point; Lens : Distortion_Coefficients) return Image_Point is
+      Camera : constant Object_Point :=
+        [Refine_Apply (Refine_Truth_R, Point) (0) + Refine_Truth_T (0),
+         Refine_Apply (Refine_Truth_R, Point) (1) + Refine_Truth_T (1),
+         Refine_Apply (Refine_Truth_R, Point) (2) + Refine_Truth_T (2)];
+      X : constant OpenCV.Float64_Value := Camera (0) / Camera (2);
+      Y : constant OpenCV.Float64_Value := Camera (1) / Camera (2);
+      R2 : constant OpenCV.Float64_Value := X * X + Y * Y;
+      Radial : constant OpenCV.Float64_Value :=
+        1.0 + Lens.K1 * R2 + Lens.K2 * R2 * R2 + Lens.K3 * R2 * R2 * R2;
+   begin
+      return [Refine_Calibration.Focal_X * (X * Radial + 2.0 * Lens.P1 * X * Y
+                + Lens.P2 * (R2 + 2.0 * X * X)) + Refine_Calibration.Center_X,
+              Refine_Calibration.Focal_Y * (Y * Radial + Lens.P1 * (R2 + 2.0 * Y * Y)
+                + 2.0 * Lens.P2 * X * Y) + Refine_Calibration.Center_Y];
+   end Refine_Brown;
+
+   function Pixels_Of
+     (Points : Object_Point_Array;
+      Lens : Distortion_Coefficients := No_Distortion) return Image_Point_Array is
+      Result : Image_Point_Array (1 .. Points'Length);
+   begin
+      for I in Points'Range loop
+         declare
+            Slot : constant Positive := 1 + (I - Points'First);
+         begin
+            if Lens = No_Distortion then
+               Result (Slot) := Refine_Project (Points (I));
+            else
+               Result (Slot) := Refine_Brown (Points (I), Lens);
+            end if;
+         end;
+      end loop;
+      return Result;
+   end Pixels_Of;
+
+   procedure Assert_Geometric_Pose
+     (Pose : World_To_Camera_Pose; Message : String;
+      Angle_Limit : OpenCV.Float64_Value := 1.0E-4;
+      Translation_Limit : OpenCV.Float64_Value := 1.0E-4) is
+      Recovered : constant Rotation_Matrix := Rotation_Matrix_Of (Pose);
+      Trace : OpenCV.Float64_Value := 0.0;
+      Expected_Center : constant Object_Point :=
+        [-Refine_Apply (Refine_Transpose (Refine_Truth_R), Object_Point (Refine_Truth_T)) (0),
+         -Refine_Apply (Refine_Transpose (Refine_Truth_R), Object_Point (Refine_Truth_T)) (1),
+         -Refine_Apply (Refine_Transpose (Refine_Truth_R), Object_Point (Refine_Truth_T)) (2)];
+      Center : constant Object_Point := Camera_Center (Pose);
+   begin
+      for Axis in 0 .. 2 loop
+         Trace := Trace + Recovered (Axis, 0) * Refine_Truth_R (Axis, 0)
+           + Recovered (Axis, 1) * Refine_Truth_R (Axis, 1)
+           + Recovered (Axis, 2) * Refine_Truth_R (Axis, 2);
+      end loop;
+      Assert (Math.Arccos (OpenCV.Float64_Value'Max
+                (-1.0, OpenCV.Float64_Value'Min (1.0, (Trace - 1.0) / 2.0))) < Angle_Limit,
+        Message & " rotation");
+      Assert (Math.Sqrt ((Pose.Translation (0) - Refine_Truth_T (0)) ** 2
+                + (Pose.Translation (1) - Refine_Truth_T (1)) ** 2
+                + (Pose.Translation (2) - Refine_Truth_T (2)) ** 2) < Translation_Limit,
+        Message & " translation");
+      Assert (Math.Sqrt ((Center (0) - Expected_Center (0)) ** 2
+                + (Center (1) - Expected_Center (1)) ** 2
+                + (Center (2) - Expected_Center (2)) ** 2) < Translation_Limit,
+        Message & " camera center");
+   end Assert_Geometric_Pose;
+
+   procedure Reject_Accepted (Value : AP3P_Refined_Pose) is
+   begin
+      declare
+         Exposed : constant World_To_Camera_Pose := Accepted_Pose (Value);
+      begin
+         Assert (False, "unaccepted pose exposed t.z="
+           & OpenCV.Float64_Value'Image (Exposed.Translation (2)));
+      end;
+   exception
+      when OpenCV.OpenCV_Error => null;
+   end Reject_Accepted;
+
+   procedure Reject_Refined_Summary (Value : AP3P_Refined_Pose) is
+   begin
+      declare
+         Summary : constant Reprojection_Summary := Refined_Holdout (Value);
+      begin
+         Assert (False, "invalid refined holdout exposed rms="
+           & OpenCV.Float64_Value'Image (Summary.RMS_Error_Pixels));
+      end;
+   exception
+      when OpenCV.OpenCV_Error => null;
+   end Reject_Refined_Summary;
+   procedure AP3P_Refine_Known (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Result : constant AP3P_Refined_Pose :=
+        Select_Refine_AP3P_Pose
+          (Refine_Seeds, Pixels_Of (Refine_Seeds),
+           Refine_Selection_World, Pixels_Of (Refine_Selection_World),
+           Refine_Holdout_World, Pixels_Of (Refine_Holdout_World),
+           Refine_Calibration, No_Distortion,
+           Refine_Select_Policy, Refine_Accept_Policy);
+      Pose : constant World_To_Camera_Pose := Accepted_Pose (Result);
+      Before : constant Reprojection_Summary := Initial_Holdout (Result);
+      After : constant Reprojection_Summary := Refined_Holdout (Result);
+   begin
+      Assert (Selection_Disposition (Result) = Unique_Selected_Hypothesis
+        and then Refinement_Disposition (Result) = Accepted
+        and then Accepted (Result)
+        and then Refinement_Attempted (Result)
+        and then Native_Refinement_Succeeded (Result),
+        "clean nonidentity pose is selected and accepted");
+      Assert_Geometric_Pose (Initial_Pose (Result), "initial selected");
+      Assert_Geometric_Pose (Pose, "accepted refined");
+      Assert (Before.Count = Refine_Holdout_World'Length
+        and then After.Count = Before.Count
+        and then Before.RMS_Error_Pixels <= 1.0E-6
+        and then After.RMS_Error_Pixels <= 1.0E-6,
+        "held-out oracle remains inside the caller policy");
+      declare
+         Native : constant Image_Point_Array :=
+           Project_Points (Refine_Holdout_World, Refine_Calibration, No_Distortion, Pose);
+         Expected : constant Image_Point_Array := Pixels_Of (Refine_Holdout_World);
+         Worst : OpenCV.Float64_Value := 0.0;
+      begin
+         for I in Native'Range loop
+            Worst := OpenCV.Float64_Value'Max
+              (Worst, Math.Sqrt ((Native (I) (0) - Expected (I) (0)) ** 2
+                + (Native (I) (1) - Expected (I) (1)) ** 2));
+         end loop;
+         Assert (Worst < 1.0E-4, "accepted pose matches independent pinhole projection");
+      end;
+   end AP3P_Refine_Known;
+   procedure AP3P_Refine_Noisy (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Seeds : constant Object_Point_Array :=
+        [[-1.0, -1.0, 0.0], [1.2, -0.4, 0.5], [0.1, 1.1, 1.2]];
+      Selection_Points : constant Object_Point_Array :=
+        [[-0.4, 0.6, 2.0], [1.1, 0.7, 1.6], [0.5, -1.1, 2.4], [-1.3, 0.2, 1.8]];
+      Holdout_Points : constant Object_Point_Array :=
+        [[0.8, -0.2, 2.7], [-0.7, -0.9, 3.1], [1.4, 1.0, 2.2]];
+      Truth : constant World_To_Camera_Pose :=
+        (Rotation => [0.12, -0.07, 0.05], Translation => [0.15, -0.25, 5.5]);
+      --  Deterministic sub-pixel noise on the fitting observations only.
+      Noise : constant array (1 .. 7) of Image_Point :=
+        [[0.35, -0.20], [-0.15, 0.40], [0.25, 0.10],
+         [-0.30, -0.25], [0.20, 0.15], [-0.10, 0.30], [0.40, -0.15]];
+      function Truth_Pixels (Points : Object_Point_Array) return Image_Point_Array is
+        (Project_Points (Points, Refine_Calibration, No_Distortion, Truth));
+      Seed_Pixels : Image_Point_Array := Truth_Pixels (Seeds);
+      Selection_Pixels : Image_Point_Array := Truth_Pixels (Selection_Points);
+      Holdout_Pixels : constant Image_Point_Array := Truth_Pixels (Holdout_Points);
+   begin
+      for I in Seed_Pixels'Range loop
+         Seed_Pixels (I) (0) := Seed_Pixels (I) (0) + Noise (I) (0);
+         Seed_Pixels (I) (1) := Seed_Pixels (I) (1) + Noise (I) (1);
+      end loop;
+      for I in Selection_Pixels'Range loop
+         Selection_Pixels (I) (0) :=
+           Selection_Pixels (I) (0) + Noise (3 + (I - Selection_Pixels'First) + 1) (0);
+         Selection_Pixels (I) (1) :=
+           Selection_Pixels (I) (1) + Noise (3 + (I - Selection_Pixels'First) + 1) (1);
+      end loop;
+      declare
+         Result : constant AP3P_Refined_Pose :=
+           Select_Refine_AP3P_Pose
+             (Seeds, Seed_Pixels, Selection_Points, Selection_Pixels,
+              Holdout_Points, Holdout_Pixels, Refine_Calibration, No_Distortion,
+              (2.0, 4.0, 0.05), (1.5, 3.0, 0.5));
+         Before : constant Reprojection_Summary := Initial_Holdout (Result);
+         After : constant Reprojection_Summary := Refined_Holdout (Result);
+         Pose : constant World_To_Camera_Pose := Accepted_Pose (Result);
+         Expected : constant Rotation_Matrix := Rotation_Matrix_Of (Truth);
+         Recovered : constant Rotation_Matrix := Rotation_Matrix_Of (Pose);
+         Trace : OpenCV.Float64_Value := 0.0;
+      begin
+         Assert (Refinement_Disposition (Result) = Accepted
+           and then Native_Refinement_Succeeded (Result),
+           "noisy fitting observations refine and pass held-out policy");
+         Assert (After.RMS_Error_Pixels <= Before.RMS_Error_Pixels + 0.5
+           and then After.RMS_Error_Pixels <= 1.5
+           and then After.Maximum_Error_Pixels <= 3.0,
+           "held-out summary obeys the caller thresholds");
+         for Axis in 0 .. 2 loop
+            Trace := Trace + Recovered (Axis, 0) * Expected (Axis, 0)
+              + Recovered (Axis, 1) * Expected (Axis, 1)
+              + Recovered (Axis, 2) * Expected (Axis, 2);
+         end loop;
+         Assert (Math.Arccos (OpenCV.Float64_Value'Max
+                   (-1.0, OpenCV.Float64_Value'Min (1.0, (Trace - 1.0) / 2.0))) < 5.0E-3,
+           "refined rotation stays near the independent truth");
+         Assert (abs (Pose.Translation (2) - Truth.Translation (2)) < 5.0E-2,
+           "refined translation stays near the independent truth");
+      end;
+   end AP3P_Refine_Noisy;
+   procedure AP3P_Refine_Distortion (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Lens : constant Distortion_Coefficients := (-0.12, 0.03, 0.001, -0.002, 0.01);
+      Result : constant AP3P_Refined_Pose :=
+        Select_Refine_AP3P_Pose
+          (Refine_Seeds, Pixels_Of (Refine_Seeds, Lens),
+           Refine_Selection_World, Pixels_Of (Refine_Selection_World, Lens),
+           Refine_Holdout_World, Pixels_Of (Refine_Holdout_World, Lens),
+           Refine_Calibration, Lens, (1.0E-2, 1.0E-2, 1.0E-3), (1.0E-2, 1.0E-2, 1.0E-3));
+      Pose : constant World_To_Camera_Pose := Accepted_Pose (Result);
+      Native : constant Image_Point_Array :=
+        Project_Points (Refine_Holdout_World, Refine_Calibration, Lens, Pose);
+      Expected : constant Image_Point_Array := Pixels_Of (Refine_Holdout_World, Lens);
+      Worst : OpenCV.Float64_Value := 0.0;
+   begin
+      Assert (Refinement_Disposition (Result) = Accepted, "five-coefficient refinement accepted");
+      Assert_Geometric_Pose (Pose, "distorted accepted", 2.0E-3, 2.0E-3);
+      for I in Native'Range loop
+         Worst := OpenCV.Float64_Value'Max
+           (Worst, Math.Sqrt ((Native (I) (0) - Expected (I) (0)) ** 2
+             + (Native (I) (1) - Expected (I) (1)) ** 2));
+      end loop;
+      Assert (Worst < 1.0E-2
+        and then Refined_Holdout (Result).Maximum_Error_Pixels <= 1.0E-2,
+        "held-out Brown projection stays inside the caller maximum");
+      Assert (Lens.K1 /= 0.0 and then Lens.K2 /= 0.0 and then Lens.P1 /= 0.0
+        and then Lens.P2 /= 0.0 and then Lens.K3 /= 0.0,
+        "all five Brown coefficients are nonzero");
+   end AP3P_Refine_Distortion;
+
+   procedure AP3P_Refine_Worsens (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Fitting pixels are shifted together. Held-out pixels stay on the
+      --  geometric truth, so a successful fit can increase held-out RMS.
+      --  Seeds stay on the geometric truth, so AP3P can recover it.
+      --  Selection pixels are biased; refinement may follow that bias and
+      --  increase error on the unbiased held-out set.
+      Shift : constant Image_Point := [12.0, -9.0];
+      Seed_Pixels : constant Image_Point_Array := Pixels_Of (Refine_Seeds);
+      Selection_Pixels : Image_Point_Array := Pixels_Of (Refine_Selection_World);
+      Holdout_Pixels : constant Image_Point_Array := Pixels_Of (Refine_Holdout_World);
+   begin
+      for Pixel of Selection_Pixels loop
+         Pixel (0) := Pixel (0) + Shift (0);
+         Pixel (1) := Pixel (1) + Shift (1);
+      end loop;
+      declare
+         Value : constant AP3P_Refined_Pose :=
+           Select_Refine_AP3P_Pose
+             (Refine_Seeds, Seed_Pixels, Refine_Selection_World, Selection_Pixels,
+              Refine_Holdout_World, Holdout_Pixels, Refine_Calibration,
+              No_Distortion, (80.0, 120.0, 0.0), (1.0E6, 1.0E6, 0.05));
+         Before : constant Reprojection_Summary := Initial_Holdout (Value);
+         After : constant Reprojection_Summary := Refined_Holdout (Value);
+      begin
+         Ada.Text_IO.Put_Line
+           ("AP3P held-out worsening initial="
+            & OpenCV.Float64_Value'Image (Before.RMS_Error_Pixels)
+            & " refined=" & OpenCV.Float64_Value'Image (After.RMS_Error_Pixels)
+            & " " & AP3P_Refinement_Disposition'Image (Refinement_Disposition (Value)));
+         Assert (Selection_Disposition (Value) = Unique_Selected_Hypothesis
+           and then Native_Refinement_Succeeded (Value)
+           and then Refinement_Disposition (Value) = Rejected_By_Policy
+           and then not Accepted (Value)
+           and then After.RMS_Error_Pixels > Before.RMS_Error_Pixels + 0.05,
+           "held-out worsening beyond the allowance is rejected");
+         Reject_Accepted (Value);
+      end;
+   end AP3P_Refine_Worsens;
+
+   procedure AP3P_Refine_Threshold (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Holdout_Pixels : Image_Point_Array := Pixels_Of (Refine_Holdout_World);
+   begin
+      Holdout_Pixels (Holdout_Pixels'First) (0) :=
+        Holdout_Pixels (Holdout_Pixels'First) (0) + 1.0;
+      declare
+         Value : constant AP3P_Refined_Pose :=
+           Select_Refine_AP3P_Pose
+             (Refine_Seeds, Pixels_Of (Refine_Seeds),
+              Refine_Selection_World, Pixels_Of (Refine_Selection_World),
+              Refine_Holdout_World, Holdout_Pixels, Refine_Calibration,
+              No_Distortion, Refine_Select_Policy, (10.0, 0.0, 10.0));
+      begin
+         Assert (Refinement_Disposition (Value) = Rejected_By_Policy
+           and then Native_Refinement_Succeeded (Value)
+           and then Refined_Holdout (Value).Maximum_Error_Pixels > 0.0
+           and then not Accepted (Value),
+           "a caller maximum of zero rejects a positive held-out error");
+         Reject_Accepted (Value);
+      end;
+      declare
+         Clean_Pixels : constant Image_Point_Array := Pixels_Of (Refine_Holdout_World);
+         Clean : constant AP3P_Refined_Pose :=
+           Select_Refine_AP3P_Pose
+             (Refine_Seeds, Pixels_Of (Refine_Seeds),
+              Refine_Selection_World, Pixels_Of (Refine_Selection_World),
+              Refine_Holdout_World, Clean_Pixels, Refine_Calibration,
+              No_Distortion, Refine_Select_Policy, (1.0E-6, 1.0E-6, 1.0));
+      begin
+         Assert (Refinement_Disposition (Clean) = Accepted
+           and then Refined_Holdout (Clean).Maximum_Error_Pixels <= 1.0E-6,
+           "the unperturbed twin still meets a tight positive threshold");
+      end;
+   end AP3P_Refine_Threshold;
+   procedure AP3P_Refine_Depth (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  The selected camera looks along +Z. A held-out world point with
+      --  large negative Z is behind that camera.
+      Seeds : constant Object_Point_Array :=
+        [[-0.4, -0.2, 3.0], [0.6, -0.3, 3.4], [0.1, 0.5, 4.2]];
+      Selection_Points : constant Object_Point_Array := [[0.8, 0.2, 5.0]];
+      Holdout_Points : constant Object_Point_Array := [[0.0, 0.0, -6.0]];
+      Pose : constant World_To_Camera_Pose :=
+        (Rotation => [others => 0.0], Translation => [others => 0.0]);
+      Result : constant AP3P_Refined_Pose :=
+        Select_Refine_AP3P_Pose
+          (Seeds, Project_Points (Seeds, Refine_Calibration, No_Distortion, Pose),
+           Selection_Points,
+           Project_Points (Selection_Points, Refine_Calibration, No_Distortion, Pose),
+           Holdout_Points, [[100.0, 120.0]], Refine_Calibration, No_Distortion,
+           (1.0E-4, 1.0E-4, 0.0), (1.0, 1.0, 1.0));
+   begin
+      Assert (Selection_Disposition (Result) = Unique_Selected_Hypothesis
+        and then Refinement_Disposition (Result) = Initial_Holdout_Unusable
+        and then not Refinement_Attempted (Result)
+        and then not Native_Refinement_Succeeded (Result)
+        and then not Initial_Holdout_Valid (Result)
+        and then not Accepted (Result),
+        "nonpositive held-out depth blocks refinement");
+      Reject_Accepted (Result);
+      Reject_Refined_Summary (Result);
+   end AP3P_Refine_Depth;
+
+   procedure AP3P_Refine_Unavailable (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Angle : constant OpenCV.Float64_Value := Ada.Numerics.Pi / 4.0;
+      Pose : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, Angle], Translation => [others => 0.0]);
+      Seeds : constant Object_Point_Array :=
+        [[-0.2, 0.1, 3.0], [0.4, -0.3, 3.5], [0.1, 0.6, 4.0]];
+      Selection_Points : constant Object_Point_Array := [[0.7, 0.2, 5.0]];
+      --  The second held-out sum overflows Float64 after the 45-degree rotation.
+      Holdout_Points : constant Object_Point_Array :=
+        [[0.0, 0.0, 4.0], [1.5E308, -1.5E308, 4.0]];
+      Camera : constant Camera_Intrinsics := (100.0, 100.0, 0.0, 0.0);
+      Result : constant AP3P_Refined_Pose :=
+        Select_Refine_AP3P_Pose
+          (Seeds, Project_Points (Seeds, Camera, No_Distortion, Pose),
+           Selection_Points, Project_Points (Selection_Points, Camera, No_Distortion, Pose),
+           Holdout_Points, [[10.0, 20.0], [30.0, 40.0]], Camera, No_Distortion,
+           (1.0E-3, 1.0E-3, 0.0), (1.0, 1.0, 1.0));
+   begin
+      Assert (Refinement_Disposition (Result) = Initial_Holdout_Unusable
+        and then not Refinement_Attempted (Result)
+        and then not Accepted (Result),
+        "numerically unavailable held-out input blocks refinement");
+      Reject_Refined_Summary (Result);
+   end AP3P_Refine_Unavailable;
+
+   procedure AP3P_Refine_No_Selection (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Empty : constant AP3P_Refined_Pose :=
+        Select_Refine_AP3P_Pose
+          (Refine_Seeds, Pixels_Of (Refine_Seeds),
+           Refine_Selection_World (1 .. 0), Image_Point_Array'(1 .. 0 => [others => 0.0]),
+           Refine_Holdout_World, Pixels_Of (Refine_Holdout_World),
+           Refine_Calibration, No_Distortion,
+           Refine_Select_Policy, Refine_Accept_Policy);
+      Wide : constant AP3P_Refined_Pose :=
+        Select_Refine_AP3P_Pose
+          (Refine_Seeds, Pixels_Of (Refine_Seeds),
+           Refine_Selection_World, Pixels_Of (Refine_Selection_World),
+           Refine_Holdout_World, Pixels_Of (Refine_Holdout_World),
+           Refine_Calibration, No_Distortion,
+           (OpenCV.Float64_Value'Last, OpenCV.Float64_Value'Last, OpenCV.Float64_Value'Last),
+           Refine_Accept_Policy);
+   begin
+      Assert (Selection_Disposition (Empty) = No_Independent_References
+        and then Refinement_Disposition (Empty) = Selection_Only
+        and then not Refinement_Attempted (Empty)
+        and then not Accepted (Empty),
+        "missing selection references do not invent a pose");
+      begin
+         declare
+            Pose : constant World_To_Camera_Pose := Initial_Pose (Empty);
+         begin
+            Assert (False, "missing selection exposed t.z="
+              & OpenCV.Float64_Value'Image (Pose.Translation (2)));
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+      if Selection_Disposition (Wide) = Ambiguous_Qualified_Hypotheses then
+         Assert (Refinement_Disposition (Wide) = Selection_Only
+           and then not Refinement_Attempted (Wide),
+           "an ambiguous selection is not refined");
+         Reject_Accepted (Wide);
+      else
+         Assert (Selection_Disposition (Wide) = Unique_Selected_Hypothesis,
+           "only a sole surviving hypothesis may continue");
+      end if;
+   end AP3P_Refine_No_Selection;
+   procedure AP3P_Refine_Duplicates (T : in out Fixture) is
+      pragma Unreferenced (T);
+      procedure Reject
+        (Seeds, Selection_Points, Holdout_Points : Object_Point_Array) is
+      begin
+         declare
+            Value : constant AP3P_Refined_Pose :=
+              Select_Refine_AP3P_Pose
+                (Seeds, Pixels_Of (Seeds),
+                 Selection_Points, Pixels_Of (Selection_Points),
+                 Holdout_Points, Pixels_Of (Holdout_Points),
+                 Refine_Calibration, No_Distortion,
+                 Refine_Select_Policy, Refine_Accept_Policy);
+         begin
+            Assert (False, "duplicate world points accepted disposition "
+              & AP3P_Refinement_Disposition'Image (Refinement_Disposition (Value)));
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Reject;
+      Repeated_Seed : Object_Point_Array := Refine_Seeds;
+      Repeated_Selection : Object_Point_Array := Refine_Selection_World;
+   begin
+      Repeated_Seed (Repeated_Seed'Last) := Repeated_Seed (Repeated_Seed'First);
+      Reject (Repeated_Seed, Refine_Selection_World, Refine_Holdout_World);
+      Repeated_Selection (Repeated_Selection'Last) :=
+        Repeated_Selection (Repeated_Selection'First);
+      Reject (Refine_Seeds, Repeated_Selection, Refine_Holdout_World);
+      Reject (Refine_Seeds, Refine_Selection_World,
+              [Refine_Holdout_World (1), Refine_Holdout_World (1), Refine_Holdout_World (3)]);
+      Reject (Refine_Seeds, [Refine_Seeds (1)], Refine_Holdout_World);
+      Reject (Refine_Seeds, Refine_Selection_World, [Refine_Seeds (3)]);
+      Reject (Refine_Seeds, Refine_Selection_World, [Refine_Selection_World (1)]);
+   end AP3P_Refine_Duplicates;
+   procedure AP3P_Refine_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      procedure Reject_Acceptance (Value : AP3P_Refinement_Acceptance_Options) is
+      begin
+         declare
+            Result : constant AP3P_Refined_Pose :=
+              Select_Refine_AP3P_Pose
+                (Refine_Seeds, Pixels_Of (Refine_Seeds),
+                 Refine_Selection_World, Pixels_Of (Refine_Selection_World),
+                 Refine_Holdout_World, Pixels_Of (Refine_Holdout_World),
+                 Refine_Calibration, No_Distortion, Refine_Select_Policy, Value);
+         begin
+            Assert (False, "invalid acceptance accepted "
+              & AP3P_Refinement_Disposition'Image (Refinement_Disposition (Result)));
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Reject_Acceptance;
+      procedure Reject_Counts
+        (Seeds : Object_Point_Array; Seed_Pixels : Image_Point_Array;
+         Selection_Points : Object_Point_Array; Selection_Pixels : Image_Point_Array;
+         Holdout_Points : Object_Point_Array; Holdout_Pixels : Image_Point_Array) is
+      begin
+         declare
+            Result : constant AP3P_Refined_Pose :=
+              Select_Refine_AP3P_Pose
+                (Seeds, Seed_Pixels, Selection_Points, Selection_Pixels,
+                 Holdout_Points, Holdout_Pixels, Refine_Calibration,
+                 No_Distortion, Refine_Select_Policy, Refine_Accept_Policy);
+         begin
+            Assert (False, "invalid counts accepted "
+              & AP3P_Selection_Disposition'Image (Selection_Disposition (Result)));
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Reject_Counts;
+   begin
+      Reject_Acceptance ((-1.0, 1.0, 1.0));
+      Reject_Acceptance ((1.0, -1.0, 1.0));
+      Reject_Acceptance ((1.0, 1.0, -1.0));
+      Reject_Acceptance ((OpenCV.Float64_Value (Nonfinite (0)), 1.0, 1.0));
+      Reject_Acceptance ((1.0, OpenCV.Float64_Value (Nonfinite (1)), 1.0));
+      Reject_Acceptance ((1.0, 1.0, OpenCV.Float64_Value (Nonfinite (0))));
+      Reject_Counts (Refine_Seeds (1 .. 2), Pixels_Of (Refine_Seeds) (1 .. 2),
+                     Refine_Selection_World, Pixels_Of (Refine_Selection_World),
+                     Refine_Holdout_World, Pixels_Of (Refine_Holdout_World));
+      Reject_Counts (Refine_Seeds, Pixels_Of (Refine_Seeds) (1 .. 2),
+                     Refine_Selection_World, Pixels_Of (Refine_Selection_World),
+                     Refine_Holdout_World, Pixels_Of (Refine_Holdout_World));
+      Reject_Counts (Refine_Seeds, Pixels_Of (Refine_Seeds),
+                     Refine_Selection_World, Pixels_Of (Refine_Selection_World) (1 .. 1),
+                     Refine_Holdout_World, Pixels_Of (Refine_Holdout_World));
+      Reject_Counts (Refine_Seeds, Pixels_Of (Refine_Seeds),
+                     Refine_Selection_World, Pixels_Of (Refine_Selection_World),
+                     Refine_Holdout_World, Pixels_Of (Refine_Holdout_World) (1 .. 1));
+      declare
+         Bad_World : Object_Point_Array := Refine_Holdout_World;
+         Bad_Pixel : Image_Point_Array := Pixels_Of (Refine_Seeds);
+      begin
+         Bad_World (Bad_World'First) (2) := OpenCV.Float64_Value (Nonfinite (0));
+         Bad_Pixel (Bad_Pixel'First) (0) := OpenCV.Float64_Value (Nonfinite (1));
+         Reject_Counts (Refine_Seeds, Pixels_Of (Refine_Seeds),
+                        Refine_Selection_World, Pixels_Of (Refine_Selection_World),
+                        Bad_World, Pixels_Of (Refine_Holdout_World));
+         Reject_Counts (Refine_Seeds, Bad_Pixel,
+                        Refine_Selection_World, Pixels_Of (Refine_Selection_World),
+                        Refine_Holdout_World, Pixels_Of (Refine_Holdout_World));
+      end;
+      declare
+         Extreme : constant AP3P_Refined_Pose :=
+           Select_Refine_AP3P_Pose
+             (Refine_Seeds, Pixels_Of (Refine_Seeds),
+              Refine_Selection_World, Pixels_Of (Refine_Selection_World),
+              Refine_Holdout_World, Pixels_Of (Refine_Holdout_World),
+              Refine_Calibration, No_Distortion, Refine_Select_Policy,
+              (OpenCV.Float64_Value'Last, OpenCV.Float64_Value'Last, OpenCV.Float64_Value'Last));
+      begin
+         Assert (Accepted (Extreme), "extreme finite nonnegative thresholds remain valid");
+      end;
+   end AP3P_Refine_Invalid;
+   procedure AP3P_Refine_Bounds (T : in out Fixture) is
+      pragma Unreferenced (T);
+      subtype High is Positive range 7 .. 9;
+      subtype Low is Positive range 4 .. 5;
+      subtype Mid is Positive range 20 .. 22;
+      Seeds : constant Object_Point_Array (High) :=
+        [7 => Refine_Seeds (1), 8 => Refine_Seeds (2), 9 => Refine_Seeds (3)];
+      Selection_Points : constant Object_Point_Array (Low) :=
+        [4 => Refine_Selection_World (1), 5 => Refine_Selection_World (2)];
+      Holdout_Points : constant Object_Point_Array (Mid) :=
+        [20 => Refine_Holdout_World (1), 21 => Refine_Holdout_World (2),
+         22 => Refine_Holdout_World (3)];
+      Result : constant AP3P_Refined_Pose :=
+        Select_Refine_AP3P_Pose
+          (Seeds, Pixels_Of (Seeds), Selection_Points, Pixels_Of (Selection_Points),
+           Holdout_Points, Pixels_Of (Holdout_Points), Refine_Calibration,
+           No_Distortion, Refine_Select_Policy, Refine_Accept_Policy);
+   begin
+      Assert (Seeds'First = 7 and then Selection_Points'Last = 5
+        and then Holdout_Points'First = 20, "different lower bounds");
+      Assert (Accepted (Result), "positional pairing ignores lower bounds");
+      Assert_Geometric_Pose (Accepted_Pose (Result), "bounded accepted");
+   end AP3P_Refine_Bounds;
+
+   procedure AP3P_Refine_Upper (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Selection_Points : constant Object_Point_Array (Positive'Last .. Positive'Last) :=
+        [Positive'Last => [0.7, -0.8, 6.1]];
+      Holdout_Points : constant Object_Point_Array (Positive'Last .. Positive'Last) :=
+        [Positive'Last => [-0.9, -0.6, 4.4]];
+      Result : constant AP3P_Refined_Pose :=
+        Select_Refine_AP3P_Pose
+          (Refine_Seeds, Pixels_Of (Refine_Seeds),
+           Selection_Points, Pixels_Of (Selection_Points),
+           Holdout_Points, Pixels_Of (Holdout_Points),
+           Refine_Calibration, No_Distortion,
+           (1.0E-3, 1.0E-3, 0.0), Refine_Accept_Policy);
+   begin
+      Assert (Selection_Points'First = Positive'Last
+        and then Holdout_Points'Last = Positive'Last,
+        "Positive'Last one-element bounds");
+      Assert (Accepted (Result) and then Initial_Holdout (Result).Count = 1,
+        "upper-bound indexing still evaluates the held-out point");
+   end AP3P_Refine_Upper;
+
+   procedure AP3P_Refine_Worsening_Arithmetic (T : in out Fixture) is
+      pragma Unreferenced (T);
+      function Within
+        (Original_RMS, Refined_RMS, Allowance : OpenCV.Float64_Value) return Boolean
+        renames OpenCV.Calib3D.Internal.Refinement_Policy.Holdout_RMS_Worsening_Within_Allowance;
+      Exact : constant OpenCV.Float64_Value := 7.0;
+      Just_Above : constant OpenCV.Float64_Value := 7.000000000000002;
+      Allowance : constant OpenCV.Float64_Value := 1.6E-15;
+      Large_Original : constant OpenCV.Float64_Value := 1.0E307;
+      Large_Refined : constant OpenCV.Float64_Value := 1.5E307;
+      Near_Limit : constant OpenCV.Float64_Value := OpenCV.Float64_Value'Last;
+      Near_Predecessor : constant OpenCV.Float64_Value :=
+        OpenCV.Float64_Value'Adjacent (Near_Limit, 0.0);
+   begin
+      Assert (Within (4.0, 4.0, 0.0), "exact zero worsening is within a zero allowance");
+      Assert (Within (5.0, 4.5, 0.0), "genuine improvement is within a zero allowance");
+      Assert (Within (2.0, 2.25, 0.25), "worsening exactly equal to the allowance is accepted");
+      Assert (not Within (2.0, 2.25, 0.24999999999999997),
+        "worsening just above the allowance is rejected");
+      Assert (Within (2.0, 2.25, 0.25000000000000006),
+        "worsening just below the allowance is accepted");
+      Assert (not Within (Exact, Just_Above, Allowance),
+        "7.0 to 7.000000000000002 exceeds a 1.6E-15 allowance");
+      Assert (Within (Exact, Exact + OpenCV.Float64_Value'Succ (Exact) - Exact, Allowance),
+        "one ULP above 7.0 remains within 1.6E-15");
+      Assert (Within (Large_Original, Large_Refined, 0.5E307),
+        "large finite worsening exactly equal to the allowance is accepted");
+      Assert (not Within
+                (Large_Original, Large_Refined,
+                 OpenCV.Float64_Value'Pred (Large_Refined - Large_Original)),
+        "large finite worsening above the adjacent smaller allowance is rejected");
+      Assert (not Within (Near_Predecessor, Near_Limit, 0.0),
+        "a positive worsening near Float64'Last exceeds a zero allowance");
+      Assert (Within (Near_Limit, Near_Predecessor, 0.0),
+        "a large finite improvement remains within a zero allowance");
+      Assert (Within (0.0, Near_Limit, Near_Limit),
+        "worsening from zero to Float64'Last equals that allowance");
+      Assert (not Within (0.0, Near_Limit, Near_Predecessor),
+        "worsening from zero to Float64'Last exceeds the predecessor allowance");
+   end AP3P_Refine_Worsening_Arithmetic;
+
+   procedure AP3P_Refine_Order (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Forward : constant AP3P_Refined_Pose :=
+        Select_Refine_AP3P_Pose
+          (Refine_Seeds, Pixels_Of (Refine_Seeds),
+           Refine_Selection_World, Pixels_Of (Refine_Selection_World),
+           Refine_Holdout_World, Pixels_Of (Refine_Holdout_World),
+           Refine_Calibration, No_Distortion,
+           Refine_Select_Policy, Refine_Accept_Policy);
+      Reversed_Selection : constant Object_Point_Array :=
+        [Refine_Selection_World (2), Refine_Selection_World (1)];
+      Reversed_Holdout : constant Object_Point_Array :=
+        [Refine_Holdout_World (3), Refine_Holdout_World (1), Refine_Holdout_World (2)];
+      Backward : constant AP3P_Refined_Pose :=
+        Select_Refine_AP3P_Pose
+          (Refine_Seeds, Pixels_Of (Refine_Seeds),
+           Reversed_Selection, Pixels_Of (Reversed_Selection),
+           Reversed_Holdout, Pixels_Of (Reversed_Holdout),
+           Refine_Calibration, No_Distortion,
+           Refine_Select_Policy, Refine_Accept_Policy);
+      First : constant Rotation_Matrix := Rotation_Matrix_Of (Accepted_Pose (Forward));
+      Second : constant Rotation_Matrix := Rotation_Matrix_Of (Accepted_Pose (Backward));
+      Trace : OpenCV.Float64_Value := 0.0;
+   begin
+      for Axis in 0 .. 2 loop
+         Trace := Trace + First (Axis, 0) * Second (Axis, 0)
+           + First (Axis, 1) * Second (Axis, 1)
+           + First (Axis, 2) * Second (Axis, 2);
+      end loop;
+      Assert (Math.Arccos (OpenCV.Float64_Value'Max
+                (-1.0, OpenCV.Float64_Value'Min (1.0, (Trace - 1.0) / 2.0))) < 1.0E-5,
+        "reversing references does not change the accepted rotation");
+      Assert (Math.Sqrt
+                ((Accepted_Pose (Forward).Translation (0) - Accepted_Pose (Backward).Translation (0)) ** 2
+                 + (Accepted_Pose (Forward).Translation (1) - Accepted_Pose (Backward).Translation (1)) ** 2
+                 + (Accepted_Pose (Forward).Translation (2) - Accepted_Pose (Backward).Translation (2)) ** 2)
+                < 1.0E-5,
+        "reversing references does not change the accepted translation");
+      Assert (Initial_Pose (Forward).Translation /= Translation_Vector'(0.0, 0.0, 1.0),
+        "the owned initial pose is not a substituted placeholder");
+   end AP3P_Refine_Order;
+
    --  Task 014 independent oracles. Composition equations appear in TEST code only.
    Pi_Value : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Ada.Numerics.Pi);
 
@@ -6052,6 +6755,20 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("AP3P selection candidate-order invariance", AP3P_Select_Order'Access));
       Result.Add_Test (Caller.Create ("AP3P selection Positive'Last lower bound", AP3P_Select_Upper'Access));
       Result.Add_Test (Caller.Create ("AP3P owned pose provenance", AP3P_Select_Provenance'Access));
+      Result.Add_Test (Caller.Create ("AP3P known-pose held-out refinement", AP3P_Refine_Known'Access));
+      Result.Add_Test (Caller.Create ("AP3P noisy fitting with held-out acceptance", AP3P_Refine_Noisy'Access));
+      Result.Add_Test (Caller.Create ("AP3P five-coefficient held-out refinement", AP3P_Refine_Distortion'Access));
+      Result.Add_Test (Caller.Create ("AP3P held-out worsening rejects refinement", AP3P_Refine_Worsens'Access));
+      Result.Add_Test (Caller.Create ("AP3P caller maximum rejects refinement", AP3P_Refine_Threshold'Access));
+      Result.Add_Test (Caller.Create ("AP3P nonpositive held-out depth", AP3P_Refine_Depth'Access));
+      Result.Add_Test (Caller.Create ("AP3P numerically unavailable held-out", AP3P_Refine_Unavailable'Access));
+      Result.Add_Test (Caller.Create ("AP3P refinement without unique selection", AP3P_Refine_No_Selection'Access));
+      Result.Add_Test (Caller.Create ("AP3P refinement duplicate world points", AP3P_Refine_Duplicates'Access));
+      Result.Add_Test (Caller.Create ("AP3P refinement invalid inputs and thresholds", AP3P_Refine_Invalid'Access));
+      Result.Add_Test (Caller.Create ("AP3P refinement different lower bounds", AP3P_Refine_Bounds'Access));
+      Result.Add_Test (Caller.Create ("AP3P refinement Positive'Last lower bound", AP3P_Refine_Upper'Access));
+      Result.Add_Test (Caller.Create ("AP3P direct held-out RMS worsening comparison", AP3P_Refine_Worsening_Arithmetic'Access));
+      Result.Add_Test (Caller.Create ("AP3P refinement order and owned provenance", AP3P_Refine_Order'Access));
       Result.Add_Test (Caller.Create ("pose composition identity oracle", Compose_Identity'Access));
       Result.Add_Test (Caller.Create ("pose composition noncommutative order oracle", Compose_Order'Access));
       Result.Add_Test (Caller.Create ("pose composition sequential point and direction oracle", Compose_Sequential'Access));

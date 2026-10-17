@@ -1,5 +1,13 @@
 # Roadmap
 
+## Task 017 approved scope
+
+Reference-validated AP3P pose refinement only. The operation reuses AP3P,
+Task 016 selection, native iterative refinement, and native projection.
+Held-out acceptance is caller-controlled. No new optimizer, C ABI operation,
+covariance, or geographic frame is added. See
+[contract](ap3p-refinement-contract.md).
+
 ## Task 016 approved scope
 
 Reference-qualified AP3P pose selection only. The caller supplies every

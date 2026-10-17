@@ -1,5 +1,17 @@
 # OpenCV Calib3D for Ada
 
+## Task 017: reference-validated AP3P pose refinement
+
+`Select_Refine_AP3P_Pose` solves three seed correspondences, applies the
+existing Task 016 selection policy, and refines the owned pose with the
+existing iterative `solvePnP` binding. Selection references may enter that
+refinement. Held-out references are used only to accept or reject it.
+Acceptance thresholds have no defaults and are not fitting residuals.
+The published pose remains `X_camera = R * X_world + t` in the caller's
+Cartesian frame, not an Earth or DTED frame. No new C ABI operation is added.
+See the [contract](docs/ap3p-refinement-contract.md) and
+[qualification](docs/ap3p-refinement-validation.md).
+
 ## Task 016: reference-qualified AP3P pose selection
 
 `Select_AP3P_Hypothesis` applies a caller-supplied RMS, maximum-error, and
@@ -269,7 +281,10 @@ public API.
 `examples/src/pnp_synthetic.adb` creates a noncoplanar 3-D point set, projects it
 from a known pose, corrupts three 2-D correspondences with large synthetic
 outliers, runs RANSAC PnP, builds local accepted-correspondence arrays, refines
-iteratively and prints before/after RMS/max, pose and camera-center data. It has no
+iteratively and prints before/after RMS/max, pose and camera-center data.
+It also selects an AP3P pose, refines it, and prints held-out RMS before and
+after that refinement. Fitting error and held-out error are different quantities.
+It has no
 image files, GUI, camera, Features, DTED or geospatial dependency.
 It then prints principal/off-axis pixels, normalized coordinates, camera unit
 directions, world ray origins and world unit directions. These are metric-frame

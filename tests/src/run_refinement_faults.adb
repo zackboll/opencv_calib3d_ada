@@ -587,7 +587,101 @@ begin
           end loop;
        end;
        Ada.Text_IO.Put_Line ("PASS: AP3P selection propagates native projection faults without a result");
-    end;
+       declare
+          Pose : constant World_To_Camera_Pose :=
+            (Rotation => [others => 0.0], Translation => [0.0, 0.0, 1.0]);
+          Seeds : constant Object_Point_Array :=
+            [[0.2, -0.1, 3.0], [0.8, 0.2, 3.6], [-0.3, 0.5, 4.2]];
+          Selection_Points : constant Object_Point_Array := [[0.4, -0.4, 5.0]];
+          Holdout_Points : constant Object_Point_Array := [[-0.5, 0.3, 6.0]];
+          Seed_Pixels : constant Image_Point_Array :=
+            Project_Points (Seeds, Calibration, No_Distortion, Pose);
+          Selection_Pixels : constant Image_Point_Array :=
+            Project_Points (Selection_Points, Calibration, No_Distortion, Pose);
+          Holdout_Pixels : constant Image_Point_Array :=
+            Project_Points (Holdout_Points, Calibration, No_Distortion, Pose);
+          Select_Policy : constant AP3P_Selection_Options := (1.0E-3, 1.0E-3, 0.0);
+          Accept_Policy : constant AP3P_Refinement_Acceptance_Options := (1.0, 2.0, 0.5);
+       begin
+          Return_False;
+          declare
+             Synthetic : constant AP3P_Refined_Pose :=
+               Select_Refine_AP3P_Pose
+                 (Seeds, Seed_Pixels, Selection_Points, Selection_Pixels,
+                  Holdout_Points, Holdout_Pixels, Calibration, No_Distortion,
+                  Select_Policy, Accept_Policy);
+          begin
+             Check (Refinement_Disposition (Synthetic) = Native_Refinement_False
+               and then Refinement_Attempted (Synthetic)
+               and then not Native_Refinement_Succeeded (Synthetic)
+               and then not Accepted (Synthetic)
+               and then Initial_Holdout_Valid (Synthetic)
+               and then not Refined_Holdout_Valid (Synthetic),
+               "synthetic native false must preserve the initial pose only");
+             Check (Initial_Pose (Synthetic).Translation (2) > 0.0,
+               "synthetic false still exposes the owned initial pose");
+             begin
+                declare
+                   Hidden : constant World_To_Camera_Pose := Accepted_Pose (Synthetic);
+                   pragma Unreferenced (Hidden);
+                begin
+                   raise Program_Error with "synthetic false exposed an accepted pose";
+                end;
+             exception
+                when OpenCV.OpenCV_Error => null;
+             end;
+          end;
+          --  Checkpoint 1 is the held-out projection before refinement.
+          --  Checkpoint 10 is the iterative refinement call. Neither publishes.
+          for Stage in Interfaces.C.int'(1) .. 1 loop
+             Fail (Stage, 1);
+             begin
+                declare
+                   Value : constant AP3P_Refined_Pose :=
+                     Select_Refine_AP3P_Pose
+                       (Seeds, Seed_Pixels, Selection_Points, Selection_Pixels,
+                        Holdout_Points, Holdout_Pixels, Calibration, No_Distortion,
+                        Select_Policy, Accept_Policy);
+                begin
+                   raise Program_Error with
+                     "projection fault returned a refinement result "
+                     & AP3P_Refinement_Disposition'Image (Refinement_Disposition (Value));
+                end;
+             exception
+                when OpenCV.OpenCV_Error => null;
+             end;
+          end loop;
+          for Stage in Interfaces.C.int range 10 .. 12 loop
+             Fail (Stage, 1);
+             begin
+                declare
+                   Value : constant AP3P_Refined_Pose :=
+                     Select_Refine_AP3P_Pose
+                       (Seeds, Seed_Pixels, Selection_Points, Selection_Pixels,
+                        Holdout_Points, Holdout_Pixels, Calibration, No_Distortion,
+                        Select_Policy, Accept_Policy);
+                begin
+                   raise Program_Error with
+                     "refinement fault returned a result "
+                     & AP3P_Refinement_Disposition'Image (Refinement_Disposition (Value));
+                end;
+             exception
+                when OpenCV.OpenCV_Error => null;
+             end;
+          end loop;
+          declare
+             Recovered : constant AP3P_Refined_Pose :=
+               Select_Refine_AP3P_Pose
+                 (Seeds, Seed_Pixels, Selection_Points, Selection_Pixels,
+                  Holdout_Points, Holdout_Pixels, Calibration, No_Distortion,
+                  Select_Policy, Accept_Policy);
+          begin
+             Check (Accepted (Recovered), "refinement recovers after injected faults");
+          end;
+       end;
+       Ada.Text_IO.Put_Line
+         ("PASS: synthetic AP3P refinement false and projection/refinement faults publish no partial result");
+     end;
 
     declare
        First  : constant World_To_Camera_Pose :=
