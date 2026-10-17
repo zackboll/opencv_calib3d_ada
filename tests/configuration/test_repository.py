@@ -126,7 +126,8 @@ class RepositoryTests(unittest.TestCase):
         for workflow in ("cross-platform.yml", "opencv-compatibility.yml"):
             text = (ROOT / ".github/workflows" / workflow).read_text()
             for example in ("pnp_synthetic", "homography_synthetic", "fundamental_synthetic",
-                            "essential_synthetic", "triangulation_synthetic", "relative_motion_synthetic"):
+                            "essential_synthetic", "triangulation_synthetic", "relative_motion_synthetic",
+                            "metric_triangulation_synthetic"):
                 self.assertIn("bin/" + example, text)
 
     def test_essential_fixed_normalized_pipeline(self):

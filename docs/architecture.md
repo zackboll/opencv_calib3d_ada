@@ -1,5 +1,19 @@
 # Architecture
 
+## Task 019 metric triangulation orchestration
+
+Separate native undistortion for each camera feeds existing native normalized
+triangulation. Task 018 supplies relative pose and scaled physical baseline.
+Ada scales only Usable source points and shares the existing camera-to-world
+arithmetic, with native rotation obtained outside numerical-failure handlers.
+Existing quality assessment and two native calibrated projections produce
+caller-policy diagnostics. Native exceptions abort the batch; per-point Ada
+conversion failures preserve source status without invented coordinates.
+Public outputs are owned Ada values with discriminated availability. Core owns
+all temporary Mats; the private ABI remains 48 and C++ is unchanged. See the
+[contract](metric-triangulation-contract.md).
+
+
 ## Task 017 AP3P refinement
 
 No new C ABI operation. The private ABI remains 48 imports and exports.
