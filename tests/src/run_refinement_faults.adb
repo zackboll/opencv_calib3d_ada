@@ -559,6 +559,34 @@ begin
             "nonpositive depth must not enter native projection");
        end;
        Ada.Text_IO.Put_Line ("PASS: AP3P reference diagnostics propagate 10 native projection faults");
+       declare
+          Pose : constant World_To_Camera_Pose :=
+            (Rotation => [others => 0.0], Translation => [0.0, 0.0, 1.0]);
+          Seeds : constant Object_Point_Array :=
+            [[0.1, 0.0, 2.0], [0.0, 0.2, 2.5], [-0.2, 0.1, 3.0]];
+          Seed_Pixels : constant Image_Point_Array :=
+            Project_Points (Seeds, Calibration, No_Distortion, Pose);
+          Policy : constant AP3P_Selection_Options := (1.0, 1.0, 0.0);
+       begin
+          for Stage in Interfaces.C.int range 1 .. 2 loop
+             Fail (Stage, 1);
+             begin
+                declare
+                   Chosen : constant AP3P_Selection_Result :=
+                     Select_AP3P_Pose
+                       (Seeds, Seed_Pixels, [[0.0, 0.0, 4.0]], [[20.0, 30.0]],
+                        Calibration, No_Distortion, Policy);
+                begin
+                   raise Program_Error with
+                     "projection fault returned an AP3P selection "
+                     & AP3P_Selection_Disposition'Image (Chosen.Disposition);
+                end;
+             exception
+                when OpenCV.OpenCV_Error => null;
+             end;
+          end loop;
+       end;
+       Ada.Text_IO.Put_Line ("PASS: AP3P selection propagates native projection faults without a result");
     end;
 
     declare

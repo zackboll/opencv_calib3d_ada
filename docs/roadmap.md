@@ -1,5 +1,12 @@
 # Roadmap
 
+## Task 016 approved scope
+
+Reference-qualified AP3P pose selection only. The caller supplies every
+numerical threshold. Selection uses additional independent references and the
+existing evaluator; it does not add a solver, C ABI operation, covariance, or
+geographic frame. See [contract](ap3p-selection-contract.md).
+
 ## Task 015 approved scope
 
 Guarded native `cv::correctMatches` epipolar correspondence correction only,
@@ -7,7 +14,9 @@ with caller-configured conditioning/quality/residual/bound policy and an
 all-or-error result. No F estimation, RANSAC changes, correspondence selection,
 undistortion, triangulation changes, pose, metric scale or navigation. The earlier
 research disposition `SAFETY_GATE_NOT_ESTABLISHED` for universal optimality
-stands. Task 016 is not started.
+Task 015 added guarded native epipolar correction. Its research disposition
+`SAFETY_GATE_NOT_ESTABLISHED` for universal optimality stands. Task 016 is the
+AP3P selection scope above and does not reopen that correction contract.
 
 ## Task 013 approved scope
 

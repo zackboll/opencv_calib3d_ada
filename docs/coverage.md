@@ -1,5 +1,16 @@
 # Coverage
 
+## Task 016 reference-qualified AP3P selection
+
+139 registrations preserve all 129 Task 015 cases and add 10 selection cases:
+known fourth-reference geometry, five-coefficient distortion, insufficient
+separation and exact ties, no hypotheses or eligible references, behind-camera
+rejection, numerical unavailability, invalid thresholds, different lower
+bounds, candidate-order invariance, and a `Positive'Last` one-element bound.
+Native projection faults are exercised by the fault runner, not by an AUnit
+registration. The private ABI remains 48. Inventory is not a claim of
+success; see [executed evidence](ap3p-selection-validation.md).
+
 ## Task 015 guarded native epipolar correction
 
 129 registrations preserve all 115 Task 014 cases and add 14 correction cases:

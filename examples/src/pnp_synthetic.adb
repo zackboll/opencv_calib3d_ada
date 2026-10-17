@@ -177,9 +177,47 @@ begin
                          Boolean'Image (Summaries (I).Entire_Set_Evaluable));
                     end loop;
                     Put_Line ("These diagnostics compare AP3P hypotheses with additional observations.");
-                    Put_Line ("The binding does not select a unique physical pose.");
                     Put_Line ("A small reprojection error does not prove globally correct localization.");
-                    Put_Line ("Pose translation uses the units of the supplied world coordinates.");
+                    Put_Line ("Pose translation uses the units of the supplied Cartesian world coordinates.");
+                    declare
+                       Strict : constant AP3P_Selection_Options := (1.0, 1.0, 1.0);
+                       Wide : constant AP3P_Selection_Options := (1.0E6, 1.0E6, 1_000.0);
+                       Unique : constant AP3P_Selection_Result :=
+                         Select_AP3P_Hypothesis (Diagnostics, Strict);
+                       Ambiguous : constant AP3P_Selection_Result :=
+                         Select_AP3P_Hypothesis (Diagnostics, Wide);
+                    begin
+                       Put_Line ("Selection policy is caller-controlled; these thresholds are demonstration values.");
+                       Put_Line ("Unique-policy disposition: " & AP3P_Selection_Disposition'Image (Unique.Disposition));
+                       for I in Unique.Candidates'Range loop
+                          Put_Line ("candidate" & Positive'Image (I)
+                            & " eligible=" & Boolean'Image (Unique.Candidates (I).Eligible)
+                            & " rank=" & Natural'Image (Unique.Candidates (I).Rank)
+                            & " rms=" & OpenCV.Float64_Value'Image (Unique.Candidates (I).RMS_Error_Pixels));
+                       end loop;
+                       if Selected (Unique) then
+                          declare
+                             Index : constant Positive := Selected_Hypothesis_Index (Unique);
+                             Pose : constant World_To_Camera_Pose :=
+                               Selected_Pose (Unique, Hypotheses, Index);
+                          begin
+                             Put_Line ("Selected hypothesis position:" & Positive'Image (Index));
+                             Put_Vector ("selected rotation vector", Pose.Rotation);
+                             Put_Vector ("selected translation t", Pose.Translation);
+                             Put_Vector ("selected camera center", Camera_Center (Pose));
+                             Put_Line ("RMS separation pixels:"
+                               & OpenCV.Float64_Value'Image (Unique.Separation_Pixels));
+                          end;
+                       end if;
+                       Put_Line ("Wide-policy disposition: "
+                         & AP3P_Selection_Disposition'Image (Ambiguous.Disposition));
+                       Put_Line ("Wide-policy separation pixels:"
+                         & OpenCV.Float64_Value'Image (Ambiguous.Separation_Pixels));
+                       Put_Line ("This pose, when selected, is expressed in the supplied Cartesian world frame.");
+                       Put_Line ("Translation is t in X_camera = R*X_world + t, not the camera position.");
+                       Put_Line ("Selection is conditional on these references and this numerical policy.");
+                       Put_Line ("It is not proof of globally correct camera localization.");
+                    end;
                  end;
 
              end;

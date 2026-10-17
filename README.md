@@ -1,5 +1,17 @@
 # OpenCV Calib3D for Ada
 
+## Task 016: reference-qualified AP3P pose selection
+
+`Select_AP3P_Hypothesis` applies a caller-supplied RMS, maximum-error, and
+strict separation policy to AP3P hypotheses already scored by
+`Evaluate_AP3P_References`. `Select_AP3P_Pose` solves the existing
+three-point AP3P problem, evaluates additional independent world points, and
+returns the same classified result. Thresholds have no defaults. A unique
+pose is conditional on those references and that policy; it is not global
+localization. Translation remains `t` in the caller's Cartesian frame. No new
+C ABI operation is added. See the [contract](docs/ap3p-selection-contract.md)
+and [qualification](docs/ap3p-selection-validation.md).
+
 ## Task 015: guarded native epipolar correspondence correction
 
 `Correct_Epipolar_Matches` binds native OpenCV `cv::correctMatches` under a
@@ -291,7 +303,7 @@ The presence of those workflows alone is not evidence that they passed.
 
 This first slice does not bind camera calibration, chessboards, stereo,
 public triangulation/decomposition, affine estimators, image warping, USAC configuration,
-`solvePnPRefineLM`/VVS, P3P/AP3P/IPPE/SQPNP selection, fisheye, image undistortion/remap, DTED,
+`solvePnPRefineLM`/VVS, IPPE/SQPNP, fisheye, image undistortion/remap, DTED,
 Features, optical flow, or estimator/fusion policy.
 
 The caller defines the world frame. A later navigation layer may use a local
