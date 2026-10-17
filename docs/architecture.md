@@ -1,5 +1,15 @@
 # Architecture
 
+## Task 017 AP3P refinement
+
+No new C ABI operation. The private ABI remains 48 imports and exports.
+`Select_Refine_AP3P_Pose` calls `Select_AP3P_Pose` once. On a unique owned
+pose it evaluates the held-out set, calls `Refine_Pose_Iterative` once on the
+seeds plus selection references, and publishes the refined pose only when the
+caller's held-out policy accepts it. Held-out points do not enter native
+AP3P, selection, or refinement. See
+[refinement contract](ap3p-refinement-contract.md).
+
 ## Task 016 AP3P selection
 
 No new C ABI operation. The private ABI remains 48 imports and exports.

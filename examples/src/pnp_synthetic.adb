@@ -221,6 +221,78 @@ begin
                        Put_Line ("Translation is t in X_camera = R*X_world + t, not the camera position.");
                        Put_Line ("Selection is conditional on these references and this numerical policy.");
                        Put_Line ("It is not proof of globally correct camera localization.");
+                       declare
+                          --  The first three extra points select. The last two
+                          --  are held out and are not used to fit the pose.
+                          --  Fitting pixels carry deterministic noise; held-out
+                          --  pixels stay on the known projection.
+                          Fit_World : constant Object_Point_Array :=
+                            Extra_World (Extra_World'First .. Extra_World'First + 2);
+                          Hold_World : constant Object_Point_Array :=
+                            Extra_World (Extra_World'First + 3 .. Extra_World'Last);
+                          Fit_Pixels : Image_Point_Array :=
+                            Project_Points (Fit_World, Intrinsics, No_Distortion, Truth);
+                          Hold_Pixels : constant Image_Point_Array :=
+                            Project_Points (Hold_World, Intrinsics, No_Distortion, Truth);
+                          Noisy_Seeds : Image_Point_Array := Observations;
+                          Accept_Policy : constant AP3P_Refinement_Acceptance_Options :=
+                            (1.5, 3.0, 0.5);
+                       begin
+                          Noisy_Seeds (Noisy_Seeds'First) (0) :=
+                            Noisy_Seeds (Noisy_Seeds'First) (0) + 0.40;
+                          Noisy_Seeds (Noisy_Seeds'First + 1) (1) :=
+                            Noisy_Seeds (Noisy_Seeds'First + 1) (1) - 0.25;
+                          Fit_Pixels (Fit_Pixels'First) (0) :=
+                            Fit_Pixels (Fit_Pixels'First) (0) - 0.30;
+                          declare
+                             Refined : constant AP3P_Refined_Pose :=
+                               Select_Refine_AP3P_Pose
+                                 (Landmarks, Noisy_Seeds, Fit_World, Fit_Pixels,
+                                  Hold_World, Hold_Pixels, Intrinsics, No_Distortion,
+                                  Strict, Accept_Policy);
+                          begin
+                          New_Line;
+                          Put_Line ("AP3P refinement uses the three seeds plus selection references.");
+                          Put_Line ("Held-out points are not supplied to AP3P, selection, or refinement.");
+                          Put_Line ("Selection disposition: "
+                            & AP3P_Selection_Disposition'Image (Selection_Disposition (Refined)));
+                          Put_Line ("Refinement disposition: "
+                            & AP3P_Refinement_Disposition'Image (Refinement_Disposition (Refined)));
+                          Put_Line ("Refinement attempted: "
+                            & Boolean'Image (Refinement_Attempted (Refined)));
+                          Put_Line ("Native refinement succeeded: "
+                            & Boolean'Image (Native_Refinement_Succeeded (Refined)));
+                          if Initial_Holdout_Valid (Refined) then
+                             Put_Line ("Held-out RMS before refinement:"
+                               & OpenCV.Float64_Value'Image
+                                 (Initial_Holdout (Refined).RMS_Error_Pixels));
+                          end if;
+                          if Refined_Holdout_Valid (Refined) then
+                             Put_Line ("Held-out RMS after refinement:"
+                               & OpenCV.Float64_Value'Image
+                                 (Refined_Holdout (Refined).RMS_Error_Pixels));
+                             Put_Line ("Held-out maximum after refinement:"
+                               & OpenCV.Float64_Value'Image
+                                 (Refined_Holdout (Refined).Maximum_Error_Pixels));
+                          end if;
+                          Put_Line ("Fitting error is the residual on points used to estimate the pose.");
+                          Put_Line ("Held-out error uses points withheld from estimation and is the acceptance metric.");
+                          Put_Line ("These two errors can move in opposite directions.");
+                          if OpenCV.Calib3D.Accepted (Refined) then
+                             declare
+                                Pose : constant World_To_Camera_Pose := Accepted_Pose (Refined);
+                             begin
+                                Put_Vector ("accepted rotation vector", Pose.Rotation);
+                                Put_Vector ("accepted translation t", Pose.Translation);
+                                Put_Vector ("accepted camera center", Camera_Center (Pose));
+                             end;
+                          else
+                             Put_Line ("No refined pose was accepted.");
+                          end if;
+                          Put_Line ("The accepted pose, when present, stays in the caller Cartesian frame.");
+                          Put_Line ("It is not an Earth frame, a DTED frame, or a covariance.");
+                          end;
+                       end;
                     end;
                  end;
 
