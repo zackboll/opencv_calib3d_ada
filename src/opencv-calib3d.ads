@@ -401,6 +401,65 @@ package OpenCV.Calib3D is
      (First : World_To_Camera_Pose; Second : World_To_Camera_Pose)
       return World_To_Camera_Pose;
 
+   --  Invert a rigid source-to-destination transform stored in
+   --  World_To_Camera_Pose. The record is reused even when the frames are
+   --  reversed: if X_destination = R * X_source + t, the result maps
+   --  destination coordinates back to source coordinates:
+   --      R_inverse = R^T
+   --      t_inverse = -R^T * t
+   --  Rotation is native Rodrigues output and is not canonicalized; compare
+   --  Rotation_Matrix_Of, not vector components. Negating the Rodrigues
+   --  vector is an equivalent rotation only when that vector is a validated
+   --  representation of the same physical rotation. Raises OpenCV_Error for
+   --  nonfinite input or an inverse that cannot be represented safely.
+   function Invert_Pose (Pose : World_To_Camera_Pose) return World_To_Camera_Pose;
+
+   --  Relative rigid transform from First camera coordinates to Second camera
+   --  coordinates. Both inputs are world-to-camera poses in the SAME caller
+   --  Cartesian world frame and the SAME length units:
+   --      X_first  = R1 * X_world + t1
+   --      X_second = R2 * X_world + t2
+   --      X_second = R_relative * X_first + t_relative
+   --  Equivalent composition is Invert_Pose (First), then Second. The result
+   --  translation is expressed in the SECOND camera frame. It is not the
+   --  second camera's position and is not the world-frame displacement.
+   --  This operation does not estimate a pose and does not decide whether the
+   --  inputs are accurate or share a real-world reference. Raises OpenCV_Error
+   --  for nonfinite input or an unrepresentable result.
+   function Camera_To_Camera_Pose
+     (First, Second : World_To_Camera_Pose) return World_To_Camera_Pose;
+
+   --  Owned diagnostics for two absolute poses. Baseline_Direction is defined
+   --  only when Baseline_Distance is not exactly zero. A zero baseline is a
+   --  legitimate pure rotation about a common camera center; no epsilon treats
+   --  a nonzero length as zero. All vectors are caller world-frame Cartesian
+   --  units except the relative translation, which is in the second camera
+   --  frame, and Second_Center_In_First, which is in the first camera frame.
+   type Camera_Motion_Result (Baseline_Direction_Defined : Boolean := False) is record
+      Relative_Pose             : World_To_Camera_Pose;
+      First_Center_World        : Object_Point;
+      Second_Center_World       : Object_Point;
+      Second_Center_In_First    : Object_Point;
+      Displacement_World        : Object_Point;
+      Baseline_Distance         : OpenCV.Float64_Value;
+      case Baseline_Direction_Defined is
+         when True =>
+            Baseline_Direction_World : Object_Point;
+         when False =>
+            null;
+      end case;
+   end record;
+
+   --  Measure the rigid motion from First to Second. Centers are
+   --  C = -R^T * t. Displacement_World is C2 - C1. Baseline_Distance is the
+   --  scaled Euclidean norm of that displacement, in the caller's world
+   --  length units. Relative scale exists only because both absolute poses
+   --  use that same Cartesian frame. No Earth, geographic, or navigation
+   --  uncertainty is implied. Raises OpenCV_Error instead of returning NaN,
+   --  infinity, a saturated coordinate, or a fabricated zero displacement.
+   function Measure_Camera_Motion
+     (First, Second : World_To_Camera_Pose) return Camera_Motion_Result;
+
    --  R = native Rodrigues(Pose.Rotation), X_camera = R * X_world + t.
    --  All six pose components must be finite, even for direction operations.
    function Rotation_Matrix_Of (Pose : World_To_Camera_Pose) return Rotation_Matrix;

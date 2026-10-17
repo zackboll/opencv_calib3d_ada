@@ -92,6 +92,10 @@ Raw/Ada fault coverage uses stages 42..45 and explicitly labeled post-native
 zero/malformed controls. All five existing examples remain required.
 See [validation](planar-motion-validation.md).
 
+## Task 018 relative camera motion
+
+163 AUnit registrations. The previous 154 remain, plus nine inversion, relative-motion, baseline, projection, numerical, and frame-order cases. No new private ABI operation: the count remains 48. The file-free `relative_motion_synthetic` example uses two known rotated poses. See [validation](relative-camera-motion-validation.md).
+
 Task 008 registers **74 AUnit cases**, preserving all 64 Task 007 cases and
 adding ten focused cases: analytic rectified angle, tiny/zero angle, transpose
 quarter-turn, antiparallel rays, inverse-frame/translation-scale invariance,
