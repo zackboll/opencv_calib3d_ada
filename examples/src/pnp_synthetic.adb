@@ -182,31 +182,35 @@ begin
                     declare
                        Strict : constant AP3P_Selection_Options := (1.0, 1.0, 1.0);
                        Wide : constant AP3P_Selection_Options := (1.0E6, 1.0E6, 1_000.0);
-                       Unique : constant AP3P_Selection_Result :=
-                         Select_AP3P_Hypothesis (Diagnostics, Strict);
+                       Unique : constant AP3P_Pose_Selection :=
+                         Select_AP3P_Pose
+                           (Landmarks, Observations, Extra_World, Extra_Pixels,
+                            Intrinsics, No_Distortion, Strict);
                        Ambiguous : constant AP3P_Selection_Result :=
                          Select_AP3P_Hypothesis (Diagnostics, Wide);
+                       Unique_Candidates : constant AP3P_Candidate_Qualification_Array :=
+                         Candidates (Unique);
                     begin
                        Put_Line ("Selection policy is caller-controlled; these thresholds are demonstration values.");
-                       Put_Line ("Unique-policy disposition: " & AP3P_Selection_Disposition'Image (Unique.Disposition));
-                       for I in Unique.Candidates'Range loop
+                       Put_Line ("Unique-policy disposition: "
+                         & AP3P_Selection_Disposition'Image (Disposition (Unique)));
+                       for I in Unique_Candidates'Range loop
                           Put_Line ("candidate" & Positive'Image (I)
-                            & " eligible=" & Boolean'Image (Unique.Candidates (I).Eligible)
-                            & " rank=" & Natural'Image (Unique.Candidates (I).Rank)
-                            & " rms=" & OpenCV.Float64_Value'Image (Unique.Candidates (I).RMS_Error_Pixels));
+                            & " eligible=" & Boolean'Image (Unique_Candidates (I).Eligible)
+                            & " rank=" & Natural'Image (Unique_Candidates (I).Rank)
+                            & " rms=" & OpenCV.Float64_Value'Image (Unique_Candidates (I).RMS_Error_Pixels));
                        end loop;
                        if Selected (Unique) then
                           declare
-                             Index : constant Positive := Selected_Hypothesis_Index (Unique);
-                             Pose : constant World_To_Camera_Pose :=
-                               Selected_Pose (Unique, Hypotheses, Index);
+                             Pose : constant World_To_Camera_Pose := Selected_Pose (Unique);
                           begin
-                             Put_Line ("Selected hypothesis position:" & Positive'Image (Index));
+                             Put_Line ("Selected owned pose candidate:"
+                               & Natural'Image (Candidate_Index (Unique)));
                              Put_Vector ("selected rotation vector", Pose.Rotation);
                              Put_Vector ("selected translation t", Pose.Translation);
                              Put_Vector ("selected camera center", Camera_Center (Pose));
                              Put_Line ("RMS separation pixels:"
-                               & OpenCV.Float64_Value'Image (Unique.Separation_Pixels));
+                               & OpenCV.Float64_Value'Image (Separation_Pixels (Unique)));
                           end;
                        end if;
                        Put_Line ("Wide-policy disposition: "

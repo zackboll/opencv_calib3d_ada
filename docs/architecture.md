@@ -5,7 +5,7 @@
 No new C ABI operation. The private ABI remains 48 imports and exports.
 `Select_AP3P_Hypothesis` consumes `Summarize_AP3P_References` and applies the
 caller's inclusive thresholds and strict RMS separation in Ada.
-`Select_AP3P_Pose` calls the existing solver and `Evaluate_AP3P_References`.
+`Select_AP3P_Pose` calls the existing solver once, evaluates references, and copies the selected pose into a private result. The matrix result does not own a pose.
 A native projection failure still propagates as `OpenCV_Error`. See
 [selection contract](ap3p-selection-contract.md).
 

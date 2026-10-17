@@ -2,7 +2,7 @@
 
 ## Task 016 reference-qualified AP3P selection
 
-139 registrations preserve all 129 Task 015 cases and add 10 selection cases:
+140 registrations preserve all 129 Task 015 cases and add 11 selection cases:
 known fourth-reference geometry, five-coefficient distortion, insufficient
 separation and exact ties, no hypotheses or eligible references, behind-camera
 rejection, numerical unavailability, invalid thresholds, different lower

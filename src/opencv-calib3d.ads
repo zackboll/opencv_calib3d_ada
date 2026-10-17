@@ -609,12 +609,11 @@ package OpenCV.Calib3D is
    type AP3P_Candidate_Qualification_Array is
      array (Positive range <>) of AP3P_Candidate_Qualification;
 
-   --  Count is the original hypothesis count. Candidate_Index is the
-   --  one-based position in that original order when Disposition is
-   --  Unique_Selected_Hypothesis, otherwise 0. Separation_Pixels is
-   --  second_best RMS - best RMS when at least two candidates are eligible
-   --  and that difference is finite; otherwise 0.0. A stored zero is not a
-   --  measured separation.
+   --  Index-only qualification of a caller-supplied reference matrix.
+   --  Candidate_Index is a position in that matrix's original hypothesis order.
+   --  This result does not own a pose and does not prove that any external
+   --  hypothesis array is the array that produced the matrix. Selected_Pose
+   --  only checks length and position, then returns that external value.
    type AP3P_Selection_Result (Count : Natural) is record
       Disposition       : AP3P_Selection_Disposition := No_Hypotheses;
       Candidate_Index   : Natural := 0;
@@ -628,8 +627,9 @@ package OpenCV.Calib3D is
    function Selected_Hypothesis_Index (Result : AP3P_Selection_Result) return Positive;
 
    --  Raises OpenCV_Error unless Selected is True and Index is the selected
-   --  hypothesis's own array index. Position, not the numeric index value,
-   --  identifies the candidate. Does not compare Rodrigues components.
+   --  position in the caller-supplied Hypotheses. This does not verify that
+   --  Hypotheses is the array that was evaluated. It does not compare
+   --  Rodrigues components.
    function Selected_Pose
      (Result : AP3P_Selection_Result;
       Hypotheses : AP3P_Pose_Hypothesis_Array;
@@ -646,8 +646,25 @@ package OpenCV.Calib3D is
      (Results : AP3P_Reference_Result_Matrix;
       Options : AP3P_Selection_Options) return AP3P_Selection_Result;
 
+   --  End-to-end result. The owned pose is the hypothesis selected from the
+   --  single Solve_AP3P_Hypotheses call inside Select_AP3P_Pose. Callers
+   --  cannot construct this type. Candidate diagnostics use the same policy
+   --  as AP3P_Selection_Result, but Selected_Pose here needs no external array.
+   type AP3P_Pose_Selection (Count : Natural) is private;
+
+   function Disposition (Result : AP3P_Pose_Selection) return AP3P_Selection_Disposition;
+   function Candidate_Index (Result : AP3P_Pose_Selection) return Natural;
+   function Separation_Pixels (Result : AP3P_Pose_Selection) return OpenCV.Float64_Value;
+   function Candidates (Result : AP3P_Pose_Selection) return AP3P_Candidate_Qualification_Array;
+   function Selected (Result : AP3P_Pose_Selection) return Boolean;
+
+   --  Raises OpenCV_Error unless this result uniquely selected and owns the
+   --  pose from that same solve.
+   function Selected_Pose (Result : AP3P_Pose_Selection) return World_To_Camera_Pose;
+
    --  End-to-end: exactly three seed correspondences, at least one additional
-   --  reference, native AP3P, reference evaluation, then the caller's policy.
+   --  reference, one native AP3P solve, reference evaluation, then the caller's
+   --  policy. The returned object owns the selected pose from that solve.
    --  Seed and reference arrays are paired by position. A native zero-solution
    --  result returns No_Hypotheses. OpenCV_Error from projection or from the
    --  solver propagates; no partial selection is returned.
@@ -660,7 +677,7 @@ package OpenCV.Calib3D is
       Reference_Pixels : Image_Point_Array;
       Intrinsics       : Camera_Intrinsics;
       Distortion       : Distortion_Coefficients := No_Distortion;
-      Options          : AP3P_Selection_Options) return AP3P_Selection_Result;
+      Options          : AP3P_Selection_Options) return AP3P_Pose_Selection;
 
    --  Euclidean pixel errors, one-based in correspondence order. Equal counts
    --  are required; empty/empty returns 1 .. 0. These diagnostics are not pose
@@ -690,6 +707,18 @@ package OpenCV.Calib3D is
       Refined       : out Boolean);
 
 private
+   --  Has_Pose is true only when Select_AP3P_Pose copied the selected
+   --  hypothesis from its own solver result. Disposition alone is not enough.
+   type AP3P_Pose_Selection (Count : Natural) is record
+      Disposition       : AP3P_Selection_Disposition := No_Hypotheses;
+      Candidate_Index   : Natural := 0;
+      Separation_Pixels : OpenCV.Float64_Value := 0.0;
+      Candidates        : AP3P_Candidate_Qualification_Array (1 .. Count);
+      Has_Pose          : Boolean := False;
+      Pose              : World_To_Camera_Pose :=
+        (Rotation => [others => 0.0], Translation => [others => 0.0]);
+   end record;
+
    type Inlier_Buffer is access Inlier_Index_Array;
    type Essential_Estimate is new Ada.Finalization.Limited_Controlled with record
       Has_Model, Has_Pose : Boolean := False;

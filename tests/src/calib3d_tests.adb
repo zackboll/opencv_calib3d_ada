@@ -4337,12 +4337,14 @@ package body Calib3D_Tests is
            Evaluate_AP3P_References (Found, [Reference], Reference_Pixels, Calibration);
          Chosen : constant AP3P_Selection_Result :=
            Select_AP3P_Hypothesis (Evaluated, Policy);
-         Direct : constant AP3P_Selection_Result :=
+         Direct : constant AP3P_Pose_Selection :=
            Select_AP3P_Pose
              (Seeds, Seed_Pixels, [Reference], Reference_Pixels, Calibration,
               No_Distortion, Policy);
          Index : constant Positive := Selected_Hypothesis_Index (Chosen);
-         Pose : constant World_To_Camera_Pose := Selected_Pose (Chosen, Found, Index);
+         Pose : constant World_To_Camera_Pose := Selected_Pose (Direct);
+         Matrix_Pose : constant World_To_Camera_Pose :=
+           Selected_Pose (Chosen, Found, Index);
          Recovered : constant Rotation_Matrix := Rotation_Matrix_Of (Pose);
          Expected_Center : constant Object_Point :=
            [-Apply (Transpose (Truth_R), Truth_T) (0),
@@ -4354,9 +4356,9 @@ package body Calib3D_Tests is
          Assert (Selected (Chosen)
            and then Chosen.Disposition = Unique_Selected_Hypothesis,
            "fourth reference uniquely selects");
-         Assert (Direct.Disposition = Unique_Selected_Hypothesis
-           and then Direct.Candidate_Index = Chosen.Candidate_Index,
-           "end-to-end selection agrees");
+         Assert (Disposition (Direct) = Unique_Selected_Hypothesis
+           and then Selected (Direct),
+           "end-to-end selection owns a unique pose");
          Assert (Chosen.Candidates (Index).Eligible
            and then Chosen.Candidates (Index).Rank = 1,
            "selected candidate is rank one");
@@ -4376,6 +4378,22 @@ package body Calib3D_Tests is
                    + (Center (1) - Expected_Center (1)) ** 2
                    + (Center (2) - Expected_Center (2)) ** 2) < 1.0E-6,
            "selected camera center is -R^T t");
+         declare
+            Other : constant Rotation_Matrix := Rotation_Matrix_Of (Matrix_Pose);
+            Cross : OpenCV.Float64_Value := 0.0;
+         begin
+            for Axis in 0 .. 2 loop
+               Cross := Cross + Recovered (Axis, 0) * Other (Axis, 0)
+                 + Recovered (Axis, 1) * Other (Axis, 1)
+                 + Recovered (Axis, 2) * Other (Axis, 2);
+            end loop;
+            Assert (Math.Arccos (OpenCV.Float64_Value'Max
+                      (-1.0, OpenCV.Float64_Value'Min (1.0, (Cross - 1.0) / 2.0))) < 1.0E-5
+              and then Math.Sqrt ((Pose.Translation (0) - Matrix_Pose.Translation (0)) ** 2
+                + (Pose.Translation (1) - Matrix_Pose.Translation (1)) ** 2
+                + (Pose.Translation (2) - Matrix_Pose.Translation (2)) ** 2) < 1.0E-5,
+              "owned pose matches the same-evaluation matrix pose geometrically");
+         end;
          declare
             Predicted : constant Image_Point_Array :=
               Project_Points ([Reference], Calibration, No_Distortion, Pose);
@@ -4457,20 +4475,18 @@ package body Calib3D_Tests is
          Reference_Pixels (I) := Brown (References (I));
       end loop;
       declare
-         Chosen : constant AP3P_Selection_Result :=
+         Chosen : constant AP3P_Pose_Selection :=
            Select_AP3P_Pose
              (Seeds, Seed_Pixels, References, Reference_Pixels, Calibration, Lens, Policy);
-         Found : constant AP3P_Pose_Hypothesis_Array :=
-           Solve_AP3P_Hypotheses (Seeds, Seed_Pixels, Calibration, Lens);
-         Index : constant Positive := Selected_Hypothesis_Index (Chosen);
-         Pose : constant World_To_Camera_Pose := Selected_Pose (Chosen, Found, Index);
+         Pose : constant World_To_Camera_Pose := Selected_Pose (Chosen);
+         Qualified : constant AP3P_Candidate_Qualification_Array := Candidates (Chosen);
          Native : constant Image_Point_Array :=
            Project_Points (References, Calibration, Lens, Pose);
          Maximum : OpenCV.Float64_Value := 0.0;
       begin
-         Assert (Chosen.Disposition = Unique_Selected_Hypothesis
-           and then Chosen.Candidates (Index).Eligible
-           and then Chosen.Candidates (Index).Rank = 1,
+         Assert (Disposition (Chosen) = Unique_Selected_Hypothesis
+           and then Qualified (Candidate_Index (Chosen)).Eligible
+           and then Qualified (Candidate_Index (Chosen)).Rank = 1,
            "distorted references uniquely select");
          for I in Native'Range loop
             Maximum := OpenCV.Float64_Value'Max
@@ -4478,11 +4494,12 @@ package body Calib3D_Tests is
                  + (Native (I) (1) - Reference_Pixels (I) (1)) ** 2));
          end loop;
          Assert (Maximum < 1.0E-3, "selected pose matches independent Brown projection");
-         Assert ((for some Item of Chosen.Candidates => not Item.Eligible)
-           or else Found'Length = 1,
+         Assert ((for some Item of Qualified => not Item.Eligible)
+           or else Qualified'Length = 1,
            "an alternate hypothesis is not also the unique winner unless alone");
          Ada.Text_IO.Put_Line ("AP3P distorted selection rms="
-           & OpenCV.Float64_Value'Image (Chosen.Candidates (Index).RMS_Error_Pixels)
+           & OpenCV.Float64_Value'Image
+             (Qualified (Candidate_Index (Chosen)).RMS_Error_Pixels)
            & " max=" & OpenCV.Float64_Value'Image (Maximum));
       end;
    end AP3P_Select_Distortion;
@@ -4586,23 +4603,38 @@ package body Calib3D_Tests is
            "error, depth and unavailable rows are all ineligible");
       end;
       declare
-         Direct : constant AP3P_Selection_Result :=
+         Direct : constant AP3P_Pose_Selection :=
            Select_AP3P_Pose
              (Seeds, Pixels, [[0.2, -0.4, 8.0]], [[1.0, 2.0]], Calibration,
               No_Distortion, Policy);
       begin
-         Assert (Direct.Disposition = No_Hypotheses and then Direct.Count = 0
+         Assert (Disposition (Direct) = No_Hypotheses
+           and then Candidates (Direct)'Length = 0
            and then not Selected (Direct),
            "native zero hypotheses stay No_Hypotheses");
+         declare
+            Pose : constant World_To_Camera_Pose := Selected_Pose (Direct);
+         begin
+            Assert (False, "no-hypothesis selection exposed " & OpenCV.Float64_Value'Image (Pose.Translation (2)));
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
       end;
       declare
-         Empty_References : constant AP3P_Selection_Result :=
+         Empty_References : constant AP3P_Pose_Selection :=
            Select_AP3P_Pose
              (Seeds, Pixels, [1 .. 0 => [0.0, 0.0, 1.0]], [1 .. 0 => [0.0, 0.0]],
               Calibration, No_Distortion, Policy);
       begin
-         Assert (Empty_References.Disposition = No_Independent_References,
+         Assert (Disposition (Empty_References) = No_Independent_References,
            "an empty reference set is classified before the solver");
+         declare
+            Pose : constant World_To_Camera_Pose := Selected_Pose (Empty_References);
+         begin
+            Assert (False, "empty references exposed " & OpenCV.Float64_Value'Image (Pose.Translation (2)));
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
       end;
    end AP3P_Select_Empty;
 
@@ -4675,11 +4707,11 @@ package body Calib3D_Tests is
         (References : Object_Point_Array; Observed : Image_Point_Array) is
       begin
          declare
-            Result : constant AP3P_Selection_Result :=
+            Result : constant AP3P_Pose_Selection :=
               Select_AP3P_Pose (Seeds, Pixels, References, Observed,
                 (100.0, 100.0, 0.0, 0.0), No_Distortion, (1.0, 1.0, 0.0));
          begin
-            Assert (False, "invalid references accepted " & Natural'Image (Result.Count));
+            Assert (False, "invalid references accepted " & Natural'Image (Candidates (Result)'Length));
          end;
       exception
          when OpenCV.OpenCV_Error => null;
@@ -4730,21 +4762,18 @@ package body Calib3D_Tests is
       Reference_Pixels : constant Image_Point_Array (40 .. 42) :=
         Project_Points (References, Calibration, No_Distortion, Truth);
       Policy : constant AP3P_Selection_Options := (1.0E-6, 1.0E-6, 1.0E-3);
-      Chosen : constant AP3P_Selection_Result :=
+      Chosen : constant AP3P_Pose_Selection :=
         Select_AP3P_Pose
           (Seeds, Seed_Pixels, References, Reference_Pixels, Calibration,
            No_Distortion, Policy);
-      Found : constant AP3P_Pose_Hypothesis_Array :=
-        Solve_AP3P_Hypotheses (Seeds, Seed_Pixels, Calibration);
-      Index : constant Positive := Selected_Hypothesis_Index (Chosen);
-      Pose : constant World_To_Camera_Pose := Selected_Pose (Chosen, Found, Index);
+      Pose : constant World_To_Camera_Pose := Selected_Pose (Chosen);
       Recovered : constant Rotation_Matrix := Rotation_Matrix_Of (Pose);
       Expected : constant Rotation_Matrix := Rotation_Matrix_Of (Truth);
       Trace : OpenCV.Float64_Value := 0.0;
    begin
       Assert (Seeds'First = 7 and then References'First = 20
         and then Seed_Pixels'First = 30, "fixture lower bounds differ");
-      Assert (Chosen.Disposition = Unique_Selected_Hypothesis, "shifted bounds still select");
+      Assert (Disposition (Chosen) = Unique_Selected_Hypothesis, "shifted bounds still select");
       for Axis in 0 .. 2 loop
          Trace := Trace + Recovered (Axis, 0) * Expected (Axis, 0)
            + Recovered (Axis, 1) * Expected (Axis, 1)
@@ -4837,6 +4866,94 @@ package body Calib3D_Tests is
       Assert (Selected_Pose (Chosen, Hypotheses, Positive'Last) = Pose,
         "Positive'Last index maps to the only hypothesis");
    end AP3P_Select_Upper;
+
+   procedure AP3P_Select_Provenance (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Calibration : constant Camera_Intrinsics := (800.0, 820.0, 640.0, 360.0);
+      Truth : constant World_To_Camera_Pose :=
+        (Rotation => [0.10, -0.05, 0.08], Translation => [0.20, -0.10, 6.00]);
+      Seeds : constant Object_Point_Array :=
+        [[-1.0, -1.0, 0.0], [1.0, -0.4, 0.6], [0.2, 1.1, 1.4]];
+      References : constant Object_Point_Array :=
+        [[-0.6, 0.4, 2.2], [1.3, 0.8, 1.7], [0.4, -1.2, 2.8]];
+      Seed_Pixels : constant Image_Point_Array :=
+        Project_Points (Seeds, Calibration, No_Distortion, Truth);
+      Reference_Pixels : constant Image_Point_Array :=
+        Project_Points (References, Calibration, No_Distortion, Truth);
+      Policy : constant AP3P_Selection_Options := (1.0E-6, 1.0E-6, 1.0E-3);
+      Owned : constant AP3P_Pose_Selection :=
+        Select_AP3P_Pose
+          (Seeds, Seed_Pixels, References, Reference_Pixels, Calibration,
+           No_Distortion, Policy);
+      Pose : constant World_To_Camera_Pose := Selected_Pose (Owned);
+      procedure Reject (Value : AP3P_Pose_Selection) is
+      begin
+         declare
+            Exposed : constant World_To_Camera_Pose := Selected_Pose (Value);
+         begin
+            Assert (False, "non-unique selection exposed translation "
+              & OpenCV.Float64_Value'Image (Exposed.Translation (2)));
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Reject;
+   begin
+      Assert (Selected (Owned), "end-to-end result owns the selected pose");
+      declare
+         Recovered : constant Rotation_Matrix := Rotation_Matrix_Of (Pose);
+         Expected : constant Rotation_Matrix := Rotation_Matrix_Of (Truth);
+         Trace : OpenCV.Float64_Value := 0.0;
+      begin
+         for Axis in 0 .. 2 loop
+            Trace := Trace + Recovered (Axis, 0) * Expected (Axis, 0)
+              + Recovered (Axis, 1) * Expected (Axis, 1)
+              + Recovered (Axis, 2) * Expected (Axis, 2);
+         end loop;
+         Assert (Math.Arccos (OpenCV.Float64_Value'Max
+                   (-1.0, OpenCV.Float64_Value'Min (1.0, (Trace - 1.0) / 2.0))) < 1.0E-6,
+           "owned rotation matches the oracle without another solve");
+         Assert (Math.Sqrt ((Camera_Center (Pose) (0) - Camera_Center (Truth) (0)) ** 2
+                   + (Camera_Center (Pose) (1) - Camera_Center (Truth) (1)) ** 2
+                   + (Camera_Center (Pose) (2) - Camera_Center (Truth) (2)) ** 2) < 1.0E-6,
+           "owned camera center matches -R^T t");
+      end;
+      declare
+         Found : constant AP3P_Pose_Hypothesis_Array :=
+           Solve_AP3P_Hypotheses (Seeds, Seed_Pixels, Calibration);
+         Evaluated : constant AP3P_Reference_Result_Matrix :=
+           Evaluate_AP3P_References (Found, References, Reference_Pixels, Calibration);
+         Indexed : constant AP3P_Selection_Result :=
+           Select_AP3P_Hypothesis (Evaluated, Policy);
+         Slot : constant Positive := Selected_Hypothesis_Index (Indexed);
+         Substitute : AP3P_Pose_Hypothesis_Array := Found;
+      begin
+         Substitute (Substitute'First + Slot - 1) :=
+           (Pose => (Rotation => [others => 0.0], Translation => [0.0, 0.0, 1.0]));
+         Assert (Selected_Pose (Indexed, Substitute, Substitute'First + Slot - 1).Translation
+             = Translation_Vector'(0.0, 0.0, 1.0)
+           and then Pose.Translation /= Translation_Vector'(0.0, 0.0, 1.0),
+           "an external array is not the owned pose");
+      end;
+      Reject (Select_AP3P_Pose
+        (Seeds, Seed_Pixels, References, Reference_Pixels, Calibration,
+         No_Distortion, (0.0, 0.0, 0.0)));
+      declare
+         Wide : constant AP3P_Pose_Selection :=
+           Select_AP3P_Pose
+             (Seeds, Seed_Pixels, References, Reference_Pixels, Calibration,
+              No_Distortion,
+              (OpenCV.Float64_Value'Last, OpenCV.Float64_Value'Last,
+               OpenCV.Float64_Value'Last));
+      begin
+         if Candidates (Wide)'Length > 1 then
+            Assert (Disposition (Wide) = Ambiguous_Qualified_Hypotheses,
+              "huge separation leaves multiple hypotheses ambiguous");
+            Reject (Wide);
+         else
+            Assert (Selected (Wide), "a sole hypothesis remains owned");
+         end if;
+      end;
+   end AP3P_Select_Provenance;
 
    --  Task 014 independent oracles. Composition equations appear in TEST code only.
    Pi_Value : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Ada.Numerics.Pi);
@@ -5934,6 +6051,7 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("AP3P selection with different lower bounds", AP3P_Select_Bounds'Access));
       Result.Add_Test (Caller.Create ("AP3P selection candidate-order invariance", AP3P_Select_Order'Access));
       Result.Add_Test (Caller.Create ("AP3P selection Positive'Last lower bound", AP3P_Select_Upper'Access));
+      Result.Add_Test (Caller.Create ("AP3P owned pose provenance", AP3P_Select_Provenance'Access));
       Result.Add_Test (Caller.Create ("pose composition identity oracle", Compose_Identity'Access));
       Result.Add_Test (Caller.Create ("pose composition noncommutative order oracle", Compose_Order'Access));
       Result.Add_Test (Caller.Create ("pose composition sequential point and direction oracle", Compose_Sequential'Access));

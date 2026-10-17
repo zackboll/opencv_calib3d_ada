@@ -572,14 +572,14 @@ begin
              Fail (Stage, 1);
              begin
                 declare
-                   Chosen : constant AP3P_Selection_Result :=
+                   Chosen : constant AP3P_Pose_Selection :=
                      Select_AP3P_Pose
                        (Seeds, Seed_Pixels, [[0.0, 0.0, 4.0]], [[20.0, 30.0]],
                         Calibration, No_Distortion, Policy);
                 begin
                    raise Program_Error with
                      "projection fault returned an AP3P selection "
-                     & AP3P_Selection_Disposition'Image (Chosen.Disposition);
+                     & AP3P_Selection_Disposition'Image (Disposition (Chosen));
                 end;
              exception
                 when OpenCV.OpenCV_Error => null;

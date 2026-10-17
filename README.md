@@ -6,7 +6,7 @@
 strict separation policy to AP3P hypotheses already scored by
 `Evaluate_AP3P_References`. `Select_AP3P_Pose` solves the existing
 three-point AP3P problem, evaluates additional independent world points, and
-returns the same classified result. Thresholds have no defaults. A unique
+returns a private result that owns the selected pose from that solve. Thresholds have no defaults. A unique
 pose is conditional on those references and that policy; it is not global
 localization. Translation remains `t` in the caller's Cartesian frame. No new
 C ABI operation is added. See the [contract](docs/ap3p-selection-contract.md)

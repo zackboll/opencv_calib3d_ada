@@ -44,6 +44,19 @@ and `Selected_Pose` raise `OpenCV_Error` otherwise. The pose index is the
 hypothesis array's own index; selection identity is position, not a fixed
 native candidate number and not a Rodrigues-component comparison.
 
+## End-to-end ownership
+
+`Select_AP3P_Pose` returns `AP3P_Pose_Selection`. That private type copies the
+selected `World_To_Camera_Pose` from the one `Solve_AP3P_Hypotheses` call it
+made. `Selected_Pose` on that type takes no hypothesis array and no index.
+It raises `OpenCV_Error` unless the disposition is unique and the owned pose
+is present. Callers cannot assemble this type.
+
+`AP3P_Selection_Result` remains the matrix-only result. Its `Selected_Pose`
+checks the supplied array's length and position only. It does not prove that
+the array is the one that was evaluated. Substituting another array of the
+same length returns that array's pose, not a provenance-checked pose.
+
 ## End-to-end validation
 
 `Select_AP3P_Pose` rejects every seed count other than three, mismatched

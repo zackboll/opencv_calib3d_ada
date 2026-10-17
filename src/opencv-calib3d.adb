@@ -1706,6 +1706,33 @@ package body OpenCV.Calib3D is
       return Hypotheses (Index).Pose;
    end Selected_Pose;
 
+   function Disposition (Result : AP3P_Pose_Selection) return AP3P_Selection_Disposition is
+     (Result.Disposition);
+
+   function Candidate_Index (Result : AP3P_Pose_Selection) return Natural is
+     (Result.Candidate_Index);
+
+   function Separation_Pixels (Result : AP3P_Pose_Selection) return OpenCV.Float64_Value is
+     (Result.Separation_Pixels);
+
+   function Candidates (Result : AP3P_Pose_Selection) return AP3P_Candidate_Qualification_Array is
+     (Result.Candidates);
+
+   function Selected (Result : AP3P_Pose_Selection) return Boolean is
+     (Result.Disposition = Unique_Selected_Hypothesis
+      and then Result.Has_Pose
+      and then Result.Candidate_Index in 1 .. Result.Count);
+
+   function Selected_Pose (Result : AP3P_Pose_Selection) return World_To_Camera_Pose is
+   begin
+      if not Selected (Result) then
+         raise OpenCV.OpenCV_Error
+           with "AP3P selection has no owned unique pose";
+      end if;
+      Validate (Result.Pose);
+      return Result.Pose;
+   end Selected_Pose;
+
    function Select_AP3P_Hypothesis
      (Results : AP3P_Reference_Result_Matrix;
       Options : AP3P_Selection_Options) return AP3P_Selection_Result
@@ -1839,8 +1866,16 @@ package body OpenCV.Calib3D is
       Reference_Pixels : Image_Point_Array;
       Intrinsics       : Camera_Intrinsics;
       Distortion       : Distortion_Coefficients := No_Distortion;
-      Options          : AP3P_Selection_Options) return AP3P_Selection_Result
+      Options          : AP3P_Selection_Options) return AP3P_Pose_Selection
    is
+      function Without_Pose (Value : AP3P_Selection_Result) return AP3P_Pose_Selection is
+        (Count => Value.Count,
+         Disposition => Value.Disposition,
+         Candidate_Index => Value.Candidate_Index,
+         Separation_Pixels => Value.Separation_Pixels,
+         Candidates => Value.Candidates,
+         Has_Pose => False,
+         Pose => (Rotation => [others => 0.0], Translation => [others => 0.0]));
    begin
       Validate (Options);
       Validate (Intrinsics);
@@ -1861,7 +1896,9 @@ package body OpenCV.Calib3D is
                  Disposition => No_Independent_References,
                  Candidate_Index => 0,
                  Separation_Pixels => 0.0,
-                 Candidates => [1 .. 0 => <>]);
+                 Candidates => [1 .. 0 => <>],
+                 Has_Pose => False,
+                 Pose => (Rotation => [others => 0.0], Translation => [others => 0.0]));
       end if;
       for Left in Reference_World'Range loop
          for Seed of Seed_World loop
@@ -1884,8 +1921,20 @@ package body OpenCV.Calib3D is
          Evaluated : constant AP3P_Reference_Result_Matrix :=
            Evaluate_AP3P_References
              (Hypotheses, Reference_World, Reference_Pixels, Intrinsics, Distortion);
+         Decision : constant AP3P_Selection_Result :=
+           Select_AP3P_Hypothesis (Evaluated, Options);
       begin
-         return Select_AP3P_Hypothesis (Evaluated, Options);
+         if Decision.Disposition /= Unique_Selected_Hypothesis then
+            return Without_Pose (Decision);
+         end if;
+         return
+           (Count => Decision.Count,
+            Disposition => Decision.Disposition,
+            Candidate_Index => Decision.Candidate_Index,
+            Separation_Pixels => Decision.Separation_Pixels,
+            Candidates => Decision.Candidates,
+            Has_Pose => True,
+            Pose => Hypotheses (Hypotheses'First + Decision.Candidate_Index - 1).Pose);
       end;
    end Select_AP3P_Pose;
 

@@ -7,9 +7,10 @@ workflow file was not changed.
 ## Executed locally
 
 - `alr -n build` succeeded.
-- `sh scripts/test.sh` exited 0. AUnit: 139 run, 139 passed, 0 failed
-  assertions, 0 unexpected errors. The script also ran the raw production and
-  fault-injection boundaries and Linux ASan/UBSan on the actual shim.
+- `sh scripts/test.sh` exited 0. AUnit: 140 run, 140 passed, 0 failed
+  assertions, 0 unexpected errors. This includes the owned-pose provenance
+  case. The script also ran the raw production and fault-injection boundaries
+  and Linux ASan/UBSan on the actual shim.
 - `scripts/run_ada_faults.sh` passed, including
   `AP3P selection propagates native projection faults without a result`.
 - `python3 scripts/check_repository.py` passed: 48 ABI imports/exports and
@@ -22,11 +23,12 @@ workflow file was not changed.
   separation was `1.46776468841858E+02` pixels. Candidate index 1 on this
   OpenCV build is not a cross-version contract.
 
-The 129 existing registrations remain. The ten new cases cover known
+The 129 existing registrations remain. The eleven new cases cover known
 fourth-reference geometry, five nonzero Brown coefficients, insufficient and
 exact score separation, no hypotheses, no references, rejected candidates,
 behind-camera depth, numerical unavailability, invalid thresholds, differing
-lower bounds, order invariance, and `Positive'Last`.
+lower bounds, order invariance, `Positive'Last`, and owned-pose provenance.
+The owned pose is returned by `Selected_Pose` with no second solver call.
 
 ## Oracles
 
