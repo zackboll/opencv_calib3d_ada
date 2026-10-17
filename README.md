@@ -280,9 +280,11 @@ is calibrated two-view relative geometry, **not metric navigation position**.
 
 ## CI policy
 
-PR CI is Linux, macOS, repository checks and Linux ASan/UBSan. Windows/MSYS2 is
-in a separate **push-to-main-only** workflow because it is intentionally too slow
-for the review loop. A manual matrix source-builds OpenCV 4.1.0, 4.10.0 and 5.0.0.
+PR CI is Linux, macOS, repository checks and Linux ASan/UBSan. Windows/MSYS2
+stays in a separate workflow and still runs on every push to `main`. Pull
+requests run that Windows job only when `.github/workflows/windows-post-merge.yml`
+itself changes, so unrelated feature PRs do not pay for it. A manual matrix
+source-builds OpenCV 4.1.0, 4.10.0 and 5.0.0.
 The presence of those workflows alone is not evidence that they passed.
 
 ## Deliberate exclusions
