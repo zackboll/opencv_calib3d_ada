@@ -1,5 +1,25 @@
 # OpenCV Calib3D for Ada
 
+## Task 019: calibrated metric world-frame triangulation
+
+`Triangulate_World_Points` accepts independently calibrated distorted pixels,
+two known poses in one Cartesian world frame, and four explicit caller quality
+thresholds. It reuses native normalization and unit-baseline triangulation,
+scales by the known-pose physical baseline, transforms to world coordinates, and
+checks both native distorted pixel projections. Source status is preserved;
+optional coordinates, depths, and residuals are discriminant-guarded. Exact zero
+baseline never fabricates a point. No solver or C ABI operation is added (48).
+See the [contract](docs/metric-triangulation-contract.md) and
+[validation](docs/metric-triangulation-validation.md).
+
+Run the file-free independent synthetic oracle:
+
+```sh
+alr -n -C examples build
+alr -n -C examples exec -- sh ../scripts/run_native.sh bin/metric_triangulation_synthetic
+```
+
+
 ## Task 017: reference-validated AP3P pose refinement
 
 `Select_Refine_AP3P_Pose` solves three seed correspondences, applies the

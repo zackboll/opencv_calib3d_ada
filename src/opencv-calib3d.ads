@@ -276,6 +276,51 @@ package OpenCV.Calib3D is
       Options : Triangulation_Quality_Options := (others => <>))
       return Triangulation_Quality_Array;
 
+   --  Every threshold is caller-selected; no empirical acceptance defaults.
+   type Metric_Triangulation_Options is record
+      Minimum_Acute_Parallax_Radians : OpenCV.Float64_Value;
+      Maximum_Normalized_Reprojection_Error : OpenCV.Float64_Value;
+      Maximum_First_Pixel_Reprojection_Error : OpenCV.Float64_Value;
+      Maximum_Second_Pixel_Reprojection_Error : OpenCV.Float64_Value;
+   end record;
+   type Metric_Triangulation_Disposition is
+     (Metric_Accepted, Metric_Policy_Rejected, No_Physical_Baseline,
+      Source_At_Infinity, Source_Unrepresentable_Point,
+      Source_Non_Positive_Depth, Source_Undefined_Reprojection,
+      Metric_Conversion_Unavailable);
+   type Metric_Source_Diagnostics (Available : Boolean := False) is record
+      case Available is
+         when True =>
+            Point : Triangulated_Point;
+            Quality : Triangulation_Quality;
+         when False => null;
+      end case;
+   end record;
+   type Metric_Point_Geometry (Available : Boolean := False) is record
+      case Available is
+         when True =>
+            Position_In_First_Camera, World_Position : Object_Point;
+            First_Depth, Second_Depth : OpenCV.Float64_Value;
+         when False => null;
+      end case;
+   end record;
+   type Metric_Pixel_Diagnostics (Available : Boolean := False) is record
+      case Available is
+         when True =>
+            First_Error_Pixels, Second_Error_Pixels : OpenCV.Float64_Value;
+            Passes_First_Limit, Passes_Second_Limit : Boolean;
+         when False => null;
+      end case;
+   end record;
+   type Metric_Triangulated_Point is record
+      Disposition : Metric_Triangulation_Disposition := No_Physical_Baseline;
+      Source : Metric_Source_Diagnostics;
+      Geometry : Metric_Point_Geometry;
+      Pixels : Metric_Pixel_Diagnostics;
+   end record;
+   type Metric_Triangulated_Point_Array is
+     array (Positive range <>) of Metric_Triangulated_Point;
+
    type Point_Refinement_Outcome is
      (Skipped_Unusable, Skipped_Low_Parallax, No_Improving_Step,
       Improved, Numerically_Unavailable);
@@ -449,6 +494,23 @@ package OpenCV.Calib3D is
             null;
       end case;
    end record;
+
+   --  Distorted pixels -> separate calibration -> unit-baseline native
+   --  triangulation -> baseline scaling -> caller-world-frame coordinates.
+   --  Both poses MUST share one Cartesian world frame and length units.
+   --  Exact zero baseline publishes no source/geometry/pixel diagnostics.
+   --  Other results preserve source status. Only Available fields may be read.
+   --  Finite nonnegative inclusive thresholds; minimum angle <= pi/2.
+   --  Equal finite counts fitting INT32; positional pairing, one-based output.
+   --  Ada metric arithmetic unavailability is per-point; native failures raise
+   --  OpenCV_Error without partial publication. No confidence/accuracy bound.
+   function Triangulate_World_Points
+     (First_Pixels, Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose : World_To_Camera_Pose;
+      Options : Metric_Triangulation_Options)
+      return Metric_Triangulated_Point_Array;
 
    --  Measure the rigid motion from First to Second. Centers are
    --  C = -R^T * t. Displacement_World is C2 - C1. Baseline_Distance is the

@@ -788,10 +788,12 @@ package body OpenCV.Calib3D is
          raise OpenCV.OpenCV_Error with "Point transform exceeds Float64 range";
    end World_To_Camera_Point;
 
+   --  Arithmetic-only overload: callers can keep native Rodrigues failures
+   --  outside a per-point numerical-unavailability handler.
    function Camera_To_World_Point
-     (Pose : World_To_Camera_Pose; Point : Object_Point) return Object_Point
+     (Pose : World_To_Camera_Pose; Point : Object_Point;
+      Matrix : Rotation_Matrix) return Object_Point
    is
-      Matrix : constant Rotation_Matrix := Rotation_Matrix_Of (Pose);
       Shifted : Object_Point;
    begin
       Validate_Vector (Point);
@@ -803,6 +805,14 @@ package body OpenCV.Calib3D is
    exception
       when Constraint_Error =>
          raise OpenCV.OpenCV_Error with "Point transform exceeds Float64 range";
+   end Camera_To_World_Point;
+
+   function Camera_To_World_Point
+     (Pose : World_To_Camera_Pose; Point : Object_Point) return Object_Point
+   is
+      Matrix : constant Rotation_Matrix := Rotation_Matrix_Of (Pose);
+   begin
+      return Camera_To_World_Point (Pose, Point, Matrix);
    end Camera_To_World_Point;
 
    function World_To_Camera_Direction
@@ -2813,6 +2823,168 @@ package body OpenCV.Calib3D is
       when Constraint_Error =>
          raise OpenCV.OpenCV_Error with "Assessment exceeds representable range";
    end Assess_Triangulation;
+
+   function Triangulate_World_Points
+     (First_Pixels, Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose : World_To_Camera_Pose;
+      Options : Metric_Triangulation_Options)
+      return Metric_Triangulated_Point_Array
+   is
+      function Scaled_Component (Value, Baseline : OpenCV.Float64_Value)
+        return OpenCV.Float64_Value
+      is
+         Product : constant OpenCV.Float64_Value := Value * Baseline;
+      begin
+         if not Is_Finite (Product) or else
+           (Value /= 0.0 and then Product = 0.0)
+         then
+            raise Constraint_Error with "Metric scaling overflow/underflow";
+         end if;
+         return Product;
+      end Scaled_Component;
+
+      function Pixel_Error (Prediction, Observation : Image_Point)
+        return OpenCV.Float64_Value
+      is
+         DX : constant OpenCV.Float64_Value := Prediction (0) - Observation (0);
+         DY : constant OpenCV.Float64_Value := Prediction (1) - Observation (1);
+      begin
+         --  Existing scaled norm checks both subtraction and final norm.
+         return Scaled_Vector_Norm ([DX, DY, 0.0]);
+      end Pixel_Error;
+   begin
+      Validate (First_Pixels);
+      Validate (Second_Pixels);
+      Validate (First_Intrinsics);
+      Validate (Second_Intrinsics);
+      Validate (First_Distortion);
+      Validate (Second_Distortion);
+      Validate (First_Pose);
+      Validate (Second_Pose);
+      if First_Pixels'Length /= Second_Pixels'Length or else
+        First_Pixels'Length > Interfaces.Integer_32'Last
+      then
+         raise OpenCV.OpenCV_Error with "Metric triangulation requires equal counts fitting INT32";
+      end if;
+      if not Is_Finite (Options.Minimum_Acute_Parallax_Radians) or else
+        Options.Minimum_Acute_Parallax_Radians < 0.0 or else
+        Options.Minimum_Acute_Parallax_Radians > Math.Arctan (1.0, 0.0)
+      then
+         raise OpenCV.OpenCV_Error with "Invalid metric parallax threshold";
+      end if;
+      for Limit of Object_Point'[Options.Maximum_Normalized_Reprojection_Error,
+                    Options.Maximum_First_Pixel_Reprojection_Error,
+                    Options.Maximum_Second_Pixel_Reprojection_Error]
+      loop
+         if not Is_Finite (Limit) or else Limit < 0.0 then
+            raise OpenCV.OpenCV_Error with "Invalid metric residual threshold";
+         end if;
+      end loop;
+      if First_Pixels'Length = 0 then
+         return [1 .. 0 => <>];
+      end if;
+      declare
+         Motion : constant Camera_Motion_Result := Measure_Camera_Motion (First_Pose, Second_Pose);
+      begin
+         if Motion.Baseline_Distance = 0.0 then
+            return [1 .. First_Pixels'Length => <>];
+         end if;
+         declare
+            Relative : constant Relative_Camera_Pose :=
+              (Rotation_Matrix_Of (Motion.Relative_Pose),
+               Camera_Direction (Unit_Vector (Motion.Relative_Pose.Translation)));
+            First_Rotation : constant Rotation_Matrix := Rotation_Matrix_Of (First_Pose);
+            Second_Rotation : constant Rotation_Matrix := Rotation_Matrix_Of (Second_Pose);
+            First : constant Normalized_Image_Point_Array := Undistort_To_Normalized
+              (First_Pixels, First_Intrinsics, First_Distortion);
+            Second : constant Normalized_Image_Point_Array := Undistort_To_Normalized
+              (Second_Pixels, Second_Intrinsics, Second_Distortion);
+            Source : constant Triangulated_Point_Array :=
+              Triangulate_Normalized (First, Second, Relative);
+            Quality : constant Triangulation_Quality_Array := Assess_Triangulation
+              (First, Second, Relative, Source,
+               (Options.Minimum_Acute_Parallax_Radians,
+                Options.Maximum_Normalized_Reprojection_Error));
+         begin
+            return Result : Metric_Triangulated_Point_Array (Source'Range) do
+               for I in Result'Range loop
+                  Result (I).Source := (True, Source (I), Quality (I));
+                  case Source (I).Status is
+                     when At_Infinity => Result (I).Disposition := Source_At_Infinity;
+                     when Unrepresentable_Point => Result (I).Disposition := Source_Unrepresentable_Point;
+                     when Non_Positive_Depth => Result (I).Disposition := Source_Non_Positive_Depth;
+                     when Undefined_Reprojection => Result (I).Disposition := Source_Undefined_Reprojection;
+                     when Usable =>
+                        Result (I).Disposition := Metric_Conversion_Unavailable;
+                        declare
+                           Local, World, Check_First, Check_Second : Object_Point;
+                           Z1, Z2 : OpenCV.Float64_Value;
+                           Converted : Boolean := False;
+                        begin
+                           --  Arithmetic only: native failures must never be
+                           --  swallowed by this per-point conversion handler.
+                           begin
+                              for Axis in 0 .. 2 loop
+                                 Local (Axis) := Scaled_Component
+                                   (Source (I).Position_In_First_Camera (Axis), Motion.Baseline_Distance);
+                              end loop;
+                              Z1 := Scaled_Component (Source (I).First_Depth, Motion.Baseline_Distance);
+                              Z2 := Scaled_Component (Source (I).Second_Depth, Motion.Baseline_Distance);
+                              World := Camera_To_World_Point (First_Pose, Local, First_Rotation);
+                              Check_First := Rotate (First_Rotation, World);
+                              Check_Second := Rotate (Second_Rotation, World);
+                              for Axis in 0 .. 2 loop
+                                 Check_First (Axis) := Checked_Sum
+                                   (Check_First (Axis), First_Pose.Translation (Axis));
+                                 Check_Second (Axis) := Checked_Sum
+                                   (Check_Second (Axis), Second_Pose.Translation (Axis));
+                              end loop;
+                              Converted := Z1 > 0.0 and then Z2 > 0.0 and then
+                                Check_First (2) > 0.0 and then Check_Second (2) > 0.0;
+                           exception
+                              when Constraint_Error | OpenCV.OpenCV_Error => null;
+                           end;
+                           if Converted then
+                              Result (I).Geometry := (True, Local, World, Z1, Z2);
+                              declare
+                                 --  Native projection is deliberately outside
+                                 --  the arithmetic handler. Any failure aborts
+                                 --  the whole batch, including earlier points.
+                                 P1 : constant Image_Point_Array := Project_Points
+                                   ([1 => World], First_Intrinsics, First_Distortion, First_Pose);
+                                 P2 : constant Image_Point_Array := Project_Points
+                                   ([1 => World], Second_Intrinsics, Second_Distortion, Second_Pose);
+                                 E1, E2 : OpenCV.Float64_Value;
+                              begin
+                                 begin
+                                    E1 := Pixel_Error (P1 (1), First_Pixels (First_Pixels'First + (I - 1)));
+                                    E2 := Pixel_Error (P2 (1), Second_Pixels (Second_Pixels'First + (I - 1)));
+                                    Result (I).Pixels :=
+                                      (True, E1, E2,
+                                       E1 <= Options.Maximum_First_Pixel_Reprojection_Error,
+                                       E2 <= Options.Maximum_Second_Pixel_Reprojection_Error);
+                                    Result (I).Disposition :=
+                                      (if Quality (I).Accepted and then
+                                         Result (I).Pixels.Passes_First_Limit and then
+                                         Result (I).Pixels.Passes_Second_Limit
+                                       then Metric_Accepted else Metric_Policy_Rejected);
+                                 exception
+                                    when Constraint_Error | OpenCV.OpenCV_Error => null;
+                                 end;
+                              end;
+                           end if;
+                        end;
+                  end case;
+               end loop;
+            end return;
+         end;
+      end;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Metric triangulation exceeds representable range";
+   end Triangulate_World_Points;
 
    function Refine_Triangulated_Points
      (First_Points, Second_Points : Normalized_Image_Point_Array;

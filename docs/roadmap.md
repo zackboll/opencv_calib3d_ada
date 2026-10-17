@@ -1,5 +1,15 @@
 # Roadmap
 
+## Task 019 approved scope
+
+Calibrated metric two-view world triangulation from two known absolute camera
+poses only. Reuse independent normalization, existing native triangulation,
+Task 018 baseline, frame transforms, quality assessment, and native projection.
+No new solver, refinement, C ABI operation, geographic coordinates, covariance,
+or navigation integration. All four acceptance thresholds are caller-selected.
+See [contract](metric-triangulation-contract.md).
+
+
 ## Task 017 approved scope
 
 Reference-validated AP3P pose refinement only. The operation reuses AP3P,

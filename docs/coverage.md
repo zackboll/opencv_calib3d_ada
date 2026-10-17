@@ -1,5 +1,20 @@
 # Coverage
 
+## Task 019 calibrated metric triangulation
+
+170 AUnit registrations preserve all 163 previous cases. Seven grouped cases add
+rectified analytic truth; noncommuting rotations; different intrinsics and all-five
+independent Brown models; reversed cameras; zero baseline/infinity/nonpositive
+depth; inclusive angle/normalized/pixel policy; tiny/large baselines, large origins
+and overflow; extreme positional bounds and empty; and invalid inputs/options.
+The actual-shim Ada fault runner adds 55 existing-checkpoint exceptions and
+post-native homogeneous controls for otherwise hard-to-reach source statuses,
+depth underflow, huge finite unit coordinates, world-transform overflow, and pixel
+residual overflow. No new C++ hook or ABI operation. The seventh synthetic example
+has independent analytic projection and world truth. Inventory is not execution:
+see [validation](metric-triangulation-validation.md).
+
+
 ## Task 017 reference-validated AP3P refinement
 
 154 registrations preserve all 140 Task 016 cases and add 14 refinement cases:
