@@ -56,6 +56,7 @@ jobs:
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/metric_triangulation_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/metric_refinement_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/landmark_relocalization_synthetic
+          alr -n -C examples exec -- sh ../scripts/run_native.sh bin/known_pose_epipolar_synthetic
   linux-sanitizers:
     runs-on: ubuntu-24.04
     steps:
@@ -75,6 +76,8 @@ jobs:
           alr -n build
           alr -n exec -- g++ --version
           alr -n exec -- sh scripts/run_sanitizers.sh
+          alr -n -C tests build
+          alr -n -C tests exec -- sh ../scripts/run_ada_faults.sh sanitizers
   macos:
     runs-on: macos-14
     steps:
@@ -118,3 +121,4 @@ jobs:
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/metric_triangulation_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/metric_refinement_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/landmark_relocalization_synthetic
+          alr -n -C examples exec -- sh ../scripts/run_native.sh bin/known_pose_epipolar_synthetic

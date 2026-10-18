@@ -1009,4 +1009,62 @@ begin
       Ada.Text_IO.Put_Line
         ("PASS: relocalization SYNTHETIC false, 60 native exception/atomicity checks, 4/5 no native entry, recovery");
    end;
+   declare
+      A : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+      B : constant World_To_Camera_Pose := ([0.0, 0.0, 0.2], [-2.0, 0.3, 0.0]);
+      Identity : constant Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);
+      Policy : constant Epipolar_Verification_Options := (1, 1.0, 1.0);
+      type Stage_Array is array (Positive range <>) of Interfaces.C.int;
+      function Verify (N : Natural := 2; Minimum : Positive := 1) return Known_Pose_Epipolar_Result is
+        (Verify_Known_Pose_Epipolar
+          ([1 .. N => [0.2, 0.1]], [1 .. N => [-0.2, 0.1]], Identity, Identity,
+           No_Distortion, No_Distortion, A, B, (Minimum, 1.0, 1.0)));
+      Saved : Known_Pose_Epipolar_Result (2) := Verify;
+      Original : constant Essential_Matrix := Geometry (Saved).Matrix;
+      Count : Natural := 0;
+   begin
+      --  SYNTHETIC exception controls, not naturally observed native failures.
+      --  Sampson has NO exception checkpoint; none is added by this task.
+      for Stage of Stage_Array'[3, 4, 13, 14, 15, 16, 54, 55, 56, 57] loop
+         for Kind in Interfaces.C.int range 1 .. 5 loop
+            Fail (Stage, Kind);
+            begin
+               Saved := Verify;
+               raise Program_Error with "epipolar swallowed synthetic native exception at" & Stage'Image;
+            exception when OpenCV.OpenCV_Error => Count := Count + 1; end;
+            Check (Accepted (Saved) and then Geometry (Saved).Matrix = Original,
+                   "failed assignment partially published epipolar result");
+            Saved := Verify;
+            Check (Accepted (Saved), "epipolar healthy call did not recover");
+         end loop;
+      end loop;
+      --  Armed first native Rodrigues checkpoint survives both early returns.
+      for N in 0 .. 1 loop
+         Fail (15, 3);
+         declare V : constant Known_Pose_Epipolar_Result := Verify (N, 2);
+         begin
+            Check (Disposition (V) = Insufficient_Correspondences and then not Geometry_Evaluated (V),
+                   "insufficient epipolar request entered native evaluation");
+         end;
+         begin
+            Saved := Verify;
+            raise Program_Error with "insufficient request consumed armed native fault";
+         exception when OpenCV.OpenCV_Error => null; end;
+      end loop;
+      --  Zero baseline does not enter undistortion or Sampson evaluation.
+      Fail (13, 3);
+      declare V : constant Known_Pose_Epipolar_Result := Verify_Known_Pose_Epipolar
+        ([[0.0, 0.0]], [[0.0, 0.0]], Identity, Identity, No_Distortion, No_Distortion, A, A, Policy);
+      begin
+         Check (Disposition (V) = No_Physical_Baseline, "zero baseline not guarded");
+      end;
+      begin
+         Saved := Verify;
+         raise Program_Error with "zero baseline consumed undistortion checkpoint";
+      exception when OpenCV.OpenCV_Error => null; end;
+      Saved := Verify;
+      Check (Count = 50 and then Accepted (Saved), "epipolar fault count and recovery");
+      Ada.Text_IO.Put_Line
+        ("PASS: known-pose epipolar 50 SYNTHETIC native exceptions, assignment atomicity, per-fault recovery, empty/insufficient no native entry, zero-baseline no undistortion; Sampson has no fault checkpoint");
+   end;
 end Run_Refinement_Faults;

@@ -8122,9 +8122,300 @@ package body Calib3D_Tests is
       end loop;
    end Reloc_Adapter;
 
+   Pair_K : constant Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);
+   Pair_A : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+   Pair_B : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [-2.0, 0.0, 0.0]);
+   Pair_Policy : constant Epipolar_Verification_Options := (1, 1.0, 1.0);
+   function Pair_Verify
+     (P, Q : Image_Point_Array; A : World_To_Camera_Pose := Pair_A;
+      B : World_To_Camera_Pose := Pair_B;
+      Policy : Epipolar_Verification_Options := Pair_Policy) return Known_Pose_Epipolar_Result is
+     (Verify_Known_Pose_Epipolar (P, Q, Pair_K, Pair_K, No_Distortion, No_Distortion, A, B, Policy));
+
+   procedure Pair_Rectified (T : in out Fixture) is
+      pragma Unreferenced (T);
+      G : constant Known_Pose_Essential_Result := Essential_From_Camera_Poses (Pair_A, Pair_B);
+      Expected : constant Essential_Matrix := [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]];
+      R : constant Known_Pose_Epipolar_Result := Pair_Verify
+        ([[0.3, 0.1], [0.2, 0.0]], [[-0.1, 0.1], [-0.2, 0.2]]);
+      Errors : constant Epipolar_Correspondence_Result_Array := Correspondence_Errors (R);
+   begin
+      Assert (G.Defined and then G.Baseline_Distance = 2.0, "known metric baseline");
+      Assert (G.Translation_Direction (0) = -1.0, "translation sign");
+      for I in 0 .. 2 loop
+         for J in 0 .. 2 loop
+            Assert (Near (G.Matrix (I, J), Expected (I, J), 1.0E-14), "analytic E coefficient");
+         end loop;
+      end loop;
+      Assert (Accepted (R) and then Errors (1).Defined and then Errors (1).Error = 0.0, "exact y equality");
+      Assert (Errors (2).Defined and then Near (Errors (2).Error, 0.2 / Math.Sqrt (2.0), 1.0E-14), "analytic Sampson");
+      Assert (Near (Summary (R).RMS_Normalized_Sampson, 0.1, 1.0E-14), "independent RMS");
+   end Pair_Rectified;
+
+   procedure Pair_Noncommuting (T : in out Fixture) is
+      pragma Unreferenced (T);
+      C : constant OpenCV.Float64_Value := Math.Cos (0.4);
+      S : constant OpenCV.Float64_Value := Math.Sin (0.4);
+      D : constant OpenCV.Float64_Value := Math.Cos (-0.3);
+      U : constant OpenCV.Float64_Value := Math.Sin (-0.3);
+      A : constant World_To_Camera_Pose := ([0.0, 0.0, 0.4], [1.0, 0.0, 0.0]);
+      B : constant World_To_Camera_Pose := ([-0.3, 0.0, 0.0], [C, -D * S - 3.0, -U * S + 4.0]);
+      R : constant Rotation_Matrix := [[C, S, 0.0], [-D * S, D * C, -U], [-U * S, U * C, D]];
+      E : constant Essential_Matrix :=
+        [[(0.6 * U + 0.8 * D) * S, -(0.6 * U + 0.8 * D) * C, -0.6 * D + 0.8 * U],
+         [0.8 * C, 0.8 * S, 0.0], [0.6 * C, 0.6 * S, 0.0]];
+      G : constant Known_Pose_Essential_Result := Essential_From_Camera_Poses (A, B);
+      Reverse_G : constant Known_Pose_Essential_Result := Essential_From_Camera_Poses (B, A);
+   begin
+      for I in 0 .. 2 loop
+         Assert (Near (G.Relative_Pose.Translation (I), (case I is when 0 => 0.0, when 1 => -3.0, when others => 4.0),
+                       1.0E-12), "second frame translation independent oracle");
+         for J in 0 .. 2 loop
+            Assert (Near (G.Rotation_First_To_Second (I, J), R (I, J), 1.0E-12), "Rx Rz transpose order");
+            Assert (Near (G.Matrix (I, J), E (I, J), 1.0E-12), "hand-derived signed E");
+            Assert (Near (Reverse_G.Matrix (I, J), G.Matrix (J, I), 1.0E-12), "reversed E transpose");
+         end loop;
+      end loop;
+      Assert (Near (G.Baseline_Distance, 5.0, 1.0E-12), "analytic baseline");
+   end Pair_Noncommuting;
+
+   --  Independent scalar forward Brown model, not native projection.
+   function Pair_Observe (P : Object_Point; Intrinsics : Camera_Intrinsics;
+                          D : Distortion_Coefficients; Second : Boolean) return Image_Point is
+      C : constant OpenCV.Float64_Value := Math.Cos (0.2);
+      S : constant OpenCV.Float64_Value := Math.Sin (0.2);
+      X : constant OpenCV.Float64_Value :=
+        (if Second then (C * P (0) - S * P (1) - 2.0) / P (2) else P (0) / P (2));
+      Y : constant OpenCV.Float64_Value :=
+        (if Second then (S * P (0) + C * P (1) + 0.3) / P (2) else P (1) / P (2));
+      R2 : constant OpenCV.Float64_Value := X * X + Y * Y;
+      Radial : constant OpenCV.Float64_Value := 1.0 + D.K1 * R2 + D.K2 * R2 ** 2 + D.K3 * R2 ** 3;
+   begin
+      return [Intrinsics.Focal_X * (X * Radial + 2.0 * D.P1 * X * Y + D.P2 * (R2 + 2.0 * X * X)) + Intrinsics.Center_X,
+              Intrinsics.Focal_Y * (Y * Radial + D.P1 * (R2 + 2.0 * Y * Y) + 2.0 * D.P2 * X * Y) + Intrinsics.Center_Y];
+   end Pair_Observe;
+
+   procedure Pair_Calibration (T : in out Fixture) is
+      pragma Unreferenced (T);
+      K2 : constant Camera_Intrinsics := (630.0, 710.0, 280.0, 190.0);
+      D1 : constant Distortion_Coefficients := (0.02, -0.003, 0.001, -0.002, 0.0004);
+      D2 : constant Distortion_Coefficients := (-0.03, 0.004, -0.002, 0.001, -0.0005);
+      B : constant World_To_Camera_Pose := ([0.0, 0.0, 0.2], [-2.0, 0.3, 0.0]);
+      P, Q : Image_Point_Array (1 .. World'Length);
+   begin
+      for I in World'Range loop
+         declare
+            W : Object_Point := World (I);
+         begin
+            W (2) := W (2) + 8.0;
+            P (I) := Pair_Observe (W, K, D1, False);
+            Q (I) := Pair_Observe (W, K2, D2, True);
+         end;
+      end loop;
+      declare
+         R : constant Known_Pose_Epipolar_Result := Verify_Known_Pose_Epipolar
+           (P, Q, K, K2, D1, D2, Pair_A, B, (6, 1.0E-10, 1.0E-10));
+         V : constant Known_Pose_Epipolar_Result := Verify_Known_Pose_Epipolar
+           (Q, P, K2, K, D2, D1, B, Pair_A, (6, 1.0E-10, 1.0E-10));
+      begin
+         Assert (Accepted (R) and then Accepted (V), "different all-five Brown cameras");
+         for I in 1 .. R.Count loop
+            Assert (Near (Correspondence_Errors (R) (I).Error, Correspondence_Errors (V) (I).Error, 1.0E-12),
+                    "reversal preserves normalized error");
+         end loop;
+      end;
+   end Pair_Calibration;
+
+   procedure Pair_Baselines (T : in out Fixture) is
+      pragma Unreferenced (T);
+      B : World_To_Camera_Pose := Pair_A;
+   begin
+      for Pure in Boolean loop
+         if Pure then B.Rotation := [0.0, 0.0, 0.7]; end if;
+         declare
+            G : constant Known_Pose_Essential_Result := Essential_From_Camera_Poses (Pair_A, B);
+            V : constant Known_Pose_Epipolar_Result := Pair_Verify ([[0.0, 0.0]], [[0.0, 0.0]], B => B);
+         begin
+            Assert (not G.Defined and then G.Baseline_Distance = 0.0, "exact common center no E");
+            Assert (Disposition (V) = No_Physical_Baseline and then not Geometry (V).Defined and then
+                    not Correspondence_Errors (V) (1).Defined and then not Entire_Set_Evaluable (V), "no invented scores");
+            begin
+               declare S : constant Epipolar_Verification_Summary := Summary (V); pragma Unreferenced (S);
+               begin Assert (False, "zero baseline summary guard"); end;
+            exception when OpenCV.OpenCV_Error => null; end;
+         end;
+      end loop;
+      B := Pair_B;
+      for Scale of Reprojection_Error_Array'[1.0E-300, 1.0E300] loop
+         B.Translation := [-Scale, 0.0, 0.0];
+         declare G : constant Known_Pose_Essential_Result := Essential_From_Camera_Poses (Pair_A, B);
+         begin
+            Assert (G.Defined and then G.Baseline_Distance = Scale and then G.Translation_Direction (0) = -1.0,
+                    "scaled tiny/large nonzero baseline");
+         end;
+      end loop;
+      begin
+         B.Translation := [OpenCV.Float64_Value'Last, OpenCV.Float64_Value'Last, 0.0];
+         declare G : constant Known_Pose_Essential_Result := Essential_From_Camera_Poses (Pair_A, B);
+            pragma Unreferenced (G);
+         begin Assert (False, "unrepresentable baseline must raise"); end;
+      exception when OpenCV.OpenCV_Error => null; end;
+   end Pair_Baselines;
+
+   procedure Pair_Thresholds (T : in out Fixture) is
+      pragma Unreferenced (T);
+      P : constant Image_Point_Array := [[0.0, 0.0]];
+      Q : constant Image_Point_Array := [[0.0, 0.2]];
+      R : constant Known_Pose_Epipolar_Result := Pair_Verify (P, Q);
+      Error : constant OpenCV.Float64_Value := Correspondence_Errors (R) (1).Error;
+      Below : constant OpenCV.Float64_Value := OpenCV.Float64_Value'Adjacent (Error, 0.0);
+   begin
+      Assert (Accepted (Pair_Verify (P, P, Policy => (1, 0.0, 0.0))), "exact zero inclusive");
+      Assert (Accepted (Pair_Verify (P, Q, Policy => (1, Error, Error))), "both equality thresholds");
+      Assert (not Accepted (Pair_Verify (P, Q, Policy => (1, Below, Error))), "adjacent RMS rejection");
+      Assert (not Accepted (Pair_Verify (P, Q, Policy => (1, Error, Below))), "adjacent maximum rejection");
+      declare
+         V : constant Known_Pose_Epipolar_Result := Pair_Verify (P, [[0.0, 100.0]], Policy => (1, 0.01, 0.01));
+      begin
+         Assert (Disposition (V) = Rejected_By_Policy and then Entire_Set_Evaluable (V) and then
+                 not Correspondence_Errors (V) (1).Passes_Point_Limit, "gross mismatch evaluated rejected");
+      end;
+      declare
+         V : constant Known_Pose_Epipolar_Result := Pair_Verify
+           ([[0.0, 0.0], [0.0, 0.0]], [[0.0, 0.0], [0.0, 1.0E160]],
+            Policy => (1, OpenCV.Float64_Value'Last, OpenCV.Float64_Value'Last));
+      begin
+         Assert (Accepted (V) and then
+                 abs (Summary (V).RMS_Normalized_Sampson / 5.0E159 - 1.0) < 1.0E-14,
+                 "scaled RMS avoids squaring huge unscaled finite errors");
+      end;
+   end Pair_Thresholds;
+
+   procedure Pair_Undefined (T : in out Fixture) is
+      pragma Unreferenced (T);
+      B : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [0.0, 0.0, 2.0]);
+      V : constant Known_Pose_Epipolar_Result := Pair_Verify
+        ([[0.0, 0.0], [0.2, 0.1]], [[0.0, 0.0], [0.1, 0.05]], B => B);
+      G : constant Known_Pose_Essential_Result := Essential_From_Camera_Poses (Pair_A, B);
+      Huge : constant Normalized_Sampson_Error_Result := Normalized_Sampson_Error
+        (G.Matrix, [1.0E300, 1.0E300], [-1.0E300, 1.0E300]);
+   begin
+      Assert (Disposition (V) = Undefined_Correspondence_Errors and then not Accepted (V) and then
+              not Entire_Set_Evaluable (V), "epipole not zero score");
+      Assert (not Correspondence_Errors (V) (1).Defined and then Correspondence_Errors (V) (2).Defined,
+              "evaluate every pair after undefined");
+      Assert (not Huge.Defined, "natural native arithmetic unavailability");
+      declare
+         Overflow : constant Known_Pose_Epipolar_Result := Pair_Verify
+           ([[1.0E160, 1.0E160]], [[-1.0E160, 1.0E160]], B => B);
+      begin
+         Assert (Disposition (Overflow) = Undefined_Correspondence_Errors and then
+                 not Correspondence_Errors (Overflow) (1).Defined, "end-to-end native numerical unavailability");
+      end;
+      begin
+         declare S : constant Epipolar_Verification_Summary := Summary (V); pragma Unreferenced (S);
+         begin Assert (False, "partial set summary guarded"); end;
+      exception when OpenCV.OpenCV_Error => null; end;
+   end Pair_Undefined;
+
+   procedure Pair_Bounds (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Empty : constant Known_Pose_Epipolar_Result := Pair_Verify ([1 .. 0 => <>], [1 .. 0 => <>]);
+   begin
+      Assert (Empty.Count = 0 and then Disposition (Empty) = Insufficient_Correspondences and then
+              not Geometry_Evaluated (Empty) and then Correspondence_Errors (Empty)'First = 1, "empty guarded");
+      begin
+         declare G : constant Known_Pose_Essential_Result := Geometry (Empty); pragma Unreferenced (G);
+         begin Assert (False, "insufficient geometry guard"); end;
+      exception when OpenCV.OpenCV_Error => null; end;
+      for N in 1 .. 2 loop
+         declare
+            P : constant Image_Point_Array (Positive'Last - (N - 1) .. Positive'Last) := [others => [0.2, 0.1]];
+            Q : constant Image_Point_Array (7 .. 6 + N) := [others => [-0.2, 0.1]];
+            R : constant Known_Pose_Epipolar_Result := Pair_Verify (P, Q);
+         begin
+            Assert (R.Count = N and then Accepted (R) and then Correspondence_Errors (R)'First = 1,
+                    "Positive Last positional pairing");
+         end;
+      end loop;
+   end Pair_Bounds;
+
+   procedure Pair_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      P, Q : Image_Point_Array (1 .. 1) := [others => [0.0, 0.0]];
+      K1, K2 : Camera_Intrinsics := Pair_K;
+      D1, D2 : Distortion_Coefficients := No_Distortion;
+      A, B : World_To_Camera_Pose := Pair_A;
+      Policy : Epipolar_Verification_Options := Pair_Policy;
+      procedure Reject (N : Natural := 0; M : Natural := 0) is
+      begin
+         declare R : constant Known_Pose_Epipolar_Result := Verify_Known_Pose_Epipolar
+           (P (1 .. N), Q (1 .. M), K1, K2, D1, D2, A, B, Policy); pragma Unreferenced (R);
+         begin Assert (False, "invalid epipolar request accepted"); end;
+      exception when OpenCV.OpenCV_Error => null; end Reject;
+   begin
+      Reject (1, 0);
+      for Value of Reprojection_Error_Array'[-1.0, OpenCV.Float64_Value (Nonfinite (0)), OpenCV.Float64_Value (Nonfinite (1))] loop
+         Policy.Maximum_RMS_Normalized_Sampson := Value; Reject; Policy := Pair_Policy;
+         Policy.Maximum_Point_Normalized_Sampson := Value; Reject; Policy := Pair_Policy;
+      end loop;
+      K1.Focal_X := 0.0; Reject; K1 := Pair_K;
+      K2.Focal_Y := -1.0; Reject; K2 := Pair_K;
+      for Kind in Interfaces.Integer_32 range 0 .. 1 loop
+         declare V : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Kind));
+         begin
+            P (1) (0) := V; Reject (1, 1); P := [others => [0.0, 0.0]];
+            Q (1) (1) := V; Reject (1, 1); Q := P;
+            K1.Center_X := V; Reject; K1 := Pair_K;
+            K2.Focal_Y := V; Reject; K2 := Pair_K;
+            D1.K3 := V; Reject; D1 := No_Distortion;
+            D2.P2 := V; Reject; D2 := No_Distortion;
+            A.Rotation (1) := V; Reject; A := Pair_A;
+            B.Translation (2) := V; Reject; B := Pair_A;
+         end;
+      end loop;
+   end Pair_Invalid;
+
+   procedure Pair_Adapter (T : in out Fixture) is
+      pragma Unreferenced (T);
+      function Owned return Known_Pose_Epipolar_Result is
+         R : constant Camera_Relocalization_Result := Relocalize_Camera
+           (Reloc_Field, Reloc_Project (Reloc_Field), Reloc_H, Reloc_Project (Reloc_H), K, Reloc_D, Reloc_RANSAC, Reloc_Policy);
+         S : constant Camera_Relocalization_Result := Relocalize_Camera
+           (World, Project_Points (World, K, No_Distortion, Known_Pose), Reloc_H,
+            Project_Points (Reloc_H, K, No_Distortion, Known_Pose), K, No_Distortion,
+            Reloc_RANSAC, (6, 0.1, 0.1, 0.1, 0.1));
+      begin
+         Assert (Accepted (R) and then Accepted (S), "accepted adapter fixtures");
+         return Verify_Known_Pose_Epipolar
+           ([[1.0, 2.0]], [[3.0, 4.0]], K, K, Reloc_D, No_Distortion, R, S, (1, 1.0, 1.0));
+      end Owned;
+      V : constant Known_Pose_Epipolar_Result := Owned;
+      Rejected : constant Camera_Relocalization_Result := Relocalize_Camera
+        ([1 .. 0 => <>], [1 .. 0 => <>], Reloc_H, Reloc_Project (Reloc_H), K, Reloc_D, Reloc_RANSAC, Reloc_Policy);
+   begin
+      Assert (Geometry (V).Defined and then Correspondence_Errors (V) (1).Defined, "owned after temporary relocalization values finalize");
+      begin
+         declare R : constant Known_Pose_Epipolar_Result := Verify_Known_Pose_Epipolar
+           ([1 .. 0 => <>], [1 .. 0 => <>], K, K, Reloc_D, Reloc_D, Rejected, Rejected, Pair_Policy);
+            pragma Unreferenced (R);
+         begin Assert (False, "unaccepted adapter rejected even for empty"); end;
+      exception when OpenCV.OpenCV_Error => null; end;
+   end Pair_Adapter;
+
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
+      Result.Add_Test (Caller.Create ("known pose rectified signed Essential analytic Sampson RMS", Pair_Rectified'Access));
+      Result.Add_Test (Caller.Create ("known pose noncommuting signed coefficients and transpose reversal", Pair_Noncommuting'Access));
+      Result.Add_Test (Caller.Create ("known pose separate Brown calibration and reversed errors", Pair_Calibration'Access));
+      Result.Add_Test (Caller.Create ("known pose exact zero pure rotation tiny large baseline", Pair_Baselines'Access));
+      Result.Add_Test (Caller.Create ("known pose inclusive zero equality adjacent thresholds", Pair_Thresholds'Access));
+      Result.Add_Test (Caller.Create ("known pose epipole undefined mixed diagnostics native arithmetic", Pair_Undefined'Access));
+      Result.Add_Test (Caller.Create ("known pose empty insufficient positional Positive Last", Pair_Bounds'Access));
+      Result.Add_Test (Caller.Create ("known pose invalid finite camera policy and counts", Pair_Invalid'Access));
+      Result.Add_Test (Caller.Create ("known pose accepted relocalization adapter ownership rejection", Pair_Adapter'Access));
       Result.Add_Test (Caller.Create ("relocalization analytic Brown robust inlier-only pose ownership", Reloc_Oracle'Access));
       Result.Add_Test (Caller.Create ("relocalization four five no-pose and insufficient consensus", Reloc_Boundary'Access));
       Result.Add_Test (Caller.Create ("relocalization inclusive policy adjacent rejection and worsening", Reloc_Policies'Access));

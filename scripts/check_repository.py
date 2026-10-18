@@ -56,8 +56,25 @@ def main() -> None:
 
     tests = (ROOT / "tests/src/calib3d_tests.adb").read_text()
     registrations = re.findall(r"Result\.Add_Test\s*\(Caller\.Create", tests)
-    check(len(registrations) == 184, "update documented AUnit inventory when changing tests")
+    check(len(registrations) == 193, "update documented AUnit inventory when changing tests")
     check(len(declared) == 48, "update private ABI inventory when changing exports")
+    # Task 022 is Ada orchestration, not another native estimator/solver.
+    public_body = (ROOT / "src/opencv-calib3d.adb").read_text()
+    start = public_body.index("   function Essential_From_Camera_Poses")
+    stop = public_body.index("   function Undistort_To_Normalized", start)
+    pair = public_body[start:stop]
+    check("Measure_Camera_Motion (First, Second)" in pair and
+          "Unit_Vector (Motion.Relative_Pose.Translation)" in pair and
+          "Normalized_Sampson_Error (Result.Geometry_Value.Matrix" in pair and
+          pair.count("constant Normalized_Image_Point_Array := Undistort_To_Normalized") == 2,
+          "known-pose verification must reuse motion, scaled normalization, separate calibration and public metric")
+    check(not any(name in pair for name in
+                  ("Estimate_Essential_RANSAC", "Solve_PnP_RANSAC", "Refine_Pose_Iterative", "C.")),
+          "known-pose verification must not estimate, refine or bypass public native-backed APIs")
+    example_names = manifests[2]["executables"]
+    check(len(example_names) == 10 and "known_pose_epipolar_synthetic" in example_names and
+          all((ROOT / "examples/src" / f"{name}.adb").is_file() for name in example_names),
+          "ten synthetic example source files must be registered")
     layout = (ROOT / "tests/layout/calib3d_layout.c").read_text()
     check("calib3d_test_triangulation_layout" in layout and
           "calib3d_test_fill_triangulation" in tests and

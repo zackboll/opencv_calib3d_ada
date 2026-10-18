@@ -1,5 +1,20 @@
 # Architecture
 
+## Task 022 known-pose epipolar verification
+
+Two known world-to-camera poses -> existing relative camera motion -> Ada
+`E=[t_hat]_x R` -> independent per-camera native undistortion -> existing public
+normalized Sampson metric -> caller-controlled whole-set verification. No fitting,
+SVD, repair, native solver or C++ change; private ABI stays 48. A discriminated
+Essential value prevents zero-baseline coefficients; a private owned result guards
+skipped geometry and unavailable whole-set summaries. All pairs are evaluated
+after E exists; undefined errors retain other diagnostics but forbid partial RMS.
+Core owns temporary Mats and borrowing remains callback-scoped. The Task 021
+adapter consumes only accepted owned poses and delegates to the same pipeline.
+Existing Essential exception-buffer cleanup was hardened after leak-enabled
+Ada/native fault qualification exposed failed access-parameter copy-back.
+See [contract](known-pose-epipolar-contract.md) and [validation](known-pose-epipolar-validation.md).
+
 ## Task 021 landmark relocalization
 
 Ada-only composition of the existing fixed-EPNP RANSAC, owned pose/inlier copy,

@@ -8,6 +8,16 @@ from workflow_topology import check_topology  # noqa: E402
 
 
 class RepositoryTests(unittest.TestCase):
+    def test_known_pose_examples_and_fault_sanitizer_gates(self):
+        for filename in ("cross-platform.yml", "opencv-compatibility.yml"):
+            text = (ROOT / ".github/workflows" / filename).read_text()
+            self.assertIn("bin/known_pose_epipolar_synthetic", text)
+            self.assertIn("run_ada_faults.sh sanitizers", text)
+        contract = (ROOT / "docs/known-pose-epipolar-contract.md").read_text()
+        self.assertIn("second**", contract)
+        self.assertIn("not pixels", contract.lower())
+        self.assertIn("No_Physical_Baseline", contract)
+
     def test_backend_split(self):
         text = (ROOT / "scripts/configure_opencv.sh").read_text()
         self.assertIn("backend=calib3d", text)
