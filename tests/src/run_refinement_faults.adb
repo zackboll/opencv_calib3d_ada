@@ -33,6 +33,76 @@ procedure Run_Refinement_Faults is
    end Check;
 begin
    declare
+      A : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+      B : World_To_Camera_Pose := ([0.0, 0.0, 0.0], [-2.0, 0.0, 0.0]);
+      Identity : constant Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);
+      Saved : Metric_Point_Refinement_Result_Array (1 .. 2);
+      type Stages is array (Positive range <>) of Interfaces.C.int;
+      procedure Inject (X, Y, Z, W : Interfaces.C.double)
+        with Import, Convention => C, External_Name => "opencv_calib3d_test_triangulation_h";
+      Tiny : Interfaces.C.double := 1.0E-300;
+      function Reconstruct
+        (First : Image_Point := [0.5, 0.126]; Second : Image_Point := [0.25, 0.124])
+        return Metric_Point_Refinement_Result_Array is
+        (Refine_Metric_World_Points
+          ([First, [0.5, 0.126]], [Second, [0.25, 0.124]], Identity, Identity,
+           No_Distortion, No_Distortion, A, B,
+           (0.0, OpenCV.Float64_Value'Last, OpenCV.Float64_Value'Last, OpenCV.Float64_Value'Last),
+           (20, 0.0), (1.0, 1.0)));
+   begin
+      for Stage of Stages'[1, 2, 13, 14, 15, 16, 37, 38, 39, 40, 41] loop
+         for Kind in Interfaces.C.int range 1 .. 5 loop
+            Fail (Stage, Kind);
+            begin
+               Saved := Reconstruct;
+               raise Program_Error with "metric refinement swallowed native failure";
+            exception
+               when OpenCV.OpenCV_Error => null;
+            end;
+            Check (Disposition (Saved (1)) = Initial_No_Baseline and then
+                   Disposition (Saved (2)) = Initial_No_Baseline,
+                   "metric refinement native failure partially published batch");
+         end loop;
+      end loop;
+      --  SYNTHETIC controls: native triangulation runs, then its first seed is
+      --  replaced. These are not assertions about real SVD output rounding.
+      Inject (0.0, 0.0, 2.0, 1.0);
+      Saved := Reconstruct ([0.0, 0.0], [-0.5, 0.0]);
+      Check (Disposition (Saved (1)) = Refinement_No_Improving_Step and then
+             Normalized_Refinement (Saved (1)).Value.Accepted_Steps = 0 and then
+             Original_Reconstruction (Saved (1)).Geometry.World_Position (2) = 4.0,
+             "synthetic exact zero objective did not preserve original metric point");
+      B.Translation := [-5.0E307, 0.0, 0.0];
+      Inject (1.0, 0.0, 1.0, 1.0);
+      Saved := Reconstruct;
+      Check (Original_Reconstruction (Saved (1)).Geometry.Available and then
+             Normalized_Refinement (Saved (1)).Value.Outcome = Improved and then
+             Disposition (Saved (1)) = Refined_Conversion_Unavailable and then
+             not Accepted (Saved (1)), "synthetic improved metric overflow not contained");
+      B.Translation := [-1.0E-300, 0.0, 0.0];
+      Inject (0.0, 0.0, 2.0, 1.0);
+      Saved := Reconstruct ([1.0E-30, 0.0], [-0.5, 0.0]);
+      Check (Original_Reconstruction (Saved (1)).Geometry.Available and then
+             Normalized_Refinement (Saved (1)).Value.Outcome = Improved and then
+             Disposition (Saved (1)) = Refined_Conversion_Unavailable,
+             "synthetic improved nonzero component underflow not contained");
+      Tiny := Tiny / 1.0E10;
+      Inject (0.0, 0.0, Tiny, 1.0);
+      B.Translation := [0.0, 0.0, 1.0E300];
+      Saved := Reconstruct;
+      Check (Original_Reconstruction (Saved (1)).Geometry.Available and then
+             Original_Reconstruction (Saved (1)).Pixels.Available and then
+             Disposition (Saved (1)) = Refinement_Numerically_Unavailable and then
+             not Refined_Diagnostics (Saved (1)).Geometry.Available,
+             "synthetic optimizer numerical failure did not preserve original metric reconstruction");
+      B.Translation := [-2.0, 0.0, 0.0];
+      Inject (0.0, 0.0, 1.0, 0.0);
+      Saved := Reconstruct;
+      Check (Disposition (Saved (1)) = Initial_Source_Unusable and then Accepted (Saved (2)),
+             "synthetic mixed unavailable/success batch corrupted another point");
+      Ada.Text_IO.Put_Line ("PASS: metric refinement 55 native exceptions/atomicity; synthetic zero objective, refined overflow/underflow, mixed batch");
+   end;
+   declare
       A : constant World_To_Camera_Pose :=
         (Rotation => [0.0, 0.0, 0.0], Translation => [0.0, 0.0, 0.0]);
       B : constant World_To_Camera_Pose :=

@@ -338,6 +338,43 @@ package OpenCV.Calib3D is
       Maximum_Iterations : Positive := 20;
       Minimum_Acute_Parallax_Radians : OpenCV.Float64_Value := 0.0;
    end record;
+
+   --  Required, finite nonnegative pixel allowances; equality passes.
+   type Metric_Refinement_Acceptance_Options is record
+      Maximum_First_Pixel_Worsening : OpenCV.Float64_Value;
+      Maximum_Second_Pixel_Worsening : OpenCV.Float64_Value;
+   end record;
+   type Metric_Refinement_Disposition is
+     (Initial_No_Baseline, Initial_Source_Unusable,
+      Initial_Geometry_Unavailable, Initial_Pixels_Unavailable,
+      Refinement_Low_Parallax, Refinement_No_Improving_Step,
+      Refinement_Numerically_Unavailable, Refined_Conversion_Unavailable,
+      Refined_Pixels_Unavailable, Refined_Policy_Rejected,
+      Refined_Metric_Accepted);
+   type Optional_Point_Refinement (Available : Boolean := False) is record
+      case Available is
+         when True => Value : Point_Refinement_Result;
+         when False => null;
+      end case;
+   end record;
+   type Metric_Point_Refinement_Result is private;
+   type Metric_Point_Refinement_Result_Array is
+     array (Positive range <>) of Metric_Point_Refinement_Result;
+   function Disposition (Result : Metric_Point_Refinement_Result)
+     return Metric_Refinement_Disposition;
+   function Original_Reconstruction (Result : Metric_Point_Refinement_Result)
+     return Metric_Triangulated_Point;
+   --  Absent if initial geometry/pixel diagnostics were not refinable.
+   function Normalized_Refinement (Result : Metric_Point_Refinement_Result)
+     return Optional_Point_Refinement;
+   --  Candidate diagnostics are NOT an accepted world position. Available only
+   --  following Improved, and independently guarded at each conversion stage.
+   function Refined_Diagnostics (Result : Metric_Point_Refinement_Result)
+     return Metric_Triangulated_Point;
+   function Accepted (Result : Metric_Point_Refinement_Result) return Boolean;
+   --  Raises OpenCV_Error unless the complete final policy accepted this point.
+   function Accepted_World_Position (Result : Metric_Point_Refinement_Result)
+     return Object_Point;
    --  Pure Ada, fixed-pose point-only normalized reprojection refinement.
    --  Iterations 1..100; finite minimum angle 0..pi/2 (zero disables screening).
    --  Equal counts paired by iteration order; one-based output, including empty.
@@ -511,6 +548,23 @@ package OpenCV.Calib3D is
       First_Pose, Second_Pose : World_To_Camera_Pose;
       Options : Metric_Triangulation_Options)
       return Metric_Triangulated_Point_Array;
+
+   --  One initial batch triangulation, fixed-pose unit-baseline refinement,
+   --  shared metric conversion and fresh two-camera distorted pixel checks.
+   --  Preserves every original result, including initial policy rejections.
+   --  An initially rejected but geometrically usable point may become accepted.
+   --  Final acceptance requires Improved, all four metric quality thresholds,
+   --  and both pixel-worsening allowances. No hidden epsilon or accuracy claim.
+   --  Pose, baseline, intrinsics and distortion are never optimized.
+   function Refine_Metric_World_Points
+     (First_Pixels, Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose : World_To_Camera_Pose;
+      Metric_Options : Metric_Triangulation_Options;
+      Refinement_Options : Triangulation_Refinement_Options;
+      Acceptance : Metric_Refinement_Acceptance_Options)
+      return Metric_Point_Refinement_Result_Array;
 
    --  Measure the rigid motion from First to Second. Centers are
    --  C = -R^T * t. Displacement_World is C2 - C1. Baseline_Distance is the
@@ -909,6 +963,11 @@ package OpenCV.Calib3D is
       Refined       : out Boolean);
 
 private
+   type Metric_Point_Refinement_Result is record
+      State : Metric_Refinement_Disposition := Initial_No_Baseline;
+      Original, Candidate : Metric_Triangulated_Point;
+      Optimization : Optional_Point_Refinement;
+   end record;
    --  Has_Pose is true only when Select_AP3P_Pose copied the selected
    --  hypothesis from its own solver result. Disposition alone is not enough.
    type AP3P_Pose_Selection (Count : Natural) is record

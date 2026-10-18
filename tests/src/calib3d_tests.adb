@@ -7330,9 +7330,272 @@ package body Calib3D_Tests is
       end loop;
    end Metric_Invalid;
 
+   function Metric_Refined
+     (Policy : Metric_Triangulation_Options := (0.0, 1.0, 1.0, 1.0);
+      Allowance : Metric_Refinement_Acceptance_Options := (1.0, 1.0);
+      Options : Triangulation_Refinement_Options := (20, 0.0);
+      A : Image_Point := [0.5, 0.126]; B : Image_Point := [0.25, 0.124];
+      First : World_To_Camera_Pose := Metric_First;
+      Second : World_To_Camera_Pose := Metric_Second)
+      return Metric_Point_Refinement_Result
+   is
+      V : constant Metric_Point_Refinement_Result_Array := Refine_Metric_World_Points
+        ([1 => A], [1 => B], Metric_K, Metric_K, No_Distortion, No_Distortion,
+         First, Second, Policy, Options, Allowance);
+   begin
+      return V (1);
+   end Metric_Refined;
+
+   procedure Metric_Refinement_Oracle (T : in out Fixture) is
+      pragma Unreferenced (T);
+      V : constant Metric_Point_Refinement_Result := Metric_Refined;
+      O : constant Metric_Triangulated_Point := Original_Reconstruction (V);
+      R : constant Optional_Point_Refinement := Normalized_Refinement (V);
+      C : constant Metric_Triangulated_Point := Refined_Diagnostics (V);
+      Expected : constant Metric_Triangulated_Point := Metric_Rectified
+        (A => [0.5, 0.126], B => [0.25, 0.124], Policy => (0.0, 1.0, 1.0, 1.0));
+   begin
+      Assert (Accepted (V) and then Disposition (V) = Refined_Metric_Accepted, "metric refinement accepted");
+      Assert (R.Available and then R.Value.Outcome = Improved and then R.Value.Accepted_Steps > 0
+              and then R.Value.Residuals_Evaluated and then
+              R.Value.Final_Normalized_RMS < R.Value.Initial_Normalized_RMS, "strict normalized improvement");
+      Assert (O = Expected, "original full reconstruction preserved exactly");
+      --  Rectified equal-x fit: X/Z=.5, (X-2)/Z=.25, Y/Z=mean(.126,.124).
+      Assert (Point_Gap (Accepted_World_Position (V), [4.0, 1.0, 8.0]) < 1.0E-8,
+              "independent noisy rectified least-squares world oracle");
+      Assert (abs (C.Geometry.First_Depth - 8.0) < 1.0E-8 and then
+              abs (C.Source.Point.First_Normalized_Error - 0.001) < 1.0E-10 and then
+              abs (C.Source.Point.Second_Normalized_Error - 0.001) < 1.0E-10,
+              "fresh normalized errors and metric depths");
+   end Metric_Refinement_Oracle;
+
+   procedure Metric_Refinement_Acceptance (T : in out Fixture) is
+      pragma Unreferenced (T);
+      V : constant Metric_Point_Refinement_Result := Metric_Refined;
+      O : constant Metric_Triangulated_Point := Original_Reconstruction (V);
+      C : constant Metric_Triangulated_Point := Refined_Diagnostics (V);
+      Worsening : constant OpenCV.Float64_Value := C.Pixels.First_Error_Pixels - O.Pixels.First_Error_Pixels;
+      Strict : constant Metric_Point_Refinement_Result := Metric_Refined (Allowance => (0.0, 0.0));
+      Equal : constant Metric_Point_Refinement_Result := Metric_Refined (Allowance => (Worsening, 1.0));
+      Below : constant Metric_Point_Refinement_Result := Metric_Refined
+        (Allowance => (OpenCV.Float64_Value'Adjacent (Worsening, 0.0), 1.0));
+      Rescue : constant Metric_Point_Refinement_Result := Metric_Refined
+        (Policy => (0.0, 1.0, 1.0, (O.Pixels.Second_Error_Pixels + C.Pixels.Second_Error_Pixels) / 2.0));
+      Rejected : constant Metric_Point_Refinement_Result := Metric_Refined (Policy => (0.0, 0.0, 1.0, 1.0));
+   begin
+      Assert (Worsening > 0.0 and then not Accepted (Strict) and then
+              Disposition (Strict) = Refined_Policy_Rejected, "normalized improvement does not imply pixel improvement");
+      Assert (Accepted (Equal), "direct finite subtraction, allowance equality inclusive");
+      Assert (not Accepted (Below), "one Float64 step below worsening boundary rejected without epsilon");
+      Assert (Original_Reconstruction (Rescue).Disposition = Metric_Policy_Rejected and then
+              Accepted (Rescue), "initial policy rejection can be rescued only by final full policy");
+      Assert (not Accepted (Rejected), "normalized final policy enforced");
+      declare
+         Inclusive : constant Metric_Point_Refinement_Result := Metric_Refined
+           (Policy => (C.Source.Quality.Parallax.Acute_Line_Angle_Radians,
+             OpenCV.Float64_Value'Max (C.Source.Point.First_Normalized_Error, C.Source.Point.Second_Normalized_Error),
+             C.Pixels.First_Error_Pixels, C.Pixels.Second_Error_Pixels));
+      begin
+         Assert (Accepted (Inclusive), "all four final metric threshold equalities inclusive");
+      end;
+      begin
+         declare
+            P : constant Object_Point := Accepted_World_Position (Strict);
+            pragma Unreferenced (P);
+         begin
+            Assert (False, "unaccepted candidate position published as accepted");
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+   end Metric_Refinement_Acceptance;
+
+   procedure Metric_Refinement_Skips (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Zero : constant Metric_Point_Refinement_Result := Metric_Refined (Second => Metric_First);
+      Infinity : constant Metric_Point_Refinement_Result := Metric_Refined (A => [0.0, 0.0], B => [0.0, 0.0]);
+      Behind : constant Metric_Point_Refinement_Result := Metric_Refined (A => [-0.5, -0.125], B => [-0.25, -0.125]);
+      Low : constant Metric_Point_Refinement_Result := Metric_Refined (Options => (20, 1.0));
+      Exact : constant Metric_Point_Refinement_Result := Metric_Refined (A => [0.0, 0.0], B => [-0.5, 0.0]);
+   begin
+      Assert (Disposition (Zero) = Initial_No_Baseline and then
+              not Normalized_Refinement (Zero).Available, "zero baseline explicit absent optimization");
+      Assert (Disposition (Infinity) = Initial_Source_Unusable and then
+              Disposition (Behind) = Initial_Source_Unusable, "non-Usable source skipped");
+      Assert (Disposition (Low) = Refinement_Low_Parallax and then
+              Normalized_Refinement (Low).Value.Outcome = Skipped_Low_Parallax, "low acute parallax skipped");
+      Assert ((Disposition (Exact) = Refinement_No_Improving_Step or else Accepted (Exact)) and then
+              Point_Gap (Original_Reconstruction (Exact).Geometry.World_Position, [0.0, 0.0, 4.0]) < 1.0E-12,
+              "exact scene preserves initial despite version-dependent SVD rounding");
+   end Metric_Refinement_Skips;
+
+   procedure Metric_Refinement_General (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant World_To_Camera_Pose := ([0.0, 0.0, 0.3], [0.2, -0.1, 0.4]);
+      B : constant World_To_Camera_Pose := ([-0.2, 0.0, 0.0], [-1.8, 0.3, 0.2]);
+      KA : constant Camera_Intrinsics := (800.0, 820.0, 320.0, 240.0);
+      KB : constant Camera_Intrinsics := (600.0, 640.0, 310.0, 220.0);
+      DA : constant Distortion_Coefficients := (-0.12, 0.03, 0.001, -0.0015, 0.004);
+      DB : constant Distortion_Coefficients := (0.08, -0.02, -0.002, 0.001, -0.003);
+      Truth : constant Object_Point := [1.4, 0.6, 8.0];
+      CA : constant Object_Point :=
+        [Math.Cos (0.3) * 1.4 - Math.Sin (0.3) * 0.6 + 0.2,
+         Math.Sin (0.3) * 1.4 + Math.Cos (0.3) * 0.6 - 0.1, 8.4];
+      CB : constant Object_Point :=
+        [-0.4, Math.Cos (-0.2) * 0.6 - Math.Sin (-0.2) * 8.0 + 0.3,
+         Math.Sin (-0.2) * 0.6 + Math.Cos (-0.2) * 8.0 + 0.2];
+   begin
+      for Model in 1 .. 2 loop
+         declare
+            D1 : constant Distortion_Coefficients := (if Model = 1 then No_Distortion else DA);
+            D2 : constant Distortion_Coefficients := (if Model = 1 then No_Distortion else DB);
+            P : Image_Point_Array := [1 => Scalar_Project (CA, KA, D1)];
+            Q : Image_Point_Array := [1 => Scalar_Project (CB, KB, D2)];
+         begin
+            P (1) (1) := P (1) (1) + 0.2;
+            Q (1) (0) := Q (1) (0) - 0.15;
+            declare
+               V : constant Metric_Point_Refinement_Result_Array := Refine_Metric_World_Points
+                 (P, Q, KA, KB, D1, D2, A, B, (0.01, 0.01, 5.0, 5.0), (30, 0.0), (5.0, 5.0));
+               W : constant Metric_Point_Refinement_Result_Array := Refine_Metric_World_Points
+                 (Q, P, KB, KA, D2, D1, B, A, (0.01, 0.01, 5.0, 5.0), (30, 0.0), (5.0, 5.0));
+            begin
+               Assert (Accepted (V (1)) and then Accepted (W (1)), "noncommuting reversed Brown refinement accepted");
+               Assert (Point_Gap (Accepted_World_Position (V (1)), Truth) < 0.02 and then
+                       Point_Gap (Accepted_World_Position (W (1)), Truth) < 0.02 and then
+                       Point_Gap (Accepted_World_Position (V (1)), Accepted_World_Position (W (1))) < 1.0E-7,
+                       "independent noisy geometry and reversal tolerance");
+            end;
+         end;
+      end loop;
+   end Metric_Refinement_General;
+
+   procedure Metric_Refinement_Range (T : in out Fixture) is
+      pragma Unreferenced (T);
+      B : World_To_Camera_Pose := Metric_Second;
+      A : World_To_Camera_Pose := Metric_First;
+   begin
+      for Scale of Object_Point'[1.0E-300, 1.0E300, 1.0] loop
+         B.Translation := [-2.0 * Scale, 0.0, 0.0];
+         declare
+            V : constant Metric_Point_Refinement_Result := Metric_Refined (Second => B);
+         begin
+            Assert (Accepted (V), "nonzero tiny/large baseline retained");
+            Assert (abs (Accepted_World_Position (V) (2) / Scale - 8.0) < 1.0E-8, "scaled analytic world depth");
+         end;
+      end loop;
+      A.Translation := [-1.0E12, 0.0, 0.0];
+      B.Translation := [-1.0E12 - 2.0, 0.0, 0.0];
+      declare
+         V : constant Metric_Point_Refinement_Result := Metric_Refined (First => A, Second => B);
+      begin
+         Assert (Original_Reconstruction (V).Geometry.Available, "large origin initial remains owned");
+         if Accepted (V) then
+            Assert (abs (Accepted_World_Position (V) (0) - (1.0E12 + 4.0)) < 0.001,
+                    "representable small offset at large origin");
+         end if;
+      end;
+      B := Metric_Second;
+      B.Translation (0) := -1.0E308;
+      declare
+         V : constant Metric_Point_Refinement_Result := Metric_Refined (Second => B);
+      begin
+         Assert (Disposition (V) = Initial_Geometry_Unavailable and then
+                 not Normalized_Refinement (V).Available, "initial overflow cannot masquerade as refinable geometry");
+      end;
+   end Metric_Refinement_Range;
+
+   procedure Metric_Refinement_Bounds (T : in out Fixture) is
+      pragma Unreferenced (T);
+      P : constant Image_Point_Array (Positive'Last - 2 .. Positive'Last) :=
+        [[0.5, 0.126], [0.0, 0.0], [0.0, 0.0]];
+      Q : constant Image_Point_Array (7 .. 9) := [[0.25, 0.124], [0.0, 0.0], [-0.5, 0.0]];
+      V : constant Metric_Point_Refinement_Result_Array := Refine_Metric_World_Points
+        (P, Q, Metric_K, Metric_K, No_Distortion, No_Distortion, Metric_First, Metric_Second,
+         (0.0, 1.0, 1.0, 1.0), (20, 0.0), (0.0, 0.0));
+      E : constant Metric_Point_Refinement_Result_Array := Refine_Metric_World_Points
+        (P (1 .. 0), Q (1 .. 0), Metric_K, Metric_K, No_Distortion, No_Distortion,
+         Metric_First, Metric_Second, Metric_Policy, (20, 0.0), (0.0, 0.0));
+   begin
+      Assert (V'First = 1 and then V'Last = 3 and then E'First = 1 and then E'Last = 0,
+              "positional bounds and valid empty");
+      Assert (Disposition (V (1)) = Refined_Policy_Rejected and then
+              Disposition (V (2)) = Initial_Source_Unusable and then
+              Original_Reconstruction (V (3)).Geometry.Available and then
+              Point_Gap (Original_Reconstruction (V (3)).Geometry.World_Position, [0.0, 0.0, 4.0]) < 1.0E-12,
+              "mixed rejected unavailable retained batch order: " & Disposition (V (1))'Image &
+              Disposition (V (2))'Image & Disposition (V (3))'Image);
+   end Metric_Refinement_Bounds;
+
+   procedure Metric_Refinement_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      function Nonfinite (Kind : Interfaces.C.int) return Interfaces.C.double
+        with Import, Convention => C, External_Name => "calib3d_test_nonfinite";
+      K : Camera_Intrinsics := Metric_K;
+      D : Distortion_Coefficients := No_Distortion;
+      Pose : World_To_Camera_Pose := Metric_First;
+      Policy : Metric_Triangulation_Options := Metric_Policy;
+      Options : Triangulation_Refinement_Options := (20, 0.0);
+      Allowance : Metric_Refinement_Acceptance_Options := (0.0, 0.0);
+      P : Image_Point := [0.5, 0.126];
+      procedure Reject (Empty : Boolean := True; Mismatch : Boolean := False) is
+      begin
+         declare
+            V : constant Metric_Point_Refinement_Result_Array := Refine_Metric_World_Points
+              ((if Empty then Image_Point_Array'[1 .. 0 => <>] else [1 => P]),
+               (if Empty or Mismatch then Image_Point_Array'[1 .. 0 => <>] else [1 => [0.25, 0.124]]),
+               K, Metric_K, D, No_Distortion, Pose, Metric_Second, Policy, Options, Allowance);
+            pragma Unreferenced (V);
+         begin
+            Assert (False, "invalid metric refinement input accepted");
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Reject;
+   begin
+      for Kind in Interfaces.C.int range 0 .. 2 loop
+         declare
+            Bad : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Kind));
+         begin
+            Allowance.Maximum_First_Pixel_Worsening := Bad; Reject;
+            Allowance := (0.0, Bad); Reject;
+            Allowance := (0.0, 0.0);
+            Options.Minimum_Acute_Parallax_Radians := Bad; Reject;
+            Options := (20, 0.0);
+            K.Focal_X := Bad; Reject; K := Metric_K;
+            D.K3 := Bad; Reject; D := No_Distortion;
+            Pose.Rotation (2) := Bad; Reject; Pose := Metric_First;
+            P (0) := Bad; Reject (False); P := [0.5, 0.126];
+            for Field in 1 .. 4 loop
+               case Field is
+                  when 1 => Policy.Minimum_Acute_Parallax_Radians := Bad;
+                  when 2 => Policy.Maximum_Normalized_Reprojection_Error := Bad;
+                  when 3 => Policy.Maximum_First_Pixel_Reprojection_Error := Bad;
+                  when 4 => Policy.Maximum_Second_Pixel_Reprojection_Error := Bad;
+               end case;
+               Reject; Policy := Metric_Policy;
+            end loop;
+         end;
+      end loop;
+      Allowance := (-1.0, 0.0); Reject; Allowance := (0.0, -1.0); Reject;
+      Allowance := (0.0, 0.0);
+      Options.Maximum_Iterations := 101; Reject; Options := (20, 2.0); Reject;
+      Options := (20, -1.0); Reject; Options := (20, 0.0);
+      K.Focal_Y := 0.0; Reject; K := Metric_K;
+      Reject (False, True);
+   end Metric_Refinement_Invalid;
+
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
+      Result.Add_Test (Caller.Create ("metric refinement analytic noisy world oracle and preserved original", Metric_Refinement_Oracle'Access));
+      Result.Add_Test (Caller.Create ("metric refinement independent pixel acceptance and equality", Metric_Refinement_Acceptance'Access));
+      Result.Add_Test (Caller.Create ("metric refinement zero baseline unusable low parallax no improvement", Metric_Refinement_Skips'Access));
+      Result.Add_Test (Caller.Create ("metric refinement noncommuting unequal intrinsics Brown reversal", Metric_Refinement_General'Access));
+      Result.Add_Test (Caller.Create ("metric refinement tiny large baseline origin and overflow", Metric_Refinement_Range'Access));
+      Result.Add_Test (Caller.Create ("metric refinement mixed positional Positive Last bounds and empty", Metric_Refinement_Bounds'Access));
+      Result.Add_Test (Caller.Create ("metric refinement invalid finite counts calibration and policy", Metric_Refinement_Invalid'Access));
       Result.Add_Test (Caller.Create ("compiler-derived fundamental/options layouts", Fundamental_Layout'Access));
       Result.Add_Test (Caller.Create ("planar pure/general/scale independent oracle", Planar_Oracle'Access));
       Result.Add_Test (Caller.Create ("visibility independent normal-sign oracle", Visibility_Signs'Access));

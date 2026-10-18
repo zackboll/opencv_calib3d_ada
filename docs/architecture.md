@@ -1,5 +1,22 @@
 # Architecture
 
+## Task 020 metric point refinement
+
+One initial `Triangulate_World_Points` batch is preserved verbatim. Eligible
+source values feed the existing pure-Ada `Refine_Triangulated_Points` batch.
+Shared internal metric conversion/projection validation serves both Task 019 and
+improved candidates, preserving initial behavior and exception boundaries.
+Normalized diagnostics of actual representable world coordinates are recomputed
+after conversion. Native projection exceptions abort the complete batch, while
+arithmetic unavailability remains per point. Private owned results distinguish
+original, optimization, candidate diagnostics, and accepted world position.
+The fixed-pose chain is unit-baseline refinement -> known baseline scaling ->
+metric first-camera coordinates -> world transform -> final pixel/quality policy.
+No native ABI operation, new optimizer, C++ change, public handle or dependency.
+Pose, baseline, intrinsics and distortion stay fixed; no covariance, depth
+uncertainty, bundle adjustment, pose optimization, DTED/geographic conversion or
+navigation fusion. See [contract](metric-point-refinement-contract.md).
+
 ## Task 019 metric triangulation orchestration
 
 Separate native undistortion for each camera feeds existing native normalized
