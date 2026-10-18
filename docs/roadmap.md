@@ -1,5 +1,17 @@
 # Roadmap
 
+## Task 026 approved scope
+
+Reciprocal supplied-plane correspondence verification only: Task 025 once per
+direction, independent mandatory policy, world-point separation gate, complete
+owned diagnostics, explicit source-coordinate provenance and final-only compact
+later-image adapter. No fitted/averaged point, pose estimation, homography, image
+warp, terrain/Earth model, geodesy, bundle adjustment, SLAM or navigation fusion.
+Preserve 48 private ABI operations, Core ownership and existing qualification gates.
+Windows remains post-merge only; stop at independent review, without merge/release.
+See [contract](reciprocal-plane-correspondence-contract.md) and
+[qualification](reciprocal-plane-correspondence-validation.md).
+
 ## Task 025 approved scope
 
 Plane-constrained cross-camera correspondence verification only: caller-supplied

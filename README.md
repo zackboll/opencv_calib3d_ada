@@ -1,5 +1,30 @@
 # OpenCV Calib3D for Ada
 
+## Task 026: reciprocal plane-constrained two-camera verification
+
+`Verify_Reciprocal_Plane_Correspondences` reuses Task 025 once per direction,
+independently intersects both rays with a supplied plane, and requires both target
+reprojections and an inclusive world-separation gate to pass. Mandatory `Forward`
+and `Backward` policies are independent (`reverse` is an Ada reserved word).
+Complete owned directional diagnostics survive rejection; source-only acceptance,
+target acceptance, separation availability and final acceptance are distinct.
+
+The accepted first-camera representative is **not** fused with the independent
+second-camera point. Only final accepted representatives enter the distinctly named
+`Reciprocal_Plane_Landmark_Observations` later-image adapter. Same-center cameras
+are allowed. Agreement is supplied-model compatibility, not physical ground truth.
+No solver, geometric kernel, C ABI operation or dependency is added (48 remain).
+
+The fourteenth example uses synthetic observations only:
+
+```sh
+alr -n -C examples build
+alr -n -C examples exec -- sh ../scripts/run_native.sh bin/reciprocal_plane_correspondence_synthetic
+```
+
+See [reciprocal contract](docs/reciprocal-plane-correspondence-contract.md) and
+[qualification / developer source review](docs/reciprocal-plane-correspondence-validation.md).
+
 ## Task 025: plane-constrained cross-camera correspondence verification
 
 `Verify_Plane_Constrained_Correspondences` composes the existing calibrated

@@ -1,5 +1,25 @@
 # Coverage
 
+## Task 026 reciprocal plane correspondence verification
+
+231 AUnit registrations preserve all 223 baseline registrations and add eight
+groups: independent downward and inconsistent 8/10-pixel, 0.1-world-unit oracles;
+inclusive/adjacent separation gate and asymmetric direction policies; independent
+scalar Rodrigues/Brown tilted-plane projections with swapped cameras; mixed source
+grazing/behind/range rejections and valid neighbors; zero/tiny/large separation,
+norm/subtraction overflow, large-origin rounding and source numerical failure;
+same-center distinct rotations; empty/extreme bounds, default guards, owned copies,
+slices and final-only adapter; malformed cameras/plane/both policies including
+empty input. The fourteenth example asserts synthetic counts and world geometry.
+
+Actual-shim faults add 40 forward first-hit injections and 40 separately swapped
+Task 025 injections, testing invalid reverse-policy preflight, empty checkpoint
+preservation, atomicity and recovery. First-hit hooks cannot establish reverse-only
+injection through the reciprocal wrapper; no such claim or new hook is made.
+Source checks enforce exactly two batch delegations and arithmetic-handler scope.
+See [execution and developer review](reciprocal-plane-correspondence-validation.md);
+inventory alone is not a passing-result claim. Private ABI remains 48 operations.
+
 ## Task 025 plane-constrained correspondence verification
 
 223 AUnit registrations preserve all 215 baseline registrations and add eight

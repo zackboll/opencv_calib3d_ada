@@ -8,6 +8,44 @@ from workflow_topology import check_topology  # noqa: E402
 
 
 class RepositoryTests(unittest.TestCase):
+    def test_reciprocal_validation_batches_and_arithmetic_isolation(self):
+        text = (ROOT / "src/opencv-calib3d.adb").read_text()
+        start = text.index("   function Verify_Reciprocal_Plane_Correspondences")
+        stop = text.index("   function Reciprocal_Plane_Landmark_Observations", start)
+        operation = text[start:stop]
+        validation = operation[:operation.index("Forward : constant")]
+        for name in ("First_Pixels", "Second_Pixels", "First_Intrinsics", "Second_Intrinsics",
+                     "First_Distortion", "Second_Distortion", "First_Pose", "Second_Pose"):
+            self.assertIn(f"Validate ({name})", validation)
+        for name in ("Options.Forward", "Options.Backward"):
+            self.assertIn(f"Validate (Plane, {name})", validation)
+        self.assertIn("Is_Finite (Options.Maximum_World_Separation)", validation)
+        self.assertIn("Interfaces.Integer_32'Last", validation)
+        self.assertEqual(operation.count(":= Verify_Plane_Constrained_Correspondences"), 2)
+        self.assertIn("(First_Pixels, Second_Pixels, First_Intrinsics, Second_Intrinsics,\n"
+                      "            First_Distortion, Second_Distortion, First_Pose, Second_Pose, Plane, Options.Forward)", operation)
+        self.assertIn("(Second_Pixels, First_Pixels, Second_Intrinsics, First_Intrinsics,\n"
+                      "            Second_Distortion, First_Distortion, Second_Pose, First_Pose, Plane, Options.Backward)", operation)
+        self.assertLess(operation.index("Backward : constant"), operation.index("for I in Results'Range"))
+        arithmetic = operation[operation.index("                        begin\n                           for Axis"):
+                               operation.index("                  --  Separation is diagnostic")]
+        for name in ("Checked_Difference", "Scaled_Vector_Norm", "when OpenCV.OpenCV_Error"):
+            self.assertIn(name, arithmetic)
+        for name in ("Source_World_Position", "Verify_", "Source_Intersection", "C."):
+            self.assertNotIn(name, arithmetic)
+        self.assertIn("if F and then B then", operation)
+        self.assertLess(operation.index("R.Has_Separation := True"), operation.index("if not F and then not B then"))
+        for name in ("Project_Points", "Unproject_", "World_Bearing_Rays", "Solve_", "Refine_", "C."):
+            self.assertNotIn(name, operation)
+
+    def test_reciprocal_example_and_hosted_registration(self):
+        for filename in ("cross-platform.yml", "opencv-compatibility.yml"):
+            self.assertIn("bin/reciprocal_plane_correspondence_synthetic",
+                          (ROOT / ".github/workflows" / filename).read_text())
+        example = (ROOT / "examples/src/reciprocal_plane_correspondence_synthetic.adb").read_text()
+        self.assertNotIn(" := Project_Points", example)
+        self.assertIn("raise Program_Error", example)
+
     def test_world_plane_reuses_rays_and_has_no_native_arithmetic_handler(self):
         text = (ROOT / "src/opencv-calib3d.adb").read_text()
         start = text.index("   function Intersect_World_Rays_With_Plane")
@@ -63,8 +101,10 @@ class RepositoryTests(unittest.TestCase):
         for value in ("First_Pixels", "Second_Pixels", "First_Intrinsics", "Second_Intrinsics",
                       "First_Distortion", "Second_Distortion", "First_Pose", "Second_Pose"):
             self.assertIn(f"Validate ({value})", validation)
-        self.assertIn("Validate (Plane, Options.Intersection)", validation)
-        self.assertIn("Is_Finite (Options.Maximum_Second_Pixel_Error)", validation)
+        self.assertIn("Validate (Plane, Options)", validation)
+        policy = text[text.index("   procedure Validate\n     (Plane : World_Plane; Options : Plane_Correspondence"):start]
+        self.assertIn("Validate (Plane, Options.Intersection)", policy)
+        self.assertIn("Is_Finite (Options.Maximum_Second_Pixel_Error)", policy)
         for name in ("Unproject_Pixels_Onto_World_Plane", "Evaluate_AP3P_References"):
             self.assertEqual(operation.count(name), 1)
         self.assertIn("if Accepted (Sources (I)) then", operation)

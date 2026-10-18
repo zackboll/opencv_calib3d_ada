@@ -6561,6 +6561,356 @@ package body Calib3D_Tests is
       end loop;
    end PC_Invalid;
 
+   RC_Policy : constant Reciprocal_Plane_Verification_Options := (PC_Policy, PC_Policy, 1.0E-8);
+   function RC_Run
+     (First : Image_Point_Array := [[420.0, 440.0]];
+      Second : Image_Point_Array := [[220.0, 340.0]];
+      A : World_To_Camera_Pose := PC_A; B : World_To_Camera_Pose := PC_B;
+      KA : Camera_Intrinsics := PC_KA; KB : Camera_Intrinsics := PC_KB;
+      DA : Distortion_Coefficients := No_Distortion; DB : Distortion_Coefficients := No_Distortion;
+      Plane : World_Plane := Ground; O : Reciprocal_Plane_Verification_Options := RC_Policy)
+      return Reciprocal_Plane_Result_Array is
+     (Verify_Reciprocal_Plane_Correspondences (First, Second, KA, KB, DA, DB, A, B, Plane, O));
+
+   procedure RC_Analytic (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Clean : constant Reciprocal_Plane_Result_Array := RC_Run;
+      Wrong : constant Reciprocal_Plane_Result_Array := RC_Run (Second => [[228.0, 340.0]]);
+   begin
+      Assert (Accepted (Clean (1)) and then Both_Source_Intersections_Accepted (Clean (1)), "analytic reciprocal accept");
+      Check_Vector (Accepted_First_Source_World_Position (Clean (1)), [1.0, -2.0, 0.0]);
+      Check_Vector (Accepted_Second_Source_World_Position (Clean (1)), [1.0, -2.0, 0.0]);
+      Assert (World_Separation (Clean (1)) < 1.0E-12 and then
+              Second_Pixel_Error (Forward_Verification (Clean (1))) < 1.0E-10 and then
+              Second_Pixel_Error (Reverse_Verification (Clean (1))) < 1.0E-10, "analytic clean residuals");
+      --  Independently: B x=(-2+X)*800/10+300; +8 pixels -> +0.1 world X.
+      Check_Vector (First_Source_World_Position (Wrong (1)), [1.0, -2.0, 0.0], 1.0E-12);
+      Check_Vector (Second_Source_World_Position (Wrong (1)), [1.1, -2.0, 0.0], 1.0E-12);
+      Assert (First_Source_World_Position (Wrong (1)) = First_Source_World_Position (Clean (1)), "B cannot move A point");
+      Assert (abs (World_Separation (Wrong (1)) - 0.1) < 1.0E-12 and then
+              abs (Second_Pixel_Error (Forward_Verification (Wrong (1))) - 8.0) < 1.0E-10 and then
+              abs (Second_Pixel_Error (Reverse_Verification (Wrong (1))) - 10.0) < 1.0E-10,
+              "independent world separation and asymmetric pixel residuals");
+   end RC_Analytic;
+
+   procedure RC_Gates (T : in out Fixture) is
+      pragma Unreferenced (T);
+      O : Reciprocal_Plane_Verification_Options := ((Plane_Policy, 15.0), (Plane_Policy, 15.0), 0.05);
+      function Run return Reciprocal_Plane_Result_Array is (RC_Run (Second => [[228.0, 340.0]], O => O));
+      Seed : constant Reciprocal_Plane_Result_Array := Run;
+      Measured : constant OpenCV.Float64_Value := World_Separation (Seed (1));
+   begin
+      Assert (Disposition (Seed (1)) = World_Separation_Rejected and then
+              Accepted (Forward_Verification (Seed (1))) and then Accepted (Reverse_Verification (Seed (1))),
+              "separation is independent acceptance gate");
+      for Limit of Object_Point'[Measured, OpenCV.Float64_Value'Adjacent (Measured, 0.0), 1.0] loop
+         O.Maximum_World_Separation := Limit;
+         declare R : constant Reciprocal_Plane_Result_Array := Run;
+         begin Assert (Accepted (R (1)) = (Limit >= Measured), "inclusive measured boundary without epsilon"); end;
+      end loop;
+      for Mode in 1 .. 3 loop
+         O.Forward.Maximum_Second_Pixel_Error := (if Mode = 3 then 15.0 else 5.0);
+         O.Backward.Maximum_Second_Pixel_Error := (if Mode = 1 then 15.0 else 5.0);
+         declare R : constant Reciprocal_Plane_Result_Array := Run;
+         begin
+            Assert (Disposition (R (1)) = (case Mode is
+              when 1 => Forward_Verification_Rejected, when 2 => Both_Directions_Rejected,
+              when others => Reverse_Verification_Rejected), "deterministic directional rejection");
+            Assert (World_Separation_Evaluated (R (1)) and then abs (World_Separation (R (1)) - 0.1) < 1.0E-12,
+                    "target rejections retain separation diagnostics");
+            Assert (Accepted (Forward_Verification (R (1))) = (Mode = 3) and then
+                    Accepted (Reverse_Verification (R (1))) = (Mode = 1), "complete directional outcomes retained");
+         end;
+      end loop;
+   end RC_Gates;
+
+   procedure RC_Brown (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant World_To_Camera_Pose := ([0.13, -0.09, 0.04], [0.2, -0.3, 1.0]);
+      B : constant World_To_Camera_Pose := ([-0.07, 0.11, 0.16], [-1.0, 0.2, 1.5]);
+      DA : constant Distortion_Coefficients := (0.08, -0.02, 0.003, -0.004, 0.005);
+      DB : constant Distortion_Coefficients := (-0.06, 0.013, -0.002, 0.003, -0.001);
+      Points : constant Object_Point_Array := [[1.0, -2.0, 5.2], [-0.5, 0.5, 3.65], [0.2, 0.3, 3.89]];
+      Plane : constant World_Plane := ([0.0, 0.0, 4.0], [-0.2, 0.5, 1.0]);
+      First, Second : Image_Point_Array (Points'Range);
+      O : constant Reciprocal_Plane_Verification_Options :=
+        (((0.01, 0.0, 100.0, 1.0E-8), 1.0E-6), ((0.02, 0.0, 200.0, 1.0E-8), 2.0E-6), 1.0E-8);
+   begin
+      for I in Points'Range loop
+         First (I) := Plane_Oracle_Pixel (Points (I), A, PC_KA, DA);
+         Second (I) := Plane_Oracle_Pixel (Points (I), B, PC_KB, DB);
+      end loop;
+      declare
+         R : constant Reciprocal_Plane_Result_Array := RC_Run (First, Second, A, B, DA => DA, DB => DB, Plane => Plane, O => O);
+         Swapped : constant Reciprocal_Plane_Result_Array := RC_Run
+           (Second, First, B, A, PC_KB, PC_KA, DB, DA, Plane, (O.Backward, O.Forward, O.Maximum_World_Separation));
+      begin
+         for I in R'Range loop
+            Assert (Accepted (R (I)) and then Accepted (Swapped (I)), "independent Brown tilted/swap accept");
+            Check_Vector (First_Source_World_Position (R (I)), Points (I), 1.0E-8);
+            Check_Vector (Second_Source_World_Position (R (I)), Points (I), 1.0E-8);
+            Check_Vector (First_Source_World_Position (Swapped (I)), Second_Source_World_Position (R (I)), 1.0E-8);
+            Assert (Second_Pixel_Error (Forward_Verification (R (I))) < 1.0E-6 and then
+                    Second_Pixel_Error (Reverse_Verification (R (I))) < 2.0E-6 and then
+                    abs (World_Separation (R (I)) - World_Separation (Swapped (I))) < 1.0E-8, "reverse calibration ownership");
+         end loop;
+      end;
+   end RC_Brown;
+
+   procedure RC_Sources (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Identity poses, X+Z=1: grazing x=-.999, behind x=-2,
+      --  too far x=-.9 (distance sqrt(181)), and a clean neighbor after each.
+      First : constant Image_Point_Array :=
+        [[0.0, 0.0], [-0.999, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0],
+         [-2.0, 0.0], [0.0, 0.0], [-0.9, 0.0], [0.0, 0.0], [-0.999, 0.0], [0.0, 0.0]];
+      Second : constant Image_Point_Array :=
+        [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [-0.999, 0.0], [0.0, 0.0],
+         [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [-0.999, 0.0], [0.0, 0.0]];
+      O : constant Reciprocal_Plane_Verification_Options :=
+        (((0.01, 0.0, 5.0, 1.0E-8), 10.0), ((0.01, 0.0, 5.0, 1.0E-8), 10.0), 10.0);
+      R : constant Reciprocal_Plane_Result_Array := RC_Run
+        (First, Second, (others => <>), (others => <>), (1.0, 1.0, 0.0, 0.0), (1.0, 1.0, 0.0, 0.0),
+         Plane => ([0.0, 0.0, 1.0], [1.0, 0.0, 1.0]), O => O);
+   begin
+      for I in R'Range loop
+         Assert (Original_Position (R (I)) = I, "source reject preserves positions");
+         Assert (Second_View_Evaluated (Forward_Verification (R (I))) =
+                 Accepted (Source_Intersection (Forward_Verification (R (I)))), "forward source gates target");
+         Assert (Second_View_Evaluated (Reverse_Verification (R (I))) =
+                 Accepted (Source_Intersection (Reverse_Verification (R (I)))), "reverse source gates target");
+         Assert (World_Separation_Evaluated (R (I)) = (I mod 2 = 1), "rejected sources never supply separation");
+         if I mod 2 = 1 then Assert (Accepted (R (I)), "healthy source neighbor"); end if;
+      end loop;
+      Assert (Disposition (R (2)) = Forward_Source_Rejected and then Disposition (R (4)) = Reverse_Source_Rejected
+              and then Disposition (R (10)) = Both_Sources_Rejected, "source precedence");
+      Assert (Disposition (Source_Intersection (Forward_Verification (R (2)))) = Grazing_Incidence_Rejected,
+              "source grazing diagnostic");
+      Assert (Disposition (Source_Intersection (Forward_Verification (R (6)))) = Intersection_Behind_Ray,
+              "source behind diagnostic");
+      Assert (Disposition (Source_Intersection (Forward_Verification (R (8)))) = Above_Maximum_Forward_Range,
+              "source range diagnostic");
+   end RC_Sources;
+
+   procedure RC_Numerical (T : in out Fixture) is
+      pragma Unreferenced (T);
+      K : constant Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);
+      Identity : constant World_To_Camera_Pose := (others => <>);
+      Huge : constant OpenCV.Float64_Value := OpenCV.Float64_Value'Last;
+      O : constant Reciprocal_Plane_Verification_Options :=
+        (((0.0, 0.0, Huge, Huge), Huge), ((0.0, 0.0, Huge, Huge), Huge), Huge);
+      function Run (P, Q : Image_Point_Array; A, B : World_To_Camera_Pose := Identity;
+                    Z : OpenCV.Float64_Value := 1.0) return Reciprocal_Plane_Result_Array is
+        (RC_Run (P, Q, A, B, K, K, Plane => ([0.0, 0.0, Z], [0.0, 0.0, 1.0]), O => O));
+      Tiny : constant Reciprocal_Plane_Result_Array := Run
+        ([[0.0, 0.0], [0.0, 0.0]], [[0.0, 0.0], [1.0E-150, 0.0]]);
+      Norm_Overflow : constant Reciprocal_Plane_Result_Array := Run
+        ([[0.0, 0.0]], [[0.0, 0.0]],
+         ([0.0, 0.0, 0.0], [-7.0E307, -7.0E307, 0.0]),
+         ([0.0, 0.0, 0.0], [7.0E307, 7.0E307, 0.0]), 1.0E308);
+      Subtraction : constant Reciprocal_Plane_Result_Array := Run
+        ([[0.0, 0.0]], [[0.0, 0.0]],
+         ([0.0, 0.0, 0.0], [-1.0E308, 0.0, 0.0]), ([0.0, 0.0, 0.0], [1.0E308, 0.0, 0.0]));
+      Large : constant Reciprocal_Plane_Result_Array := Run
+        ([[0.0, 0.0]], [[0.25, 0.0]], Z => 1.0E300);
+      Rounded : constant Reciprocal_Plane_Result_Array := Run
+        ([[0.0, 0.0]], [[1.0, 0.0]],
+         ([0.0, 0.0, 0.0], [-1.0E100, 0.0, 0.0]), ([0.0, 0.0, 0.0], [-1.0E100, 0.0, 0.0]));
+      Mixed : constant Reciprocal_Plane_Result_Array := Run
+        ([[0.0, 0.0], [1.0, 0.0], [0.0, 0.0]], [[0.0, 0.0], [-1.0, 0.0], [0.0, 0.0]], Z => 1.0E308);
+      Source_Failure : constant Reciprocal_Plane_Result_Array := RC_Run
+        ([[0.0, 0.0], [-0.5, 0.0], [0.0, 0.0]], [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+         Identity, Identity, K, K, Plane => ([0.0, 0.0, 1.0E308], [1.0, 0.0, 1.0]), O => O);
+   begin
+      Assert (World_Separation (Tiny (1)) = 0.0 and then World_Separation (Tiny (2)) > 0.0 and then
+              abs (World_Separation (Tiny (2)) / 1.0E-150 - 1.0) < 1.0E-12, "zero and tiny are distinct");
+      Assert (Both_Source_Intersections_Accepted (Norm_Overflow (1)) and then
+              not World_Separation_Evaluated (Norm_Overflow (1)), "scaled norm overflow unavailable");
+      Assert (Both_Source_Intersections_Accepted (Subtraction (1)) and then
+              not World_Separation_Evaluated (Subtraction (1)), "checked subtraction overflow unavailable");
+      Assert (World_Separation (Large (1)) > 1.0E299 and then
+              abs (World_Separation (Large (1)) / 1.0E300 - 0.25) < 1.0E-12, "large representable norm");
+      Assert (World_Separation (Rounded (1)) = 0.0,
+              "large-origin rounding erases world difference; no physical accuracy claim");
+      Assert (Accepted (Mixed (1)) and then Accepted (Mixed (3)) and then
+              Disposition (Mixed (2)) = World_Separation_Numerically_Unavailable,
+              "one unavailable separation leaves accepted neighbors");
+      Assert (Disposition (Source_Intersection (Forward_Verification (Source_Failure (2)))) = Numerically_Unavailable
+              and then not World_Separation_Evaluated (Source_Failure (2)) and then Accepted (Source_Failure (3)),
+              "source numerical unavailability never supplies coordinates");
+   end RC_Numerical;
+
+   procedure RC_Same_Center (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant World_To_Camera_Pose := ([0.0, 0.0, 0.2], [others => 0.0]);
+      B : constant World_To_Camera_Pose := ([0.1, 0.0, 0.0], [others => 0.0]);
+      P : constant Object_Point := [0.3, -0.2, 4.0];
+      R : constant Reciprocal_Plane_Result_Array := RC_Run
+        ([Plane_Oracle_Pixel (P, A, PC_KA, No_Distortion)], [Plane_Oracle_Pixel (P, B, PC_KB, No_Distortion)],
+         A, B, Plane => ([0.0, 0.0, 4.0], [0.0, 0.0, 1.0]));
+   begin
+      Assert (Accepted (R (1)), "same physical center with independent rotations");
+      Check_Vector (Accepted_First_Source_World_Position (R (1)), P);
+      Check_Vector (Accepted_Second_Source_World_Position (R (1)), P);
+   end RC_Same_Center;
+
+   procedure RC_Ownership (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      First : Image_Point_Array (Positive'Last - 2 .. Positive'Last) := [others => [420.0, 440.0]];
+      Second : Image_Point_Array (11 .. 13) := [[220.0, 340.0], [228.0, 340.0], [220.0, 340.0]];
+      R : constant Reciprocal_Plane_Result_Array := RC_Run (First, Second);
+      Copy : constant Reciprocal_Plane_Result_Array (7 .. 8) := R (2 .. 3);
+      Later : Image_Point_Array (Positive'Last - 1 .. Positive'Last) := [[3.0, 4.0], [5.0, 6.0]];
+      Default : Reciprocal_Plane_Result;
+   begin
+      First := [others => [0.0, 0.0]]; Second := [others => [0.0, 0.0]];
+      Assert (Accepted (R (1)) and then Original_Position (Copy (7)) = 2 and then Original_Position (Copy (8)) = 3,
+              "owned copies retain identities after caller mutation and rebasing");
+      declare
+         Last_Second : constant Image_Point_Array (Positive'Last - 2 .. Positive'Last) :=
+           [[220.0, 340.0], [228.0, 340.0], [220.0, 340.0]];
+         Again : constant Reciprocal_Plane_Result_Array := RC_Run
+           ([11 .. 13 => [420.0, 440.0]], Last_Second);
+         Owned_Forward : constant Plane_Correspondence_Result := Forward_Verification (Copy (8));
+      begin
+         Assert (Again = R and then Original_Position (Owned_Forward) = 3 and then Accepted (Owned_Forward),
+                 "second array at Positive Last and complete owned directional copy");
+      end;
+      declare S : constant Accepted_Landmark_Set := Reciprocal_Plane_Landmark_Observations (Copy, Later);
+      begin
+         Assert (S.Count = 1 and then Original_Positions (S) = [3] and then Image_Points (S) = [[5.0, 6.0]], "adapter mapping");
+         Check_Vector (World_Points (S) (1), [1.0, -2.0, 0.0]);
+      end;
+      Assert (not Directions_Evaluated (Default) and then not Both_Source_Intersections_Accepted (Default)
+              and then not World_Separation_Evaluated (Default) and then not Accepted (Default), "default predicates");
+      for Mode in 1 .. 8 loop
+         begin
+            declare
+               D : Plane_Correspondence_Result;
+               P : Object_Point;
+               V : OpenCV.Float64_Value;
+               pragma Unreferenced (D, P, V);
+            begin
+               case Mode is
+                  when 1 => D := Forward_Verification (Default);
+                  when 2 => D := Reverse_Verification (Default);
+                  when 3 => V := World_Separation (Default);
+                  when 4 => P := First_Source_World_Position (Default);
+                  when 5 => P := Second_Source_World_Position (Default);
+                  when 6 => P := Accepted_First_Source_World_Position (Default);
+                  when 7 => P := Accepted_Second_Source_World_Position (Default);
+                  when others => P := Accepted_First_Source_World_Position (Copy (7));
+               end case;
+               Assert (False, "guard allowed unavailable diagnostic");
+            end;
+         exception when OpenCV.OpenCV_Error => null; end;
+      end loop;
+      Later (Later'First) := [OpenCV.Float64_Value (Nonfinite (0)), 0.0];
+      begin
+         declare S : constant Accepted_Landmark_Set := Reciprocal_Plane_Landmark_Observations (Copy, Later);
+         begin Assert (S.Count = 999, "adapter must validate rejected pixel"); end;
+      exception when OpenCV.OpenCV_Error => null; end;
+      begin
+         declare S : constant Accepted_Landmark_Set := Reciprocal_Plane_Landmark_Observations (Copy, []);
+         begin Assert (S.Count = 999, "adapter count mismatch"); end;
+      exception when OpenCV.OpenCV_Error => null; end;
+      declare
+         Empty : constant Reciprocal_Plane_Result_Array := RC_Run ([], []);
+         S : constant Accepted_Landmark_Set := Reciprocal_Plane_Landmark_Observations ([Copy (7)], [[0.0, 0.0]]);
+      begin
+         Assert (Empty'First = 1 and then Empty'Last = 0 and then S.Count = 0 and then World_Points (S)'First = 1
+                 and then World_Points (S)'Last = 0, "empty request and no accepted adapter");
+      end;
+   end RC_Ownership;
+
+   procedure RC_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      procedure Bad
+        (First : Image_Point_Array := [1 .. 0 => <>]; Second : Image_Point_Array := [1 .. 0 => <>];
+         A : World_To_Camera_Pose := PC_A; B : World_To_Camera_Pose := PC_B;
+         KA : Camera_Intrinsics := PC_KA; KB : Camera_Intrinsics := PC_KB;
+         DA : Distortion_Coefficients := No_Distortion; DB : Distortion_Coefficients := No_Distortion;
+         Plane : World_Plane := Ground; O : Reciprocal_Plane_Verification_Options := RC_Policy) is
+      begin
+         declare R : constant Reciprocal_Plane_Result_Array := RC_Run (First, Second, A, B, KA, KB, DA, DB, Plane, O);
+         begin Assert (R'Length = 999, "malformed request accepted, including empty input"); end;
+      exception when OpenCV.OpenCV_Error => null; end Bad;
+   begin
+      Bad (First => [[0.0, 0.0]]);
+      Bad (KA => (0.0, 1.0, 0.0, 0.0));
+      Bad (KB => (1.0, -1.0, 0.0, 0.0));
+      Bad (Plane => ([0.0, 0.0, 0.0], [others => 0.0]));
+      Bad (O => (PC_Policy, PC_Policy, -1.0));
+      Bad (O => ((Plane_Policy, -1.0), PC_Policy, 1.0));
+      Bad (O => (PC_Policy, (Plane_Policy, -1.0), 1.0));
+      Bad (O => (((-0.1, 0.0, 1.0, 0.0), 0.0), PC_Policy, 1.0));
+      Bad (O => (PC_Policy, ((-0.1, 0.0, 1.0, 0.0), 0.0), 1.0));
+      Bad (O => (((1.1, 0.0, 1.0, 0.0), 0.0), PC_Policy, 1.0));
+      Bad (O => (PC_Policy, ((1.1, 0.0, 1.0, 0.0), 0.0), 1.0));
+      Bad (O => (((0.0, -1.0, 1.0, 0.0), 0.0), PC_Policy, 1.0));
+      Bad (O => (PC_Policy, ((0.0, -1.0, 1.0, 0.0), 0.0), 1.0));
+      Bad (O => (((0.0, 2.0, 1.0, 0.0), 0.0), PC_Policy, 1.0));
+      Bad (O => (PC_Policy, ((0.0, 2.0, 1.0, 0.0), 0.0), 1.0));
+      Bad (O => (((0.0, 0.0, 0.0, 0.0), 0.0), PC_Policy, 1.0));
+      Bad (O => (PC_Policy, ((0.0, 0.0, 0.0, 0.0), 0.0), 1.0));
+      Bad (O => (((0.0, 0.0, 1.0, -1.0), 0.0), PC_Policy, 1.0));
+      Bad (O => (PC_Policy, ((0.0, 0.0, 1.0, -1.0), 0.0), 1.0));
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         declare N : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Kind));
+         begin
+            for Axis in 0 .. 1 loop
+               declare P : Image_Point := [0.0, 0.0];
+               begin
+                  P (Axis) := N;
+                  Bad ([P], [[0.0, 0.0]]);
+                  Bad ([[0.0, 0.0]], [P]);
+               end;
+            end loop;
+            Bad (KA => (1.0, 1.0, N, 0.0));
+      Bad (KB => (1.0, 1.0, 0.0, N));
+            for Field in 1 .. 5 loop
+               declare D : Distortion_Coefficients := No_Distortion;
+               begin
+                  case Field is
+                     when 1 => D.K1 := N;
+                     when 2 => D.K2 := N;
+                     when 3 => D.P1 := N;
+                     when 4 => D.P2 := N;
+                     when others => D.K3 := N;
+                  end case;
+                  Bad (DA => D);
+      Bad (DB => D);
+               end;
+            end loop;
+            for Axis in 0 .. 2 loop
+               declare Pose : World_To_Camera_Pose := (others => <>);
+               begin
+                  Pose.Rotation (Axis) := N;
+                  Bad (A => Pose); Bad (B => Pose);
+                  Pose := (others => <>);
+                  Pose.Translation (Axis) := N;
+                  Bad (A => Pose); Bad (B => Pose);
+               end;
+            end loop;
+            Bad (Plane => ([N, 0.0, 0.0], [0.0, 0.0, 1.0]));
+            Bad (Plane => ([0.0, 0.0, 0.0], [0.0, N, 1.0]));
+            Bad (O => ((Plane_Policy, N), PC_Policy, 1.0));
+            Bad (O => (PC_Policy, (Plane_Policy, N), 1.0));
+            Bad (O => (PC_Policy, PC_Policy, N));
+            Bad (O => (((N, 0.0, 1.0, 0.0), 0.0), PC_Policy, 1.0));
+            Bad (O => (PC_Policy, ((N, 0.0, 1.0, 0.0), 0.0), 1.0));
+            Bad (O => (((0.0, N, 1.0, 0.0), 0.0), PC_Policy, 1.0));
+            Bad (O => (PC_Policy, ((0.0, N, 1.0, 0.0), 0.0), 1.0));
+            Bad (O => (((0.0, 0.0, N, 0.0), 0.0), PC_Policy, 1.0));
+            Bad (O => (PC_Policy, ((0.0, 0.0, N, 0.0), 0.0), 1.0));
+            Bad (O => (((0.0, 0.0, 1.0, N), 0.0), PC_Policy, 1.0));
+            Bad (O => (PC_Policy, ((0.0, 0.0, 1.0, N), 0.0), 1.0));
+         end;
+      end loop;
+   end RC_Invalid;
+
    procedure Compose_Projection (T : in out Fixture) is
       pragma Unreferenced (T);
       Camera_A : constant World_To_Camera_Pose :=
@@ -9839,6 +10189,14 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("plane numerical extremes mixed batch", Plane_Extremes'Access));
       Result.Add_Test (Caller.Create ("plane empty extreme bounds ownership guards", Plane_Bounds_Guards'Access));
       Result.Add_Test (Caller.Create ("plane invalid input and policy validation", Plane_Invalid'Access));
+      Result.Add_Test (Caller.Create ("reciprocal plane Analytic", RC_Analytic'Access));
+      Result.Add_Test (Caller.Create ("reciprocal plane Gates", RC_Gates'Access));
+      Result.Add_Test (Caller.Create ("reciprocal plane Brown", RC_Brown'Access));
+      Result.Add_Test (Caller.Create ("reciprocal plane Sources", RC_Sources'Access));
+      Result.Add_Test (Caller.Create ("reciprocal plane Numerical", RC_Numerical'Access));
+      Result.Add_Test (Caller.Create ("reciprocal plane Same_Center", RC_Same_Center'Access));
+      Result.Add_Test (Caller.Create ("reciprocal plane Ownership", RC_Ownership'Access));
+      Result.Add_Test (Caller.Create ("reciprocal plane Invalid", RC_Invalid'Access));
       Result.Add_Test (Caller.Create ("plane correspondence downward and wrong-target oracles", PC_Downward'Access));
       Result.Add_Test (Caller.Create ("plane correspondence independent Brown tilted rotations", PC_Brown_Tilted'Access));
       Result.Add_Test (Caller.Create ("plane correspondence mixed source and target rejections", PC_Mixed'Access));
