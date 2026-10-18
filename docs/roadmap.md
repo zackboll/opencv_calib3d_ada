@@ -1,5 +1,18 @@
 # Roadmap
 
+## Task 022 approved scope
+
+Known-pose two-view calibrated epipolar verification only: existing relative
+motion, signed `E=[normalize(t_relative)]_x R_relative` in the second-camera
+frame, independent calibration of matched pixels, existing normalized Sampson
+metric, explicit caller RMS/maximum policy, and guarded owned diagnostics.
+Optional accepted Task 021 pose adapter; no re-estimation or modification of poses.
+Exact zero physical baseline has no E; no hidden epsilon. No homography-based
+pure-rotation verification, covariance, bundle adjustment, visual odometry, SLAM,
+fusion, terrain/geographic or navigation expansion. Private ABI remains 48.
+The tenth example and independent numerical/fault qualification are described in
+[contract](known-pose-epipolar-contract.md) and [validation](known-pose-epipolar-validation.md).
+
 ## Task 021 approved scope
 
 Robust landmark-based relocalization only: existing fixed-EPNP RANSAC on six or

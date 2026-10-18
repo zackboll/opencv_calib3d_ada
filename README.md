@@ -1,5 +1,36 @@
 # OpenCV Calib3D for Ada
 
+## Task 022: known-pose calibrated two-view epipolar verification
+
+`Essential_From_Camera_Poses` builds `E=[normalize(t_relative)]_x R_relative`
+from two supplied world-to-camera poses. The relative translation term is in the
+**second camera frame**, not world camera-center displacement. Physical baseline
+is retained separately; exact zero baseline (including pure rotation) publishes
+no Essential matrix. No pose, E, or calibration is estimated or changed.
+
+`Verify_Known_Pose_Epipolar` separately undistorts each camera's pixels, evaluates
+the existing normalized Sampson metric for every pair, and applies mandatory
+caller-selected inclusive RMS and per-point/maximum limits. These errors are
+dimensionless, **not pixels**. Owned diagnostics guard absent E and whole-set
+scores; undefined errors never become zero or a partial-set RMS. An overload
+consumes two accepted Task 021 relocalizations without rerunning fitting.
+Cross-image match independence remains the caller's responsibility.
+
+This verifies geometric consistency, not absolute position, physical baseline
+magnitude, E sign, positive depth, reconstruction accuracy, matching correctness
+or localization uncertainty. Production C++ and the 48-operation ABI are unchanged.
+See the [contract](docs/known-pose-epipolar-contract.md) and
+[validation](docs/known-pose-epipolar-validation.md).
+
+```sh
+alr -n -C examples build
+alr -n -C examples exec -- sh ../scripts/run_native.sh bin/known_pose_epipolar_synthetic
+```
+
+The tenth file-free synthetic example accepts independently projected clean
+matches, rejects corrupted matches, and demonstrates zero-baseline unavailability.
+It is not physical sensor or navigation evidence.
+
 ## Task 021: independently verified landmark camera relocalization
 
 `Relocalize_Camera` robustly fits a new world-to-camera pose from at least six

@@ -1024,7 +1024,90 @@ package OpenCV.Calib3D is
    function Image_Points (Landmarks : Accepted_Landmark_Set) return Image_Point_Array;
    function Original_Positions (Landmarks : Accepted_Landmark_Set) return Inlier_Index_Array;
 
+   --  Task 022: known poses, never estimated or changed. Translation below is
+   --  the first-to-second transform term in the SECOND camera frame, not a
+   --  world camera-center displacement. E=[normalize(t_relative)]_x*R_relative,
+   --  x2^T E x1=0. Exact zero physical baseline has no Essential coefficients.
+   type Known_Pose_Essential_Result (Defined : Boolean := False) is record
+      Relative_Pose : World_To_Camera_Pose;
+      Baseline_Distance : OpenCV.Float64_Value := 0.0;
+      case Defined is
+         when True =>
+            Rotation_First_To_Second : Rotation_Matrix;
+            Translation_Direction : Camera_Direction;
+            Matrix : Essential_Matrix;
+         when False => null;
+      end case;
+   end record;
+   function Essential_From_Camera_Poses
+     (First, Second : World_To_Camera_Pose) return Known_Pose_Essential_Result;
+
+   --  Mandatory finite nonnegative inclusive limits, dimensionless NOT pixels.
+   type Epipolar_Verification_Options is record
+      Minimum_Correspondences : Positive;
+      Maximum_RMS_Normalized_Sampson : OpenCV.Float64_Value;
+      Maximum_Point_Normalized_Sampson : OpenCV.Float64_Value;
+   end record;
+   type Epipolar_Verification_Disposition is
+     (Insufficient_Correspondences, No_Physical_Baseline,
+      Undefined_Correspondence_Errors, Rejected_By_Policy, Accepted);
+   type Epipolar_Correspondence_Result (Defined : Boolean := False) is record
+      case Defined is
+         when True =>
+            Error : OpenCV.Float64_Value;
+            Passes_Point_Limit : Boolean;
+         when False => null;
+      end case;
+   end record;
+   type Epipolar_Correspondence_Result_Array is
+     array (Positive range <>) of Epipolar_Correspondence_Result;
+   type Epipolar_Verification_Summary is record
+      RMS_Normalized_Sampson : OpenCV.Float64_Value;
+      Maximum_Normalized_Sampson : OpenCV.Float64_Value;
+   end record;
+   --  Count is the ORIGINAL pair count. All diagnostics are owned, one-based,
+   --  ordered by position regardless of input lower bounds. No partial-set RMS.
+   type Known_Pose_Epipolar_Result (Count : Natural) is private;
+   function Verify_Known_Pose_Epipolar
+     (First_Pixels, Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose : World_To_Camera_Pose;
+      Options : Epipolar_Verification_Options) return Known_Pose_Epipolar_Result;
+   --  Both relocalizations MUST be Accepted; uses only Accepted_Pose, no fit.
+   --  Cross-image matches are separately supplied; their independence from pose
+   --  fitting/calibration is the caller's responsibility, not an API guarantee.
+   function Verify_Known_Pose_Epipolar
+     (First_Pixels, Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First, Second : Camera_Relocalization_Result;
+      Options : Epipolar_Verification_Options) return Known_Pose_Epipolar_Result;
+   function Disposition (Result : Known_Pose_Epipolar_Result)
+      return Epipolar_Verification_Disposition;
+   function Accepted (Result : Known_Pose_Epipolar_Result) return Boolean;
+   function Geometry_Evaluated (Result : Known_Pose_Epipolar_Result) return Boolean;
+   --  Raises OpenCV_Error when geometry was not evaluated (insufficient count).
+   function Geometry (Result : Known_Pose_Epipolar_Result) return Known_Pose_Essential_Result;
+   function Correspondence_Errors (Result : Known_Pose_Epipolar_Result)
+      return Epipolar_Correspondence_Result_Array;
+   function Entire_Set_Evaluable (Result : Known_Pose_Epipolar_Result) return Boolean;
+   --  Raises OpenCV_Error unless EVERY supplied error was defined.
+   function Summary (Result : Known_Pose_Epipolar_Result) return Epipolar_Verification_Summary;
+   --  All input fields are validated even for empty/insufficient requests;
+   --  valid insufficient requests return without native entry. Construction or
+   --  native failures raise OpenCV_Error atomically. No baseline epsilon.
+   --  Magnitude-only epipolar errors cannot verify absolute position, physical
+   --  baseline magnitude, E sign, positive depth, reconstruction or match truth.
+
 private
+   type Known_Pose_Epipolar_Result (Count : Natural) is record
+      State : Epipolar_Verification_Disposition := Insufficient_Correspondences;
+      Has_Geometry, Has_Summary : Boolean := False;
+      Geometry_Value : Known_Pose_Essential_Result;
+      Errors : Epipolar_Correspondence_Result_Array (1 .. Count);
+      Summary_Value : Epipolar_Verification_Summary := (0.0, 0.0);
+   end record;
    type Accepted_Landmark_Set (Count : Natural) is record
       World : Object_Point_Array (1 .. Count);
       Pixels : Image_Point_Array (1 .. Count);

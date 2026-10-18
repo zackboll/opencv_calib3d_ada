@@ -972,6 +972,168 @@ package body OpenCV.Calib3D is
          raise OpenCV.OpenCV_Error with "Camera motion exceeds Float64 range";
    end Measure_Camera_Motion;
 
+   function Essential_From_Camera_Poses
+     (First, Second : World_To_Camera_Pose) return Known_Pose_Essential_Result
+   is
+      Motion : constant Camera_Motion_Result := Measure_Camera_Motion (First, Second);
+   begin
+      if Motion.Baseline_Distance = 0.0 then
+         return (Defined => False, Relative_Pose => Motion.Relative_Pose,
+                 Baseline_Distance => 0.0);
+      end if;
+      declare
+         --  Unit_Vector scales BEFORE squaring; it rejects an exact zero term.
+         T : constant Object_Point := Unit_Vector (Motion.Relative_Pose.Translation);
+         R : constant Rotation_Matrix := Rotation_Matrix_Of (Motion.Relative_Pose);
+         E : Essential_Matrix;
+      begin
+         for Col in 0 .. 2 loop
+            E (0, Col) := Checked_Difference (T (1) * R (2, Col), T (2) * R (1, Col));
+            E (1, Col) := Checked_Difference (T (2) * R (0, Col), T (0) * R (2, Col));
+            E (2, Col) := Checked_Difference (T (0) * R (1, Col), T (1) * R (0, Col));
+         end loop;
+         return (Defined => True, Relative_Pose => Motion.Relative_Pose,
+                 Baseline_Distance => Motion.Baseline_Distance,
+                 Rotation_First_To_Second => R,
+                 Translation_Direction => Camera_Direction (T), Matrix => E);
+      end;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Known-pose Essential arithmetic unavailable";
+   end Essential_From_Camera_Poses;
+
+   function Disposition (Result : Known_Pose_Epipolar_Result)
+      return Epipolar_Verification_Disposition is (Result.State);
+   function Accepted (Result : Known_Pose_Epipolar_Result) return Boolean is
+     (Result.State = Accepted);
+   function Geometry_Evaluated (Result : Known_Pose_Epipolar_Result) return Boolean is
+     (Result.Has_Geometry);
+   function Geometry (Result : Known_Pose_Epipolar_Result) return Known_Pose_Essential_Result is
+   begin
+      if not Result.Has_Geometry then
+         raise OpenCV.OpenCV_Error with "Known-pose geometry not evaluated";
+      end if;
+      return Result.Geometry_Value;
+   end Geometry;
+   function Correspondence_Errors (Result : Known_Pose_Epipolar_Result)
+      return Epipolar_Correspondence_Result_Array is (Result.Errors);
+   function Entire_Set_Evaluable (Result : Known_Pose_Epipolar_Result) return Boolean is
+     (Result.Has_Summary);
+   function Summary (Result : Known_Pose_Epipolar_Result) return Epipolar_Verification_Summary is
+   begin
+      if not Result.Has_Summary then
+         raise OpenCV.OpenCV_Error with "Whole epipolar set not evaluable";
+      end if;
+      return Result.Summary_Value;
+   end Summary;
+
+   function Verify_Known_Pose_Epipolar
+     (First_Pixels, Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose : World_To_Camera_Pose;
+      Options : Epipolar_Verification_Options) return Known_Pose_Epipolar_Result
+   is
+   begin
+      Validate (First_Pixels); Validate (Second_Pixels);
+      Validate (First_Intrinsics); Validate (Second_Intrinsics);
+      Validate (First_Distortion); Validate (Second_Distortion);
+      Validate (First_Pose); Validate (Second_Pose);
+      if First_Pixels'Length /= Second_Pixels'Length or else
+        First_Pixels'Length > Natural (Interfaces.Integer_32'Last)
+      then
+         raise OpenCV.OpenCV_Error with "Invalid epipolar correspondence counts";
+      end if;
+      if not Is_Finite (Options.Maximum_RMS_Normalized_Sampson) or else
+        Options.Maximum_RMS_Normalized_Sampson < 0.0 or else
+        not Is_Finite (Options.Maximum_Point_Normalized_Sampson) or else
+        Options.Maximum_Point_Normalized_Sampson < 0.0
+      then
+         raise OpenCV.OpenCV_Error with "Invalid normalized Sampson policy";
+      end if;
+      return Result : Known_Pose_Epipolar_Result (First_Pixels'Length) do
+         if First_Pixels'Length >= Options.Minimum_Correspondences then
+            Result.Geometry_Value := Essential_From_Camera_Poses (First_Pose, Second_Pose);
+            Result.Has_Geometry := True;
+            if not Result.Geometry_Value.Defined then
+               Result.State := No_Physical_Baseline;
+            else
+               declare
+                  First : constant Normalized_Image_Point_Array := Undistort_To_Normalized
+                    (First_Pixels, First_Intrinsics, First_Distortion);
+                  Second : constant Normalized_Image_Point_Array := Undistort_To_Normalized
+                    (Second_Pixels, Second_Intrinsics, Second_Distortion);
+                  Scale : OpenCV.Float64_Value := 0.0;
+                  SSQ : OpenCV.Float64_Value := 1.0;
+                  All_Defined, All_Pass : Boolean := True;
+               begin
+                  for I in 1 .. Result.Count loop
+                     declare
+                        V : constant Normalized_Sampson_Error_Result :=
+                          Normalized_Sampson_Error (Result.Geometry_Value.Matrix, First (I), Second (I));
+                     begin
+                        if not V.Defined then
+                           All_Defined := False;
+                        else
+                           if not Is_Finite (V.Error) or else V.Error < 0.0 then
+                              raise OpenCV.OpenCV_Error with "Invalid native Sampson metric";
+                           end if;
+                           Result.Errors (I) := (Defined => True, Error => V.Error,
+                             Passes_Point_Limit => V.Error <= Options.Maximum_Point_Normalized_Sampson);
+                           All_Pass := All_Pass and then Result.Errors (I).Passes_Point_Limit;
+                           if V.Error > 0.0 then
+                              if Scale < V.Error then
+                                 SSQ := 1.0 + SSQ * (Scale / V.Error) ** 2;
+                                 Scale := V.Error;
+                              else
+                                 SSQ := SSQ + (V.Error / Scale) ** 2;
+                              end if;
+                           end if;
+                        end if;
+                     end;
+                  end loop;
+                  if not All_Defined then
+                     Result.State := Undefined_Correspondence_Errors;
+                  else
+                     Result.Summary_Value :=
+                       (RMS_Normalized_Sampson => Scale * Math.Sqrt
+                          (OpenCV.Float64_Value'Min (1.0, SSQ / OpenCV.Float64_Value (Result.Count))),
+                        Maximum_Normalized_Sampson => Scale);
+                     if not Is_Finite (Result.Summary_Value.RMS_Normalized_Sampson) then
+                        raise OpenCV.OpenCV_Error with "Epipolar RMS unavailable";
+                     end if;
+                     Result.Has_Summary := True;
+                     Result.State :=
+                       (if All_Pass and then
+                          Result.Summary_Value.RMS_Normalized_Sampson <= Options.Maximum_RMS_Normalized_Sampson
+                          and then Scale <= Options.Maximum_Point_Normalized_Sampson
+                        then Accepted else Rejected_By_Policy);
+                  end if;
+               end;
+            end if;
+         end if;
+      end return;
+   exception
+      when Constraint_Error =>
+         raise OpenCV.OpenCV_Error with "Known-pose epipolar arithmetic unavailable";
+   end Verify_Known_Pose_Epipolar;
+
+   function Verify_Known_Pose_Epipolar
+     (First_Pixels, Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First, Second : Camera_Relocalization_Result;
+      Options : Epipolar_Verification_Options) return Known_Pose_Epipolar_Result
+   is
+   begin
+      if not Accepted (First) or else not Accepted (Second) then
+         raise OpenCV.OpenCV_Error with "Pair verification requires two accepted relocalizations";
+      end if;
+      return Verify_Known_Pose_Epipolar
+        (First_Pixels, Second_Pixels, First_Intrinsics, Second_Intrinsics,
+         First_Distortion, Second_Distortion, Accepted_Pose (First), Accepted_Pose (Second), Options);
+   end Verify_Known_Pose_Epipolar;
+
    function Undistort_To_Normalized
      (Points : Image_Point_Array; Intrinsics : Camera_Intrinsics;
       Distortion : Distortion_Coefficients := No_Distortion)
@@ -2617,6 +2779,12 @@ package body OpenCV.Calib3D is
                end if;
             end;
          end loop;
+      exception
+         when others =>
+            --  Access parameters are copy-in/copy-out. On an exception the
+            --  caller never receives this newly allocated pointer.
+            Free (Data);
+            raise;
       end Read_Indices;
    begin
       C.Check (C.Validate_Essential_Options (Native_Options'Access), "Essential.Options");
@@ -2674,6 +2842,12 @@ package body OpenCV.Calib3D is
             end loop;
             Estimate.Has_Pose := True;
          end if;
+      exception
+         when others =>
+            --  Release owned buffers before propagating construction failure.
+            --  Finalize is idempotent if return-object finalization calls again.
+            Finalize (Estimate);
+            raise;
       end return;
    exception
       when Constraint_Error =>

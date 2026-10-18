@@ -10,6 +10,18 @@ done
 [ -n "$package" ] || { echo 'error: missing OpenCV metadata' >&2; exit 1; }
 compiler=${CXX:-g++}
 runtime=-lstdc++
+flags=
+suffix=
+case "${1:-native}" in
+    native) ;;
+    sanitizers)
+        [ "$(uname -s)" = Linux ] || { echo 'error: Linux sanitizers only' >&2; exit 1; }
+        flags='-g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer'
+        suffix=-sanitized
+        runtime="$runtime -fsanitize=address,undefined"
+        ;;
+    *) echo 'error: expected native or sanitizers' >&2; exit 1 ;;
+esac
 set --
 if [ "$(uname -s)" = Darwin ]; then
     compiler=$(xcrun --find clang++)
@@ -17,11 +29,11 @@ if [ "$(uname -s)" = Darwin ]; then
     set -- -isysroot "$(xcrun --sdk macosx --show-sdk-path)"
 fi
 mkdir -p "$root/obj/ada-faults"
-object="$root/obj/ada-faults/shim.o"
+object="$root/obj/ada-faults/shim$suffix.o"
 fault_link="$object"
 opencv_cflags=$(pkg-config --cflags "$package" | sed 's/-I/-isystem /g')
 "$compiler" "$@" -c -std=c++17 -Wall -Wextra -Wpedantic -Werror \
-    -DOPENCV_CALIB3D_TEST_HOOKS -I"$root/cpp" -I"$core/cpp" $opencv_cflags \
+    $flags -DOPENCV_CALIB3D_TEST_HOOKS -I"$root/cpp" -I"$core/cpp" $opencv_cflags \
     "$root/cpp/opencv_calib3d_shim.cpp" -o "$object"
 if [ "$(uname -s)" = Darwin ]; then
     # Keep Apple C++ exceptions inside a libc++-linked Mach-O image. Linking the
@@ -34,8 +46,8 @@ if [ "$(uname -s)" = Darwin ]; then
 fi
 cd "$root/tests"
 gprbuild -p -P refinement_faults.gpr -XOPENCV_CALIB3D_FAULT_OBJECT="$fault_link" \
-    -o "$root/tests/bin/run_refinement_faults" -largs \
-    $(pkg-config --libs "$package") "$runtime"
+    -o "$root/tests/bin/run_refinement_faults$suffix" -largs \
+    $(pkg-config --libs "$package") $runtime
 if [ "$(uname -s)" = Darwin ]; then
     # The fault artifact resolves our calls first, but the production project still
     # links its relocatable shim. Supply both runtime directories for this test
@@ -49,5 +61,7 @@ if [ "$(uname -s)" = Darwin ]; then
     DYLD_LIBRARY_PATH="$root/lib:$core/lib:$ada_runtime:$compiler_lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
         "$root/tests/bin/run_refinement_faults"
 else
-    sh "$root/scripts/run_native.sh" "$root/tests/bin/run_refinement_faults"
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+    UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+        sh "$root/scripts/run_native.sh" "$root/tests/bin/run_refinement_faults$suffix"
 fi

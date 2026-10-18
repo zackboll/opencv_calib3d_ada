@@ -1,5 +1,21 @@
 # Coverage
 
+## Task 022 inventory
+
+193 AUnit registrations preserve all 184 existing cases and add nine grouped
+known-pose verification cases: rectified analytic signed E/Sampson/RMS,
+noncommuting rotations and signed second-frame translation, independent scalar
+Brown projection with different cameras and reversal, exact zero/tiny/large
+baselines, inclusive/adjacent threshold precision, epipoles and natural metric
+arithmetic unavailability, empty/extreme bounds, invalid inputs, and accepted
+relocalization adapter ownership. Fifty synthetic native fault cases check
+atomicity, immediate recovery and skipped-native contracts. The entire Ada fault
+campaign additionally runs with an ASan/UBSan actual shim and leak detection on
+Linux. Sampson has no existing injection checkpoint; none is invented.
+The tenth example is `known_pose_epipolar_synthetic`. ABI remains 48, production
+C++ unchanged. See [validation](known-pose-epipolar-validation.md); inventory alone
+is not execution evidence.
+
 ## Task 021 inventory
 
 184 AUnit registrations preserve all 177 baseline cases and add seven grouped
