@@ -6869,7 +6869,7 @@ package body Calib3D_Tests is
                end;
             end loop;
             Bad (KA => (1.0, 1.0, N, 0.0));
-      Bad (KB => (1.0, 1.0, 0.0, N));
+            Bad (KB => (1.0, 1.0, 0.0, N));
             for Field in 1 .. 5 loop
                declare D : Distortion_Coefficients := No_Distortion;
                begin
@@ -6881,7 +6881,7 @@ package body Calib3D_Tests is
                      when others => D.K3 := N;
                   end case;
                   Bad (DA => D);
-      Bad (DB => D);
+                  Bad (DB => D);
                end;
             end loop;
             for Axis in 0 .. 2 loop
