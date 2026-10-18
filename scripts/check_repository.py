@@ -56,7 +56,7 @@ def main() -> None:
 
     tests = (ROOT / "tests/src/calib3d_tests.adb").read_text()
     registrations = re.findall(r"Result\.Add_Test\s*\(Caller\.Create", tests)
-    check(len(registrations) == 223, "update documented AUnit inventory when changing tests")
+    check(len(registrations) == 231, "update documented AUnit inventory when changing tests")
     check(len(declared) == 48, "update private ABI inventory when changing exports")
     # Task 022 is Ada orchestration, not another native estimator/solver.
     public_body = (ROOT / "src/opencv-calib3d.adb").read_text()
@@ -72,12 +72,13 @@ def main() -> None:
                   ("Estimate_Essential_RANSAC", "Solve_PnP_RANSAC", "Refine_Pose_Iterative", "C.")),
           "known-pose verification must not estimate, refine or bypass public native-backed APIs")
     example_names = manifests[2]["executables"]
-    check(len(example_names) == 13 and "plane_correspondence_synthetic" in example_names and
+    check(len(example_names) == 14 and "reciprocal_plane_correspondence_synthetic" in example_names and
+          "plane_correspondence_synthetic" in example_names and
           "ray_plane_unprojection_synthetic" in example_names and
           "known_pose_epipolar_synthetic" in example_names and
           "three_view_landmarks_synthetic" in example_names and
           all((ROOT / "examples/src" / f"{name}.adb").is_file() for name in example_names),
-          "thirteen synthetic example source files must be registered")
+          "fourteen synthetic example source files must be registered")
     start = public_body.index("   function Verify_Plane_Constrained_Correspondences")
     stop = public_body.index("   function Plane_Constrained_Landmark_Observations", start)
     plane = public_body[start:stop]
@@ -91,6 +92,15 @@ def main() -> None:
                   ("World_Bearing_Rays", "Project_Points", "Solve_AP3P_Hypotheses", "Solve_PnP_RANSAC",
                    "Essential_", "Refine_", "C.", "when others", "when OpenCV")),
           "plane verification must not duplicate geometry, estimate, or swallow native errors")
+    start = public_body.index("   function Verify_Reciprocal_Plane_Correspondences")
+    stop = public_body.index("   function Reciprocal_Plane_Landmark_Observations", start)
+    reciprocal = public_body[start:stop]
+    check(reciprocal.count(":= Verify_Plane_Constrained_Correspondences") == 2 and
+          reciprocal.index("Validate (Plane, Options.Backward)") < reciprocal.index("Forward : constant") and
+          reciprocal.index("Backward : constant") < reciprocal.index("for I in Results'Range"),
+          "reciprocal must validate both policies and delegate once per directional batch")
+    check("Project_Points" not in reciprocal and "C." not in reciprocal,
+          "reciprocal must not duplicate native projection or add ABI operations")
     layout = (ROOT / "tests/layout/calib3d_layout.c").read_text()
     check("calib3d_test_triangulation_layout" in layout and
           "calib3d_test_fill_triangulation" in tests and

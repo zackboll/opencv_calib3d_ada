@@ -35,6 +35,81 @@ procedure Run_Refinement_Faults is
 begin
    declare
       Plane : constant World_Plane := ([0.0, 0.0, 10.0], [0.0, 0.0, 1.0]);
+      Direction_Policy : constant Plane_Correspondence_Verification_Options := ((0.0, 0.0, 100.0, 1.0E-10), 1.0E-8);
+      Policy : constant Reciprocal_Plane_Verification_Options := (Direction_Policy, Direction_Policy, 1.0E-8);
+      Identity : constant World_To_Camera_Pose := (others => <>);
+      Calibration : constant Camera_Intrinsics := (1000.0, 1000.0, 320.0, 240.0);
+      Pixels : constant Image_Point_Array := [[320.0, 240.0], [420.0, 440.0]];
+      function Request (Empty : Boolean := False; O : Reciprocal_Plane_Verification_Options := Policy)
+         return Reciprocal_Plane_Result_Array is
+        (Verify_Reciprocal_Plane_Correspondences
+          ((if Empty then Image_Point_Array'[1 .. 0 => <>] else Pixels),
+           (if Empty then Image_Point_Array'[1 .. 0 => <>] else Pixels),
+           Calibration, Calibration, No_Distortion, No_Distortion, Identity, Identity, Plane, O));
+      Saved : Reciprocal_Plane_Result_Array := Request;
+      Previous : constant Reciprocal_Plane_Result_Array := Saved;
+      type Stages is array (Positive range <>) of Interfaces.C.int;
+      Count : Natural := 0;
+   begin
+      for Stage of Stages'[1, 2, 3, 4, 13, 14, 15, 16] loop
+         for Kind in Interfaces.C.int range 1 .. 5 loop
+            Fail (Stage, Kind);
+            declare Empty : constant Reciprocal_Plane_Result_Array := Request (True);
+            begin Check (Empty'First = 1 and then Empty'Last = 0, "empty reciprocal bounds"); end;
+            --  Each malformed BACKWARD policy must leave the forward checkpoint
+            --  armed. Check both the intersection and target-error structures.
+            for Field in 1 .. 2 loop
+               declare Invalid : Reciprocal_Plane_Verification_Options := Policy;
+               begin
+                  if Field = 1 then Invalid.Backward.Intersection.Minimum_Absolute_Incidence_Cosine := -1.0;
+                  else Invalid.Backward.Maximum_Second_Pixel_Error := -1.0; end if;
+                  begin
+                     declare R : constant Reciprocal_Plane_Result_Array := Request (O => Invalid);
+                     begin Check (R'Length = 999, "invalid backward policy accepted"); end;
+                  exception when OpenCV.OpenCV_Error => null; end;
+               end;
+            end loop;
+            begin
+               Saved := Request;
+               raise Program_Error with "reciprocal fault swallowed or consumed before validated native entry";
+            exception when OpenCV.OpenCV_Error => Count := Count + 1; end;
+            Check (Saved = Previous, "reciprocal failure partially assigned array");
+            Saved := Request;
+            Check (Saved = Previous and then Accepted (Saved (2)), "reciprocal healthy recovery");
+         end loop;
+      end loop;
+      Check (Count = 40, "reciprocal fault count");
+      --  First-hit hooks cannot reach the reverse stage through this wrapper.
+      --  Independently exercise the swapped Task 025 path, with DISTINCT cameras.
+      declare
+         Other_K : constant Camera_Intrinsics := (800.0, 700.0, 300.0, 200.0);
+         Other_Pose : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [-2.0, 0.0, 0.0]);
+         Other_Pixels : constant Image_Point_Array := [[140.0, 200.0], [220.0, 340.0]];
+         function Swapped return Plane_Correspondence_Result_Array is
+           (Verify_Plane_Constrained_Correspondences
+             (Other_Pixels, Pixels, Other_K, Calibration, No_Distortion, No_Distortion,
+              Other_Pose, Identity, Plane, Direction_Policy));
+         Reverse_Saved : Plane_Correspondence_Result_Array := Swapped;
+         Reverse_Previous : constant Plane_Correspondence_Result_Array := Reverse_Saved;
+      begin
+         for Stage of Stages'[1, 2, 3, 4, 13, 14, 15, 16] loop
+            for Kind in Interfaces.C.int range 1 .. 5 loop
+               Fail (Stage, Kind);
+               begin
+                  Reverse_Saved := Swapped;
+                  raise Program_Error with "swapped directional fault swallowed";
+               exception when OpenCV.OpenCV_Error => null; end;
+               Check (Reverse_Saved = Reverse_Previous, "swapped direction partial assignment");
+               Reverse_Saved := Swapped;
+               Check (Reverse_Saved = Reverse_Previous and then Accepted (Reverse_Saved (2)), "swapped recovery");
+            end loop;
+         end loop;
+      end;
+      Ada.Text_IO.Put_Line
+        ("PASS: reciprocal 40 forward first-hit faults + 40 swapped directional faults; backward validation, empty, atomicity, recovery");
+   end;
+   declare
+      Plane : constant World_Plane := ([0.0, 0.0, 10.0], [0.0, 0.0, 1.0]);
       Policy : constant Plane_Correspondence_Verification_Options := ((0.0, 0.0, 100.0, 1.0E-10), 1.0E-8);
       Identity : constant World_To_Camera_Pose := (others => <>);
       Calibration : constant Camera_Intrinsics := (1000.0, 1000.0, 320.0, 240.0);

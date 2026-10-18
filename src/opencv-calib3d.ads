@@ -1271,6 +1271,50 @@ package OpenCV.Calib3D is
      (Landmarks : Plane_Correspondence_Result_Array; Pixels : Image_Point_Array)
       return Accepted_Landmark_Set;
 
+   --  Independently intersect both rays; no fitting, averaging or baseline gate.
+   --  Backward means B->A (reverse is an Ada reserved word). All policies are
+   --  mandatory; world separation is finite/nonnegative, inclusive, caller units.
+   type Reciprocal_Plane_Verification_Options is record
+      Forward, Backward : Plane_Correspondence_Verification_Options;
+      Maximum_World_Separation : OpenCV.Float64_Value;
+   end record;
+   --  Precedence: source failures, directional target failures, unavailable
+   --  separation, separation limit. Within either pair: both, forward, reverse.
+   type Reciprocal_Plane_Disposition is
+     (Forward_Source_Rejected, Reverse_Source_Rejected, Both_Sources_Rejected,
+      Forward_Verification_Rejected, Reverse_Verification_Rejected,
+      Both_Directions_Rejected, World_Separation_Numerically_Unavailable,
+      World_Separation_Rejected, Reciprocal_Plane_Accepted);
+   type Reciprocal_Plane_Result is private;
+   type Reciprocal_Plane_Result_Array is array (Positive range <>) of Reciprocal_Plane_Result;
+   function Verify_Reciprocal_Plane_Correspondences
+     (First_Pixels, Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose : World_To_Camera_Pose;
+      Plane : World_Plane; Options : Reciprocal_Plane_Verification_Options)
+      return Reciprocal_Plane_Result_Array;
+   function Original_Position (Result : Reciprocal_Plane_Result) return Positive;
+   function Disposition (Result : Reciprocal_Plane_Result) return Reciprocal_Plane_Disposition;
+   function Directions_Evaluated (Result : Reciprocal_Plane_Result) return Boolean;
+   --  Complete owned copies; both require Directions_Evaluated (False by default).
+   function Forward_Verification (Result : Reciprocal_Plane_Result) return Plane_Correspondence_Result;
+   function Reverse_Verification (Result : Reciprocal_Plane_Result) return Plane_Correspondence_Result;
+   function Both_Source_Intersections_Accepted (Result : Reciprocal_Plane_Result) return Boolean;
+   function World_Separation_Evaluated (Result : Reciprocal_Plane_Result) return Boolean;
+   function World_Separation (Result : Reciprocal_Plane_Result) return OpenCV.Float64_Value;
+   --  Diagnostic positions require respective source acceptance, not target or
+   --  reciprocal acceptance. Every unavailable guarded accessor raises OpenCV_Error.
+   function First_Source_World_Position (Result : Reciprocal_Plane_Result) return Object_Point;
+   function Second_Source_World_Position (Result : Reciprocal_Plane_Result) return Object_Point;
+   function Accepted (Result : Reciprocal_Plane_Result) return Boolean;
+   --  Require FINAL reciprocal acceptance. First-camera representative is for
+   --  interoperability, not a fused/statistically optimal physical estimate.
+   function Accepted_First_Source_World_Position (Result : Reciprocal_Plane_Result) return Object_Point;
+   function Accepted_Second_Source_World_Position (Result : Reciprocal_Plane_Result) return Object_Point;
+   function Reciprocal_Plane_Landmark_Observations
+     (Landmarks : Reciprocal_Plane_Result_Array; Pixels : Image_Point_Array) return Accepted_Landmark_Set;
+
 private
    type World_Plane_Intersection is record
       State : World_Plane_Intersection_Disposition := Numerically_Unavailable;
@@ -1284,6 +1328,13 @@ private
       Has_Source, Has_Second : Boolean := False;
       Source : World_Plane_Intersection;
       Second : AP3P_Reference_Result := (Numerically_Unavailable, 0.0, 0.0);
+   end record;
+   type Reciprocal_Plane_Result is record
+      Position : Positive := 1;
+      State : Reciprocal_Plane_Disposition := Both_Sources_Rejected;
+      Has_Directions, Has_Separation : Boolean := False;
+      Forward, Backward : Plane_Correspondence_Result;
+      Separation : OpenCV.Float64_Value := 0.0;
    end record;
    type Three_View_Landmark_Result is record
       Position : Positive := 1;

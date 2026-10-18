@@ -4374,6 +4374,17 @@ package body OpenCV.Calib3D is
       return Accepted_World_Position (Source_Intersection (Result));
    end Accepted_World_Position;
 
+   procedure Validate
+     (Plane : World_Plane; Options : Plane_Correspondence_Verification_Options) is
+   begin
+      Validate (Plane, Options.Intersection);
+      if not Is_Finite (Options.Maximum_Second_Pixel_Error)
+        or else Options.Maximum_Second_Pixel_Error < 0.0
+      then
+         raise OpenCV.OpenCV_Error with "Invalid plane correspondence pixel limit";
+      end if;
+   end Validate;
+
    function Verify_Plane_Constrained_Correspondences
      (First_Pixels, Second_Pixels : Image_Point_Array;
       First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
@@ -4399,12 +4410,7 @@ package body OpenCV.Calib3D is
       Validate (Second_Distortion);
       Validate (First_Pose);
       Validate (Second_Pose);
-      Validate (Plane, Options.Intersection);
-      if not Is_Finite (Options.Maximum_Second_Pixel_Error)
-        or else Options.Maximum_Second_Pixel_Error < 0.0
-      then
-         raise OpenCV.OpenCV_Error with "Invalid plane correspondence pixel limit";
-      end if;
+      Validate (Plane, Options);
       declare
          --  Exactly one source call; Camera B never participates in geometry.
          Sources : constant World_Plane_Intersection_Array := Unproject_Pixels_Onto_World_Plane
@@ -4497,6 +4503,187 @@ package body OpenCV.Calib3D is
          end loop;
       end return;
    end Plane_Constrained_Landmark_Observations;
+
+   function Original_Position (Result : Reciprocal_Plane_Result) return Positive is (Result.Position);
+   function Disposition (Result : Reciprocal_Plane_Result) return Reciprocal_Plane_Disposition is (Result.State);
+   function Directions_Evaluated (Result : Reciprocal_Plane_Result) return Boolean is (Result.Has_Directions);
+   function Forward_Verification (Result : Reciprocal_Plane_Result) return Plane_Correspondence_Result is
+   begin
+      if not Directions_Evaluated (Result) then
+         raise OpenCV.OpenCV_Error with "Reciprocal forward verification unavailable";
+      end if;
+      return Result.Forward;
+   end Forward_Verification;
+   function Reverse_Verification (Result : Reciprocal_Plane_Result) return Plane_Correspondence_Result is
+   begin
+      if not Directions_Evaluated (Result) then
+         raise OpenCV.OpenCV_Error with "Reciprocal reverse verification unavailable";
+      end if;
+      return Result.Backward;
+   end Reverse_Verification;
+   function Both_Source_Intersections_Accepted (Result : Reciprocal_Plane_Result) return Boolean is
+     (Result.Has_Directions and then Accepted (Source_Intersection (Result.Forward))
+      and then Accepted (Source_Intersection (Result.Backward)));
+   function World_Separation_Evaluated (Result : Reciprocal_Plane_Result) return Boolean is (Result.Has_Separation);
+   function World_Separation (Result : Reciprocal_Plane_Result) return OpenCV.Float64_Value is
+   begin
+      if not World_Separation_Evaluated (Result) then
+         raise OpenCV.OpenCV_Error with "Reciprocal world separation unavailable";
+      end if;
+      return Result.Separation;
+   end World_Separation;
+   function First_Source_World_Position (Result : Reciprocal_Plane_Result) return Object_Point is
+     (Accepted_World_Position (Source_Intersection (Forward_Verification (Result))));
+   function Second_Source_World_Position (Result : Reciprocal_Plane_Result) return Object_Point is
+     (Accepted_World_Position (Source_Intersection (Reverse_Verification (Result))));
+   function Accepted (Result : Reciprocal_Plane_Result) return Boolean is
+     (Result.State = Reciprocal_Plane_Accepted);
+   function Accepted_First_Source_World_Position (Result : Reciprocal_Plane_Result) return Object_Point is
+   begin
+      if not Accepted (Result) then
+         raise OpenCV.OpenCV_Error with "Reciprocal correspondence not accepted";
+      end if;
+      return First_Source_World_Position (Result);
+   end Accepted_First_Source_World_Position;
+   function Accepted_Second_Source_World_Position (Result : Reciprocal_Plane_Result) return Object_Point is
+   begin
+      if not Accepted (Result) then
+         raise OpenCV.OpenCV_Error with "Reciprocal correspondence not accepted";
+      end if;
+      return Second_Source_World_Position (Result);
+   end Accepted_Second_Source_World_Position;
+
+   function Verify_Reciprocal_Plane_Correspondences
+     (First_Pixels, Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose : World_To_Camera_Pose;
+      Plane : World_Plane; Options : Reciprocal_Plane_Verification_Options)
+      return Reciprocal_Plane_Result_Array
+   is
+   begin
+      --  Complete validation of BOTH policies precedes either directional call,
+      --  even for empty requests. Reuse the exact Task 025 policy validation.
+      if First_Pixels'Length /= Second_Pixels'Length then
+         raise OpenCV.OpenCV_Error with "Reciprocal pixel counts differ";
+      end if;
+      if Interfaces.Unsigned_64 (First_Pixels'Length) >
+        Interfaces.Unsigned_64 (Interfaces.Integer_32'Last)
+      then
+         raise OpenCV.OpenCV_Error with "Too many reciprocal correspondences";
+      end if;
+      Validate (First_Pixels);
+      Validate (Second_Pixels);
+      Validate (First_Intrinsics);
+      Validate (Second_Intrinsics);
+      Validate (First_Distortion);
+      Validate (Second_Distortion);
+      Validate (First_Pose);
+      Validate (Second_Pose);
+      Validate (Plane, Options.Forward);
+      Validate (Plane, Options.Backward);
+      if not Is_Finite (Options.Maximum_World_Separation) or else Options.Maximum_World_Separation < 0.0 then
+         raise OpenCV.OpenCV_Error with "Invalid reciprocal world separation limit";
+      end if;
+      if First_Pixels'Length = 0 then
+         return [1 .. 0 => <>];
+      end if;
+      declare
+         --  Exactly one whole-array call per direction, never per match.
+         Forward : constant Plane_Correspondence_Result_Array := Verify_Plane_Constrained_Correspondences
+           (First_Pixels, Second_Pixels, First_Intrinsics, Second_Intrinsics,
+            First_Distortion, Second_Distortion, First_Pose, Second_Pose, Plane, Options.Forward);
+         Backward : constant Plane_Correspondence_Result_Array := Verify_Plane_Constrained_Correspondences
+           (Second_Pixels, First_Pixels, Second_Intrinsics, First_Intrinsics,
+            Second_Distortion, First_Distortion, Second_Pose, First_Pose, Plane, Options.Backward);
+      begin
+         return Results : Reciprocal_Plane_Result_Array (1 .. First_Pixels'Length) do
+            for I in Results'Range loop
+               declare
+                  R : Reciprocal_Plane_Result renames Results (I);
+                  F : constant Boolean := Accepted (Source_Intersection (Forward (I)));
+                  B : constant Boolean := Accepted (Source_Intersection (Backward (I)));
+               begin
+                  R.Position := I;
+                  R.Forward := Forward (I);
+                  R.Backward := Backward (I);
+                  R.Has_Directions := True;
+                  if F and then B then
+                     declare
+                        --  Guarded accessors are OUTSIDE the arithmetic handler.
+                        PA : constant Object_Point := First_Source_World_Position (R);
+                        PB : constant Object_Point := Second_Source_World_Position (R);
+                        Difference : Object_Point;
+                     begin
+                        --  Only checked subtraction and scaled norm can translate
+                        --  OpenCV_Error here. No native calls or guarded reads.
+                        begin
+                           for Axis in 0 .. 2 loop
+                              Difference (Axis) := Checked_Difference (PA (Axis), PB (Axis));
+                           end loop;
+                           R.Separation := Scaled_Vector_Norm (Difference);
+                           R.Has_Separation := True;
+                        exception
+                           when OpenCV.OpenCV_Error => null;
+                        end;
+                     end;
+                  end if;
+                  --  Separation is diagnostic even when target verification fails.
+                  if not F and then not B then
+                     R.State := Both_Sources_Rejected;
+                  elsif not F then
+                     R.State := Forward_Source_Rejected;
+                  elsif not B then
+                     R.State := Reverse_Source_Rejected;
+                  elsif not Accepted (Forward (I)) and then not Accepted (Backward (I)) then
+                     R.State := Both_Directions_Rejected;
+                  elsif not Accepted (Forward (I)) then
+                     R.State := Forward_Verification_Rejected;
+                  elsif not Accepted (Backward (I)) then
+                     R.State := Reverse_Verification_Rejected;
+                  elsif not R.Has_Separation then
+                     R.State := World_Separation_Numerically_Unavailable;
+                  elsif R.Separation > Options.Maximum_World_Separation then
+                     R.State := World_Separation_Rejected;
+                  else
+                     R.State := Reciprocal_Plane_Accepted;
+                  end if;
+               end;
+            end loop;
+         end return;
+      end;
+   end Verify_Reciprocal_Plane_Correspondences;
+
+   function Reciprocal_Plane_Landmark_Observations
+     (Landmarks : Reciprocal_Plane_Result_Array; Pixels : Image_Point_Array) return Accepted_Landmark_Set
+   is
+      Count : Natural := 0;
+   begin
+      if Landmarks'Length /= Pixels'Length then
+         raise OpenCV.OpenCV_Error with "Reciprocal adapter pixel count mismatch";
+      end if;
+      Validate (Pixels);
+      for Landmark of Landmarks loop
+         if Accepted (Landmark) then
+            Count := Count + 1;
+         end if;
+      end loop;
+      return Result : Accepted_Landmark_Set (Count) do
+         Count := 0;
+         for I in 1 .. Landmarks'Length loop
+            declare
+               R : Reciprocal_Plane_Result renames Landmarks (Landmarks'First + (I - 1));
+            begin
+               if Accepted (R) then
+                  Count := Count + 1;
+                  Result.World (Count) := Accepted_First_Source_World_Position (R);
+                  Result.Pixels (Count) := Pixels (Pixels'First + (I - 1));
+                  Result.Positions (Count) := Original_Position (R);
+               end if;
+            end;
+         end loop;
+      end return;
+   end Reciprocal_Plane_Landmark_Observations;
 
    function World_Points (Landmarks : Accepted_Landmark_Set) return Object_Point_Array is (Landmarks.World);
    function Image_Points (Landmarks : Accepted_Landmark_Set) return Image_Point_Array is (Landmarks.Pixels);

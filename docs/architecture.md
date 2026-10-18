@@ -1,5 +1,18 @@
 # Architecture
 
+## Reciprocal plane correspondence verification (Task 026)
+
+Complete validation of both directional policies precedes either Task 025 call.
+One whole-array A->B invocation and one B->A invocation own their independent camera
+calibrations and distortion models. Complete owned directional results preserve
+source/target diagnostics; only two accepted source intersections permit checked
+Float64 differences and the existing scaled norm. This arithmetic-only handler
+cannot intercept native calls or guarded reads. Separation remains diagnostic after
+target rejection. Deterministic precedence and final-only first-camera representative
+guards prevent rejected geometry entering the later-image adapter. No averaging,
+kernel, optimizer, native ABI/dependency or Mat ownership change is introduced.
+See [contract](reciprocal-plane-correspondence-contract.md).
+
 ## Plane-constrained two-camera verification (Task 025)
 
 Complete Ada validation precedes one Task 024 source intersection batch. Preserve
