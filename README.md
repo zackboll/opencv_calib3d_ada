@@ -1,5 +1,29 @@
 # OpenCV Calib3D for Ada
 
+## Task 020: fixed-pose metric world-point refinement
+
+`Refine_Metric_World_Points` reconstructs once, refines eligible unit-baseline
+first-camera points with the existing pure-Ada solver, scales by the known
+baseline, and checks the representable world point in both calibrated cameras.
+Both poses, baseline, intrinsics and distortion remain fixed. Every original
+metric result is retained, including initial policy rejections that refinement
+may rescue. A private owned result separates optimizer improvement, candidate
+diagnostics, final acceptance, and guarded accepted world coordinates. All four
+quality thresholds and both per-camera pixel-worsening allowances are selected
+by the caller, inclusive without epsilon. These fitting diagnostics do not prove
+world accuracy or statistical independence. No covariance, depth uncertainty,
+bundle adjustment, pose optimization, DTED/geographic conversion or navigation
+fusion is included. C++ is unchanged; private ABI remains 48.
+See the [contract](docs/metric-point-refinement-contract.md) and
+[qualification](docs/metric-point-refinement-validation.md).
+
+```sh
+alr -n -C examples build
+alr -n -C examples exec -- sh ../scripts/run_native.sh bin/metric_refinement_synthetic
+```
+
+This eighth example uses synthetic observations, not actual sensor data.
+
 ## Task 019: calibrated metric world-frame triangulation
 
 `Triangulate_World_Points` accepts independently calibrated distorted pixels,

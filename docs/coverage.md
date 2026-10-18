@@ -1,5 +1,18 @@
 # Coverage
 
+## Task 020 metric world-point refinement
+
+177 registrations preserve all 170 previous cases. Seven grouped cases cover
+independent analytic noisy world truth, original preservation, strict objective
+improvement, accepted coordinates, pixel worsening/equality/rescue/final policy,
+noncommuting Brown/unequal intrinsics/reversal, skipped sources/low parallax,
+tiny/large baseline and large origins, bounds/mixed batches, and invalid inputs.
+Existing fault hooks additionally qualify native exception/batch atomicity and
+synthetic exact no-step and refined overflow/underflow cases. The eighth synthetic
+example asserts geometry and acceptance independently. Private ABI remains 48;
+no C++ changes. Test inventory is not execution: see
+[qualification](metric-point-refinement-validation.md).
+
 ## Task 019 calibrated metric triangulation
 
 170 AUnit registrations preserve all 163 previous cases. Seven grouped cases add

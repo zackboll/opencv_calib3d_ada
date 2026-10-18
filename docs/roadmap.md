@@ -1,5 +1,16 @@
 # Roadmap
 
+## Task 020 approved scope
+
+Fixed-pose metric world-point refinement and explicit caller-controlled
+acceptance only. Reuse Task 019 once, Task 009 unit-baseline point refinement,
+Task 018 known physical baseline, shared numerical conversion, fresh normalized
+and pixel diagnostics, and guarded accepted world coordinates. Preserve every
+original reconstruction. Pose, baseline, intrinsics and distortion remain fixed.
+No new optimizer/ABI operation, covariance, depth uncertainty, bundle adjustment,
+pose optimization, DTED/geographic conversion or navigation fusion. See
+[contract](metric-point-refinement-contract.md).
+
 ## Task 019 approved scope
 
 Calibrated metric two-view world triangulation from two known absolute camera
