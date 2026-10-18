@@ -57,6 +57,7 @@ jobs:
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/metric_refinement_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/landmark_relocalization_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/known_pose_epipolar_synthetic
+          alr -n -C examples exec -- sh ../scripts/run_native.sh bin/three_view_landmarks_synthetic
   linux-sanitizers:
     runs-on: ubuntu-24.04
     steps:
@@ -122,3 +123,4 @@ jobs:
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/metric_refinement_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/landmark_relocalization_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/known_pose_epipolar_synthetic
+          alr -n -C examples exec -- sh ../scripts/run_native.sh bin/three_view_landmarks_synthetic
