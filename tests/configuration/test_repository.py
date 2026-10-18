@@ -54,6 +54,38 @@ class RepositoryTests(unittest.TestCase):
             self.assertIn("bin/three_view_landmarks_synthetic",
                           (ROOT / ".github/workflows" / filename).read_text())
 
+    def test_plane_correspondence_reuses_batches_and_guards_source_coordinates(self):
+        text = (ROOT / "src/opencv-calib3d.adb").read_text()
+        start = text.index("   function Verify_Plane_Constrained_Correspondences")
+        stop = text.index("   function Plane_Constrained_Landmark_Observations", start)
+        operation = text[start:stop]
+        validation = operation[:operation.index("Sources : constant")]
+        for value in ("First_Pixels", "Second_Pixels", "First_Intrinsics", "Second_Intrinsics",
+                      "First_Distortion", "Second_Distortion", "First_Pose", "Second_Pose"):
+            self.assertIn(f"Validate ({value})", validation)
+        self.assertIn("Validate (Plane, Options.Intersection)", validation)
+        self.assertIn("Is_Finite (Options.Maximum_Second_Pixel_Error)", validation)
+        for name in ("Unproject_Pixels_Onto_World_Plane", "Evaluate_AP3P_References"):
+            self.assertEqual(operation.count(name), 1)
+        self.assertIn("if Accepted (Sources (I)) then", operation)
+        self.assertIn("World (N) := Accepted_World_Position (Sources (I))", operation)
+        self.assertIn("Mapping (N) := I", operation)
+        self.assertIn("Results (Mapping (J))", operation)
+        for name in ("World_Bearing_Rays", "Project_Points", "Solve_", "Refine_", "C.", "exception"):
+            self.assertNotIn(name, operation)
+
+    def test_plane_correspondence_example_contract_and_hosted_gates(self):
+        for filename in ("cross-platform.yml", "opencv-compatibility.yml"):
+            self.assertIn("bin/plane_correspondence_synthetic",
+                          (ROOT / ".github/workflows" / filename).read_text())
+        example = (ROOT / "examples/src/plane_correspondence_synthetic.adb").read_text()
+        self.assertNotIn(" := Project_Points", example)
+        self.assertIn("raise Program_Error", example)
+        contract = (ROOT / "docs/plane-correspondence-contract.md").read_text()
+        for term in ("all-or-error", "coincident physical camera centers", "six-degree-of-freedom",
+                     "Source_Intersection_Rejected"):
+            self.assertIn(term.lower(), contract.lower())
+
     def test_known_pose_examples_and_fault_sanitizer_gates(self):
         for filename in ("cross-platform.yml", "opencv-compatibility.yml"):
             text = (ROOT / ".github/workflows" / filename).read_text()

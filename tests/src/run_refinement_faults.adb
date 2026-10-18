@@ -35,6 +35,82 @@ procedure Run_Refinement_Faults is
 begin
    declare
       Plane : constant World_Plane := ([0.0, 0.0, 10.0], [0.0, 0.0, 1.0]);
+      Policy : constant Plane_Correspondence_Verification_Options := ((0.0, 0.0, 100.0, 1.0E-10), 1.0E-8);
+      Identity : constant World_To_Camera_Pose := (others => <>);
+      Calibration : constant Camera_Intrinsics := (1000.0, 1000.0, 320.0, 240.0);
+      Pixels : constant Image_Point_Array := [[320.0, 240.0], [420.0, 440.0]];
+      function Request (Mode : Natural := 0) return Plane_Correspondence_Result_Array is
+        (Verify_Plane_Constrained_Correspondences
+          ((if Mode = 1 then Image_Point_Array'[1 .. 0 => <>] else Pixels),
+           (if Mode = 1 then Image_Point_Array'[1 .. 0 => <>] else Pixels),
+           Calibration, Calibration, No_Distortion, No_Distortion, Identity,
+           (if Mode = 3 then World_To_Camera_Pose'([0.0, 0.0, 0.0], [0.0, 0.0, -20.0]) else Identity),
+           (if Mode = 2 then World_Plane'([0.0, 0.0, -10.0], [0.0, 0.0, 1.0]) else Plane), Policy));
+      Saved : Plane_Correspondence_Result_Array := Request;
+      Previous : constant Plane_Correspondence_Result_Array := Saved;
+      type Stages is array (Positive range <>) of Interfaces.C.int;
+      Count : Natural := 0;
+   begin
+      for Stage of Stages'[1, 2, 3, 4, 13, 14, 15, 16] loop
+         for Kind in Interfaces.C.int range 1 .. 5 loop
+            Fail (Stage, Kind);
+            declare Empty : constant Plane_Correspondence_Result_Array := Request (1);
+            begin Check (Empty'First = 1 and then Empty'Last = 0, "empty plane correspondence bounds"); end;
+            --  A malformed target must be rejected before even source native
+            --  entry; if it consumes this checkpoint the subsequent call fails.
+            begin
+               declare Invalid : constant Plane_Correspondence_Result_Array := Verify_Plane_Constrained_Correspondences
+                 (Pixels, Pixels, Calibration, (0.0, 1.0, 0.0, 0.0), No_Distortion, No_Distortion,
+                  Identity, Identity, Plane, Policy);
+               begin Check (Invalid'Length = 999, "invalid target calibration accepted"); end;
+            exception when OpenCV.OpenCV_Error => null; end;
+            if Stage = 1 or else Stage = 2 then
+               declare
+                  Rejected : constant Plane_Correspondence_Result_Array := Request (2);
+                  Behind : constant Plane_Correspondence_Result_Array := Request (3);
+               begin
+                  Check (not Second_View_Evaluated (Rejected (1)) and then
+                         Disposition (Behind (1)) = Second_Non_Positive_Depth,
+                         "source rejection/nonpositive depth must skip native projection");
+               end;
+            end if;
+            begin
+               Saved := Request;
+               raise Program_Error with "plane correspondence swallowed fault or consumed it in skipped/invalid call";
+            exception when OpenCV.OpenCV_Error => Count := Count + 1; end;
+            Check (Saved = Previous, "plane correspondence native failure partially published results");
+            Saved := Request;
+            Check (Saved = Previous and then Accepted (Saved (2)), "plane correspondence recovery failed");
+         end loop;
+      end loop;
+      Check (Count = 40, "plane correspondence exception count");
+      --  The existing 15/16 hook is first-hit only: in an end-to-end call it
+      --  fires at SOURCE Rodrigues, not target Rodrigues. Exercise target
+      --  evaluator directly; do not invent an nth-hit hook or claim isolation.
+      declare
+         Points : constant Object_Point_Array := [[0.0, 0.0, 10.0], [1.0, 2.0, 10.0]];
+         Target : AP3P_Reference_Result_Matrix := Evaluate_AP3P_References
+           ([(Pose => Identity)], Points, Pixels, Calibration);
+         Previous_Target : constant AP3P_Reference_Result_Matrix := Target;
+      begin
+         for Stage of Stages'[15, 16] loop
+            for Kind in Interfaces.C.int range 1 .. 5 loop
+               Fail (Stage, Kind);
+               begin
+                  Target := Evaluate_AP3P_References ([(Pose => Identity)], Points, Pixels, Calibration);
+                  raise Program_Error with "target evaluator Rodrigues fault swallowed";
+               exception when OpenCV.OpenCV_Error => null; end;
+               Check (Target = Previous_Target, "target Rodrigues failure changed assigned diagnostics");
+               Target := Evaluate_AP3P_References ([(Pose => Identity)], Points, Pixels, Calibration);
+               Check (Target = Previous_Target, "target Rodrigues recovery failed");
+            end loop;
+         end loop;
+      end;
+      Ada.Text_IO.Put_Line
+        ("PASS: plane correspondence 40 end-to-end native faults + 10 direct target Rodrigues faults; empty/invalid/skipped checkpoints, atomicity, recovery");
+   end;
+   declare
+      Plane : constant World_Plane := ([0.0, 0.0, 10.0], [0.0, 0.0, 1.0]);
       Policy : constant World_Plane_Intersection_Options := (0.0, 0.0, 100.0, 1.0E-10);
       Identity : constant World_To_Camera_Pose := (others => <>);
       Calibration : constant Camera_Intrinsics := (1000.0, 1000.0, 320.0, 240.0);

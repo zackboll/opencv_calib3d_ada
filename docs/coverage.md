@@ -1,5 +1,24 @@
 # Coverage
 
+## Task 025 plane-constrained correspondence verification
+
+223 AUnit registrations preserve all 215 baseline registrations and add eight
+grouped tests: independent downward-camera and wrong-target oracles; distinct
+all-five Brown/noncommuting rotations/tilted plane; mixed source/target rejection;
+same physical center; inclusive/adjacent target and inherited source policies;
+per-point target transform/residual overflow versus atomic real native failure;
+empty/extreme bounds, ownership, guards and final-only adapter; full invalid
+request validation including empty input. The thirteenth example independently
+projects distorted tilted-plane matches, a wrong B observation, source grazing
+and separate target nonpositive depth, asserting dispositions and counts.
+
+The added fault campaign covers 40 end-to-end injections at existing source and
+target-projection checkpoints plus 10 direct target-evaluator Rodrigues cases.
+The first-hit Rodrigues hook cannot target B alone through the wrapper; no new
+hook is introduced. Empty/invalid/skipped projection requests preserve armed
+checkpoints. See [actual execution and developer review](plane-correspondence-validation.md);
+this inventory is not by itself a passing-result claim. ABI remains 48.
+
 ## Task 024 world-plane intersection
 
 215 AUnit registrations preserve all 207 baseline registrations and add eight
