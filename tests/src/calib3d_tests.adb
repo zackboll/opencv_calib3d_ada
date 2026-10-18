@@ -7077,6 +7077,259 @@ package body Calib3D_Tests is
 
 
 
+   Metric_K : constant Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);
+   Metric_First : constant World_To_Camera_Pose :=
+     (Rotation => [0.0, 0.0, 0.0], Translation => [0.0, 0.0, 0.0]);
+   Metric_Second : constant World_To_Camera_Pose :=
+     (Rotation => [0.0, 0.0, 0.0], Translation => [-2.0, 0.0, 0.0]);
+   Metric_Policy : constant Metric_Triangulation_Options := (0.0, 1.0E-8, 1.0E-6, 1.0E-6);
+
+   function Metric_Rectified
+     (A : Image_Point := [0.5, 0.125]; B : Image_Point := [0.25, 0.125];
+      First : World_To_Camera_Pose := Metric_First;
+      Second : World_To_Camera_Pose := Metric_Second;
+      Policy : Metric_Triangulation_Options := Metric_Policy)
+      return Metric_Triangulated_Point
+   is
+      V : constant Metric_Triangulated_Point_Array := Triangulate_World_Points
+        ([1 => A], [1 => B], Metric_K, Metric_K, No_Distortion, No_Distortion,
+         First, Second, Policy);
+   begin
+      Assert (V'First = 1 and then V'Length = 1, "metric one-based result");
+      return V (1);
+   end Metric_Rectified;
+
+   procedure Metric_Oracle (T : in out Fixture) is
+      pragma Unreferenced (T);
+      V : constant Metric_Triangulated_Point := Metric_Rectified;
+   begin
+      Assert (V.Disposition = Metric_Accepted and then V.Source.Point.Status = Usable,
+              "rectified metric accepted");
+      Assert (Point_Gap (V.Geometry.World_Position, [4.0, 1.0, 8.0]) < 1.0E-12,
+              "independent disparity oracle (4,1,8)");
+      Assert (abs (V.Geometry.First_Depth - 8.0) < 1.0E-12 and then
+              abs (V.Geometry.Second_Depth - 8.0) < 1.0E-12, "baseline-scaled depths");
+   end Metric_Oracle;
+
+   procedure Metric_General (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Independent noncommuting Rz(0.3), Rx(-0.2), scalar Brown projections.
+      A : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, 0.3], Translation => [0.2, -0.1, 0.4]);
+      B : constant World_To_Camera_Pose :=
+        (Rotation => [-0.2, 0.0, 0.0], Translation => [-1.8, 0.3, 0.2]);
+      KA : constant Camera_Intrinsics := (800.0, 820.0, 320.0, 240.0);
+      KB : constant Camera_Intrinsics := (600.0, 640.0, 310.0, 220.0);
+      DA : constant Distortion_Coefficients := (-0.12, 0.03, 0.001, -0.0015, 0.004);
+      DB : constant Distortion_Coefficients := (0.08, -0.02, -0.002, 0.001, -0.003);
+      Truth : constant Object_Point := [1.4, 0.6, 8.0];
+      CA : constant Object_Point :=
+        [Math.Cos (0.3) * Truth (0) - Math.Sin (0.3) * Truth (1) + 0.2,
+         Math.Sin (0.3) * Truth (0) + Math.Cos (0.3) * Truth (1) - 0.1, 8.4];
+      CB : constant Object_Point :=
+        [Truth (0) - 1.8, Math.Cos (-0.2) * Truth (1) - Math.Sin (-0.2) * Truth (2) + 0.3,
+         Math.Sin (-0.2) * Truth (1) + Math.Cos (-0.2) * Truth (2) + 0.2];
+   begin
+      for Model in 1 .. 2 loop
+         declare
+            D1 : constant Distortion_Coefficients := (if Model = 1 then No_Distortion else DA);
+            D2 : constant Distortion_Coefficients := (if Model = 1 then No_Distortion else DB);
+            P : constant Image_Point_Array := [1 => Scalar_Project (CA, KA, D1)];
+            Q : constant Image_Point_Array := [1 => Scalar_Project (CB, KB, D2)];
+            N1 : constant Image_Point_Array := Project_Points ([1 => Truth], KA, D1, A);
+            N2 : constant Image_Point_Array := Project_Points ([1 => Truth], KB, D2, B);
+            V : constant Metric_Triangulated_Point_Array := Triangulate_World_Points
+              (P, Q, KA, KB, D1, D2, A, B, Metric_Policy);
+            Reversed : constant Metric_Triangulated_Point_Array := Triangulate_World_Points
+              (Q, P, KB, KA, D2, D1, B, A, Metric_Policy);
+         begin
+            for Axis in 0 .. 1 loop
+               Assert (abs (P (1) (Axis) - N1 (1) (Axis)) < 1.0E-10 and then
+                       abs (Q (1) (Axis) - N2 (1) (Axis)) < 1.0E-10, "analytic Brown/native match");
+            end loop;
+            Assert (V (1).Disposition = Metric_Accepted and then
+                    Reversed (1).Disposition = Metric_Accepted, "general and reversed acceptance");
+            Assert (Point_Gap (V (1).Geometry.World_Position, Truth) < 1.0E-9 and then
+                    Point_Gap (Reversed (1).Geometry.World_Position, Truth) < 1.0E-9,
+                    "independent world truth and camera reversal");
+         end;
+      end loop;
+   end Metric_General;
+
+   procedure Metric_Degenerate (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Zero : constant Metric_Triangulated_Point := Metric_Rectified (Second => Metric_First);
+      Infinity : constant Metric_Triangulated_Point :=
+        Metric_Rectified (A => [0.0, 0.0], B => [0.0, 0.0]);
+      Behind : constant Metric_Triangulated_Point :=
+        Metric_Rectified (A => [-0.5, -0.125], B => [-0.25, -0.125]);
+   begin
+      Assert (Zero.Disposition = No_Physical_Baseline and then not Zero.Source.Available
+              and then not Zero.Geometry.Available and then not Zero.Pixels.Available, "no zero-baseline point");
+      Assert (Infinity.Disposition = Source_At_Infinity and then
+              Infinity.Source.Point.Status = At_Infinity and then not Infinity.Geometry.Available,
+              "genuine homogeneous infinity retained");
+      Assert (Behind.Disposition = Source_Non_Positive_Depth and then
+              Behind.Source.Point.Status = Non_Positive_Depth and then not Behind.Geometry.Available,
+              "nonpositive source retained");
+   end Metric_Degenerate;
+
+   procedure Metric_Quality (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Low : constant Metric_Triangulated_Point := Metric_Rectified
+        (A => [0.5, 0.125], B => [0.499999, 0.125], Policy => (0.01, 1.0, 1.0, 1.0));
+      Normalized : constant Metric_Triangulated_Point := Metric_Rectified
+        (B => [0.25, 0.13], Policy => (0.0, 0.0, 1.0, 1.0));
+      Pixel : constant Metric_Triangulated_Point := Metric_Rectified
+        (B => [0.25, 0.13], Policy => (0.0, 1.0, 0.0, 0.0));
+      Limits : constant Metric_Triangulation_Options :=
+        (Pixel.Source.Quality.Parallax.Acute_Line_Angle_Radians,
+         OpenCV.Float64_Value'Max (Pixel.Source.Point.First_Normalized_Error,
+                                  Pixel.Source.Point.Second_Normalized_Error),
+         Pixel.Pixels.First_Error_Pixels, Pixel.Pixels.Second_Error_Pixels);
+      Inclusive : constant Metric_Triangulated_Point := Metric_Rectified
+        (B => [0.25, 0.13], Policy => Limits);
+   begin
+      Assert (Low.Source.Point.Status = Usable and then Low.Disposition = Metric_Policy_Rejected
+              and then not Low.Source.Quality.Passes_Parallax_Limit, "explicit acute parallax rejection");
+      Assert (Normalized.Source.Point.Status = Usable and then
+              Normalized.Disposition = Metric_Policy_Rejected and then
+              not Normalized.Source.Quality.Passes_Reprojection_Limit, "normalized policy rejection");
+      Assert (Pixel.Source.Quality.Accepted and then Pixel.Disposition = Metric_Policy_Rejected
+              and then Pixel.Geometry.Available and then Pixel.Pixels.Available, "pixel units/policy distinct");
+      Assert (Inclusive.Disposition = Metric_Accepted, "all four limits inclusive without epsilon");
+   end Metric_Quality;
+
+   procedure Metric_Range (T : in out Fixture) is
+      pragma Unreferenced (T);
+      P : World_To_Camera_Pose := Metric_Second;
+      A : World_To_Camera_Pose := Metric_First;
+   begin
+      P.Translation := [-2.0E-300, 0.0, 0.0];
+      declare
+         V : constant Metric_Triangulated_Point := Metric_Rectified (Second => P);
+      begin
+         Assert (V.Disposition = Metric_Accepted and then
+                 abs (V.Geometry.World_Position (2) / 1.0E-300 - 8.0) < 1.0E-12,
+                 "tiny nonzero baseline not collapsed");
+      end;
+      P.Translation := [-2.0E300, 0.0, 0.0];
+      declare
+         V : constant Metric_Triangulated_Point := Metric_Rectified (Second => P);
+      begin
+         Assert (V.Disposition = Metric_Accepted and then
+                 abs (V.Geometry.World_Position (2) / 1.0E300 - 8.0) < 1.0E-12, "large finite baseline");
+      end;
+      P.Translation := [-1.0E308, 0.0, 0.0];
+      declare
+         V : constant Metric_Triangulated_Point := Metric_Rectified (Second => P);
+      begin
+         Assert (V.Disposition = Metric_Conversion_Unavailable and then
+                 V.Source.Point.Status = Usable and then not V.Geometry.Available, "metric scaling overflow");
+      end;
+      A.Translation := [-1.0E12, 1.0E12, 0.0];
+      P := A;
+      P.Translation (0) := P.Translation (0) - 2.0;
+      declare
+         V : constant Metric_Triangulated_Point := Metric_Rectified (First => A, Second => P);
+      begin
+         Assert (V.Disposition = Metric_Accepted and then
+                 abs (V.Geometry.World_Position (0) - (1.0E12 + 4.0)) <= 0.0002,
+                 "large world origin with representable small baseline");
+      end;
+   end Metric_Range;
+
+   procedure Metric_Bounds (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant Image_Point_Array (Positive'Last - 1 .. Positive'Last) :=
+        [[0.5, 0.125], [0.25, 0.0625]];
+      B : constant Image_Point_Array (17 .. 18) := [[0.25, 0.125], [0.125, 0.0625]];
+      V : constant Metric_Triangulated_Point_Array := Triangulate_World_Points
+        (A, B, Metric_K, Metric_K, No_Distortion, No_Distortion,
+         Metric_First, Metric_Second, Metric_Policy);
+      Empty : constant Metric_Triangulated_Point_Array := Triangulate_World_Points
+        (A (1 .. 0), B (1 .. 0), Metric_K, Metric_K, No_Distortion, No_Distortion,
+         Metric_First, Metric_Second, Metric_Policy);
+   begin
+      Assert (V'First = 1 and then V'Length = 2 and then Empty'First = 1 and then Empty'Length = 0,
+              "extreme lower bounds and empty");
+      Assert (Point_Gap (V (1).Geometry.World_Position, [4.0, 1.0, 8.0]) < 1.0E-12 and then
+              Point_Gap (V (2).Geometry.World_Position, [4.0, 1.0, 16.0]) < 1.0E-11,
+              "positional order preserved at Positive'Last");
+   end Metric_Bounds;
+
+   procedure Metric_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check); --  Deliberate IEEE invalid input tests.
+      A : Image_Point_Array := [1 => [0.5, 0.125]];
+      B : Image_Point_Array := [1 => [0.25, 0.125]];
+      KA : Camera_Intrinsics := Metric_K;
+      D : Distortion_Coefficients := No_Distortion;
+      P : World_To_Camera_Pose := Metric_First;
+      O : Metric_Triangulation_Options := Metric_Policy;
+      procedure Reject (Empty : Boolean := False; Mismatch : Boolean := False) is
+      begin
+         declare
+            V : constant Metric_Triangulated_Point_Array := Triangulate_World_Points
+              (A (1 .. (if Empty then 0 else 1)),
+               B (1 .. (if Empty or Mismatch then 0 else 1)),
+               KA, Metric_K, D, No_Distortion, P, Metric_Second, O);
+         begin
+            Assert (False, "invalid metric request returned" & V'Length'Image);
+         end;
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Reject;
+   begin
+      Reject (Mismatch => True);
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         declare
+            Bad : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Kind));
+         begin
+            A (1) (0) := Bad;
+            Reject;
+            A (1) (0) := 0.5;
+            B (1) (1) := Bad;
+            Reject;
+            B (1) (1) := 0.125;
+            KA.Focal_X := Bad;
+            Reject (Empty => True);
+            KA := Metric_K;
+            D.K3 := Bad;
+            Reject (Empty => True);
+            D := No_Distortion;
+            P.Translation (1) := Bad;
+            Reject (Empty => True);
+            P := Metric_First;
+            for Field in 1 .. 4 loop
+               O := Metric_Policy;
+               case Field is
+                  when 1 => O.Minimum_Acute_Parallax_Radians := Bad;
+                  when 2 => O.Maximum_Normalized_Reprojection_Error := Bad;
+                  when 3 => O.Maximum_First_Pixel_Reprojection_Error := Bad;
+                  when 4 => O.Maximum_Second_Pixel_Reprojection_Error := Bad;
+               end case;
+               Reject (Empty => True);
+            end loop;
+            O := Metric_Policy;
+         end;
+      end loop;
+      KA.Focal_Y := 0.0;
+      Reject;
+      KA := Metric_K;
+      for Field in 1 .. 5 loop
+         O := Metric_Policy;
+         case Field is
+            when 1 => O.Minimum_Acute_Parallax_Radians := -1.0;
+            when 2 => O.Maximum_Normalized_Reprojection_Error := -1.0;
+            when 3 => O.Maximum_First_Pixel_Reprojection_Error := -1.0;
+            when 4 => O.Maximum_Second_Pixel_Reprojection_Error := -1.0;
+            when 5 => O.Minimum_Acute_Parallax_Radians := 2.0;
+         end case;
+         Reject;
+      end loop;
+   end Metric_Invalid;
+
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
@@ -7244,6 +7497,13 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("epipolar correction Positive'Last lower bound", Correction_Upper_Bound'Access));
       Result.Add_Test (Caller.Create ("epipolar correction invalid inputs and options", Correction_Invalid'Access));
       Result.Add_Test (Caller.Create ("epipolar correction C/Ada layout and interchange", Correction_Layout'Access));
+      Result.Add_Test (Caller.Create ("metric rectified independent oracle", Metric_Oracle'Access));
+      Result.Add_Test (Caller.Create ("metric noncommuting Brown and reversed cameras", Metric_General'Access));
+      Result.Add_Test (Caller.Create ("metric zero baseline infinity and nonpositive depth", Metric_Degenerate'Access));
+      Result.Add_Test (Caller.Create ("metric explicit inclusive quality policy", Metric_Quality'Access));
+      Result.Add_Test (Caller.Create ("metric tiny large and overflowing coordinates", Metric_Range'Access));
+      Result.Add_Test (Caller.Create ("metric extreme positional bounds and empty", Metric_Bounds'Access));
+      Result.Add_Test (Caller.Create ("metric invalid inputs and options", Metric_Invalid'Access));
       return Result;
    end Suite;
 end Calib3D_Tests;

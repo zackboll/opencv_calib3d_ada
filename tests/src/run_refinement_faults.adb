@@ -33,6 +33,48 @@ procedure Run_Refinement_Faults is
    end Check;
 begin
    declare
+      A : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, 0.0], Translation => [0.0, 0.0, 0.0]);
+      B : constant World_To_Camera_Pose :=
+        (Rotation => [0.0, 0.0, 0.0], Translation => [-2.0, 0.0, 0.0]);
+      Identity : constant Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);
+      Policy : constant Metric_Triangulation_Options := (0.0, 1.0, 1.0, 1.0);
+      Saved : Metric_Triangulated_Point_Array (1 .. 1);
+      type Stages is array (Positive range <>) of Interfaces.C.int;
+   begin
+      for Stage of Stages'[1, 2, 13, 14, 15, 16, 37, 38, 39, 40, 41] loop
+         for Kind in Interfaces.C.int range 1 .. 5 loop
+            Fail (Stage, Kind);
+            begin
+               Saved := Triangulate_World_Points
+                 ([1 => [0.5, 0.125]], [1 => [0.25, 0.125]], Identity, Identity,
+                  No_Distortion, No_Distortion, A, B, Policy);
+               raise Program_Error with "metric native failure silently reclassified";
+            exception
+               when OpenCV.OpenCV_Error => null;
+            end;
+            Check (Saved (1).Disposition = No_Physical_Baseline and then
+                   not Saved (1).Source.Available, "metric failure partially published");
+         end loop;
+      end loop;
+      --  An armed triangulation checkpoint must survive exact-zero baseline.
+      Fail (37, 3);
+      Saved := Triangulate_World_Points
+        ([1 => [0.5, 0.125]], [1 => [0.25, 0.125]], Identity, Identity,
+         No_Distortion, No_Distortion, A, A, Policy);
+      Check (Saved (1).Disposition = No_Physical_Baseline, "zero baseline entered triangulation");
+      begin
+         Saved := Triangulate_World_Points
+           ([1 => [0.5, 0.125]], [1 => [0.25, 0.125]], Identity, Identity,
+            No_Distortion, No_Distortion, A, B, Policy);
+         raise Program_Error with "zero baseline consumed armed native checkpoint";
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+      Ada.Text_IO.Put_Line ("PASS: metric orchestration 55 native exceptions, propagation and atomicity; zero baseline preserves checkpoint");
+   end;
+
+   declare
       H : constant Homography_Matrix := [[1.0, 0.0, -0.12], [0.0, 1.0, 0.04], [0.0, 0.0, 1.08]];
       Identity : constant Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);
       procedure Control (Mode : Interfaces.C.int)
@@ -417,6 +459,77 @@ begin
       end;
       Check (Live = 0, "unknown-status rejection leaked handle");
       Ada.Text_IO.Put_Line ("PASS: Ada triangulation 25 faults, all five status mappings, mixed batches, unknown-status rejection; live handles=0");
+      declare
+         A : World_To_Camera_Pose :=
+           (Rotation => [0.0, 0.0, 0.0], Translation => [0.0, 0.0, 0.0]);
+         B : World_To_Camera_Pose :=
+           (Rotation => [0.0, 0.0, 0.0], Translation => [-1.0, 0.0, 0.0]);
+         Calibration : Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);
+         Pixels : Image_Point_Array := [1 => [0.4, 0.2]];
+         function Reconstruct return Metric_Triangulated_Point is
+            V : constant Metric_Triangulated_Point_Array := Triangulate_World_Points
+              (Pixels, Pixels, Calibration, Calibration, No_Distortion, No_Distortion,
+               A, B, (0.0, OpenCV.Float64_Value'Last,
+                      OpenCV.Float64_Value'Last, OpenCV.Float64_Value'Last));
+         begin
+            Check (Live = 0, "metric control leaked source handle");
+            return V (1);
+         end Reconstruct;
+         procedure Unavailable is
+            V : constant Metric_Triangulated_Point := Reconstruct;
+         begin
+            Check (V.Disposition = Metric_Conversion_Unavailable and then
+                   V.Source.Point.Status = Usable and then not V.Geometry.Available,
+                   "metric numerical control did not preserve Usable/unavailable");
+         end Unavailable;
+      begin
+         Inject (100.0, 1.0, 1.0E-307, 1.0);
+         declare
+            V : constant Metric_Triangulated_Point := Reconstruct;
+         begin
+            Check (V.Disposition = Source_Undefined_Reprojection and then
+                   V.Source.Point.Status = Undefined_Reprojection and then not V.Geometry.Available,
+                   "metric undefined source mapping");
+         end;
+         Inject (Nonfinite (0), 1.0, 5.0, 1.0);
+         declare
+            V : constant Metric_Triangulated_Point := Reconstruct;
+         begin
+            Check (V.Disposition = Source_Unrepresentable_Point and then
+                   V.Source.Point.Status = Unrepresentable_Point and then not V.Geometry.Available,
+                   "metric unrepresentable source mapping");
+         end;
+         --  Actual triangulation executes before explicitly test-only replacements.
+         B.Translation := [-1.0E-300, 0.0, 0.0];
+         Inject (0.0, 0.0, 1.0E-100, 1.0);
+         Unavailable; --  positive unit depth scales to exact zero
+         Inject (1.0, 0.0, 1.0, 1.0E-300);
+         declare
+            V : constant Metric_Triangulated_Point := Reconstruct;
+         begin
+            Check (V.Geometry.Available and then
+                   abs (V.Geometry.First_Depth - 1.0) < 1.0E-12,
+                   "large finite unit coordinates safely scaled");
+         end;
+         A.Translation := [-1.0E308, 0.0, 0.0];
+         B.Translation := [-1.0E308, -1.0, 0.0];
+         Inject (1.0E308, 0.0, 1.0, 1.0);
+         Unavailable; --  X_first - t1 overflows before world rotation
+         A.Translation := [0.0, 0.0, 0.0];
+         B.Translation := [-1.0, 0.0, 0.0];
+         Calibration.Focal_X := 1.0E308;
+         Pixels (1) := [-1.0E308, 0.0];
+         Inject (1.0, 0.0, 1.0, 1.0);
+         declare
+            V : constant Metric_Triangulated_Point := Reconstruct;
+         begin
+            Check (V.Disposition = Metric_Conversion_Unavailable and then
+                   V.Geometry.Available and then not V.Pixels.Available,
+                   "unrepresentable pixel subtraction not a valid diagnostic");
+         end;
+         Ada.Text_IO.Put_Line ("PASS: metric source mappings, depth underflow, huge unit point, world overflow, pixel residual overflow controls");
+      end;
+
    end;
    declare
       Candidate : constant Planar_Motion_Hypothesis :=
