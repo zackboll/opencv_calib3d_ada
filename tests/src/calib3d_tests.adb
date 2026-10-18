@@ -855,6 +855,318 @@ package body Calib3D_Tests is
         OpenCV.Float64_Value'Image (Values (1).Direction (2)) & "); analytic R^T Brown oracle");
    end Distorted_World_Bearings;
 
+   Plane_Policy : constant World_Plane_Intersection_Options :=
+     (0.0, 0.0, OpenCV.Float64_Value'Last, OpenCV.Float64_Value'Last);
+   Ground : constant World_Plane := ([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+
+   function Plane_Hit
+     (Ray : World_Ray; Plane : World_Plane := Ground;
+      Options : World_Plane_Intersection_Options := Plane_Policy)
+      return World_Plane_Intersection
+   is
+      Values : constant World_Plane_Intersection_Array :=
+        Intersect_World_Rays_With_Plane ([Ray], Plane, Options);
+   begin
+      return Values (1);
+   end Plane_Hit;
+
+   procedure Plane_Downward (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Calibration : constant Camera_Intrinsics := (1000.0, 1000.0, 320.0, 240.0);
+      Pose : constant World_To_Camera_Pose :=
+        ([OpenCV.Float64_Value (Ada.Numerics.Pi), 0.0, 0.0], [0.0, 0.0, 10.0]);
+      Pixels : constant Image_Point_Array (Positive'Last - 1 .. Positive'Last) :=
+        [[320.0, 240.0], [420.0, 440.0]];
+      Values : constant World_Plane_Intersection_Array := Unproject_Pixels_Onto_World_Plane
+        (Pixels, Calibration, No_Distortion, Pose, Ground, Plane_Policy);
+      Direct : constant World_Plane_Intersection_Array := Intersect_World_Rays_With_Plane
+        (World_Bearing_Rays (Pixels, Calibration, No_Distortion, Pose), Ground, Plane_Policy);
+   begin
+      Assert (Values'First = 1 and then Values'Last = 2, "pixel positional bounds");
+      --  Rx(pi) sends camera (x,y,1) toward world (x,-y,-1).
+      --  Ten units of unnormalized Z gives (10*x,-10*y,0).
+      Check_Vector (Accepted_World_Position (Values (1)), [0.0, 0.0, 0.0]);
+      Check_Vector (Accepted_World_Position (Values (2)), [1.0, -2.0, 0.0]);
+      Assert (Near (Signed_Ray_Distance (Values (1)), 10.0), "principal range");
+      Assert (Near (Signed_Ray_Distance (Values (2)), Math.Sqrt (105.0)), "off-axis range");
+      Assert (Near (Absolute_Incidence_Cosine (Values (1)), 1.0), "principal incidence");
+      for I in Values'Range loop
+         Assert (Accepted (Values (I)) and then Values (I) = Direct (I), "same ray algorithm");
+      end loop;
+   end Plane_Downward;
+
+   procedure Plane_Analytic (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Vertical : constant World_Plane_Intersection := Plane_Hit
+        (([0.0, 0.0, 0.0], [0.5, 0.0, 1.0]), ([2.0, 0.0, 0.0], [1.0, 0.0, 0.0]));
+      type Normals is array (Positive range <>) of World_Direction;
+   begin
+      Check_Vector (Accepted_World_Position (Vertical), [2.0, 0.0, 4.0]);
+      Assert (Near (Signed_Ray_Distance (Vertical), Math.Sqrt (20.0)), "vertical range");
+      --  C=(1,2,3), V=(2,-1,3), A=(4,0,7), N=(1,2,3).
+      --  N.(A-C)=11; N.V=9; lambda=11/9; s=lambda*sqrt(14).
+      for Normal of Normals'[[1.0, 2.0, 3.0], [-1.0, -2.0, -3.0],
+                            [1.0E300, 2.0E300, 3.0E300]] loop
+         declare
+            Value : constant World_Plane_Intersection := Plane_Hit
+              (([1.0, 2.0, 3.0], [2.0, -1.0, 3.0]), ([4.0, 0.0, 7.0], Normal));
+         begin
+            Check_Vector (Accepted_World_Position (Value), [31.0 / 9.0, 7.0 / 9.0, 20.0 / 3.0]);
+            Assert (Near (Signed_Ray_Distance (Value), 11.0 * Math.Sqrt (14.0) / 9.0), "tilted range");
+         end;
+      end loop;
+   end Plane_Analytic;
+
+   procedure Plane_Brown (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Independent Rz(pi/2) and t=(1,2,3): world (1,0,7) -> (1,3,10).
+      X : constant OpenCV.Float64_Value := 0.1;
+      Y : constant OpenCV.Float64_Value := 0.3;
+      R2 : constant OpenCV.Float64_Value := X * X + Y * Y;
+      D : constant Distortion_Coefficients := (0.08, -0.02, 0.003, -0.004, 0.005);
+      Radial : constant OpenCV.Float64_Value := 1.0 + D.K1 * R2 + D.K2 * R2**2 + D.K3 * R2**3;
+      Pixel : constant Image_Point :=
+        [713.0 * (X * Radial + 2.0 * D.P1 * X * Y + D.P2 * (R2 + 2.0 * X * X)) + 301.0,
+         839.0 * (Y * Radial + D.P1 * (R2 + 2.0 * Y * Y) + 2.0 * D.P2 * X * Y) + 217.0];
+      Values : constant World_Plane_Intersection_Array := Unproject_Pixels_Onto_World_Plane
+        ([Pixel], (713.0, 839.0, 301.0, 217.0), D,
+         ([0.0, 0.0, OpenCV.Float64_Value (Ada.Numerics.Pi / 2.0)], [1.0, 2.0, 3.0]),
+         ([0.0, 0.0, 7.0], [0.0, 0.0, 1.0]), Plane_Policy);
+   begin
+      Check_Vector (Accepted_World_Position (Values (1)), [1.0, 0.0, 7.0], 1.0E-8);
+      Assert (Near (Signed_Ray_Distance (Values (1)), Math.Sqrt (110.0), 1.0E-8), "Brown range");
+   end Plane_Brown;
+
+   procedure Plane_Classifications (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Rays : constant World_Ray_Array :=
+        [([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
+         ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]),
+         ([0.0, 0.0, 0.0], [0.0, 0.0, -2.0]),
+         ([0.0, 0.0, 1.0], [0.0, 0.0, 1.0]),
+         ([0.0, 0.0, 1.0], [1.0, 0.0, -1.0E-12])];
+      Values : constant World_Plane_Intersection_Array :=
+        Intersect_World_Rays_With_Plane (Rays, Ground, Plane_Policy);
+      Options : World_Plane_Intersection_Options := Plane_Policy;
+   begin
+      Assert (Disposition (Values (1)) = Parallel_Ray, "parallel off plane");
+      Assert (Disposition (Values (2)) = Coplanar_Ray, "coplanar");
+      Assert (Disposition (Values (3)) = Intersection_At_Origin, "at origin");
+      Assert (Disposition (Values (4)) = Intersection_Behind_Ray, "behind");
+      Assert (Signed_Ray_Distance (Values (4)) = -1.0, "negative diagnostic retained");
+      Assert (Accepted (Values (5)), "nonzero tiny incidence is not parallel");
+      Options.Minimum_Absolute_Incidence_Cosine := Absolute_Incidence_Cosine (Values (5));
+      Assert (Accepted (Plane_Hit (Rays (5), Options => Options)), "measured incidence equality comparator");
+      Options.Minimum_Absolute_Incidence_Cosine := OpenCV.Float64_Value'Adjacent
+        (Options.Minimum_Absolute_Incidence_Cosine, 1.0);
+      Assert (Disposition (Plane_Hit (Rays (5), Options => Options)) = Grazing_Incidence_Rejected,
+              "one step above incidence");
+      Options.Minimum_Absolute_Incidence_Cosine := 1.0;
+      Assert (Disposition (Plane_Hit (Rays (4), Options => Options)) = Intersection_Behind_Ray,
+              "sign precedes angular screening");
+   end Plane_Classifications;
+
+   procedure Plane_Policies (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Ray : constant World_Ray := ([0.0, 0.0, 1.0], [0.0, 0.0, -1.0]);
+      Options : World_Plane_Intersection_Options := (1.0, 1.0, 1.0, 0.0);
+      Rounded_Ray : constant World_Ray := ([1.0E16, 0.0, 0.0], [1.0, 0.0, 1.0]);
+      --  X - Z = 1e16 - 2. At lambda=1 the X increment is lost;
+      --  the represented point is (1e16,0,1), off the represented plane.
+      Plane : constant World_Plane := ([1.0E16 - 2.0, 0.0, 0.0], [1.0, 0.0, -1.0]);
+      Residual_Ray : constant World_Ray := (Rounded_Ray.Origin, [-1.0, 0.0, 1.0]);
+      Measured : constant World_Plane_Intersection := Plane_Hit (Residual_Ray, Plane);
+      Residual : constant OpenCV.Float64_Value := Absolute_Plane_Residual (Measured);
+   begin
+      Assert (Accepted (Plane_Hit (Ray, Options => Options)), "inclusive min/max/residual equality");
+      Options.Minimum_Forward_Range := OpenCV.Float64_Value'Adjacent (1.0, 2.0);
+      Options.Maximum_Forward_Range := 2.0;
+      Assert (Disposition (Plane_Hit (Ray, Options => Options)) = Below_Minimum_Forward_Range,
+              "one representable step below min");
+      Options.Minimum_Forward_Range := 0.0;
+      Options.Maximum_Forward_Range := OpenCV.Float64_Value'Adjacent (1.0, 0.0);
+      Assert (Disposition (Plane_Hit (Ray, Options => Options)) = Above_Maximum_Forward_Range,
+              "one representable step above max");
+      Assert (Residual > 0.0, "large-origin residual fixture must be nonzero");
+      Options := Plane_Policy;
+      Options.Maximum_Absolute_Plane_Residual := 0.0;
+      Assert (Disposition (Plane_Hit (Residual_Ray, Plane, Options)) = Plane_Residual_Rejected,
+              "represented point residual gate");
+      --  These measured boundaries test comparators, not independent geometry.
+      Options.Maximum_Absolute_Plane_Residual := Residual;
+      Assert (Accepted (Plane_Hit (Residual_Ray, Plane, Options)), "measured residual equality");
+      Options.Maximum_Absolute_Plane_Residual := OpenCV.Float64_Value'Adjacent (Residual, 0.0);
+      Assert (Disposition (Plane_Hit (Residual_Ray, Plane, Options)) = Plane_Residual_Rejected,
+              "one step below nonzero residual");
+   end Plane_Policies;
+
+   procedure Plane_Extremes (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Huge : constant OpenCV.Float64_Value := OpenCV.Float64_Value'Last;
+      Values : constant World_Plane_Intersection_Array := Intersect_World_Rays_With_Plane
+        ([([0.0, 0.0, 1.0], [0.0, 0.0, -1.0]),
+          ([0.0, 0.0, 1.0E10], [1.0, 0.0, -1.0E-300]),
+          ([0.0, 0.0, 2.0], [0.0, 0.0, -1.0])], Ground, Plane_Policy);
+      Value : World_Plane_Intersection;
+   begin
+      Assert (Accepted (Values (1)) and then Accepted (Values (3)) and then
+              Disposition (Values (2)) = Numerically_Unavailable, "mixed division overflow isolation");
+      Assert (Incidence_Evaluated (Values (2)) and then not Has_Signed_Ray_Distance (Values (2)),
+              "division failure diagnostic availability");
+      Value := Plane_Hit (([0.0, 0.0, 1.0E-300], [0.0, 0.0, -1.0E-300]));
+      Assert (Accepted (Value) and then Signed_Ray_Distance (Value) = 1.0E-300, "tiny positive range");
+      Value := Plane_Hit (([0.0, 0.0, 0.0], [Huge, 0.0, Huge]),
+                         ([0.0, 0.0, 1.0E300], [0.0, 0.0, Huge]));
+      Assert (Accepted (Value), "scaled huge normal and direction");
+      Check_Vector (Accepted_World_Position (Value), [1.0E300, 0.0, 1.0E300], 1.0E286);
+      Value := Plane_Hit (([0.0, 0.0, -Huge], [0.0, 0.0, 1.0]),
+                         ([0.0, 0.0, Huge], [0.0, 0.0, 1.0]));
+      Assert (Disposition (Value) = Numerically_Unavailable, "subtraction overflow");
+      Value := Plane_Hit (([Huge, 0.0, 0.0], [1.0, 0.0, 1.0]),
+                         ([0.0, 0.0, 1.0E308], [0.0, 0.0, 1.0]));
+      Assert (Disposition (Value) = Numerically_Unavailable and then Has_Signed_Ray_Distance (Value),
+              "world reconstruction addition overflow retains distance");
+      Value := Plane_Hit (([1.0E16, 0.0, 4.0], [0.0, 0.0, -1.0]));
+      Check_Vector (Accepted_World_Position (Value), [1.0E16, 0.0, 0.0]);
+      Value := Plane_Hit (([1.0E16, 0.0, 0.0], [1.0, 0.0, 0.0]),
+                         ([1.0E16 + 2.0, 0.0, 0.0], [1.0, 0.0, 0.0]));
+      Assert (Signed_Ray_Distance (Value) = 2.0 and then Accepted (Value), "large origin representable offset");
+      Value := Plane_Hit (([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]),
+                         ([Huge, Huge, Huge], [1.0, 1.0, 1.0]));
+      Assert (Disposition (Value) = Numerically_Unavailable, "numerator dot accumulation overflow");
+      Value := Plane_Hit (([0.0, 0.0, 0.0], [1.0, 1.0, 0.0]),
+                         ([1.0E308, -Huge, 0.0], [1.0, 0.0, 0.0]));
+      Assert (Disposition (Value) = Numerically_Unavailable and then Has_Signed_Ray_Distance (Value)
+              and then not Plane_Residual_Evaluated (Value), "represented residual subtraction overflow");
+      Value := Plane_Hit (([0.0, 0.0, 1.0E-300], [1.0E-300, 0.0, -1.0]));
+      Assert (Disposition (Value) = Numerically_Unavailable and then Has_Signed_Ray_Distance (Value),
+              "nonzero reconstruction product underflow is unavailable");
+   end Plane_Extremes;
+
+   procedure Plane_Bounds_Guards (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Rays : World_Ray_Array (Positive'Last - 1 .. Positive'Last) :=
+        [([0.0, 0.0, 2.0], [0.0, 0.0, -1.0]), ([0.0, 0.0, 3.0], [0.0, 0.0, -1.0])];
+      Saved : constant World_Plane_Intersection_Array := Intersect_World_Rays_With_Plane
+        (Rays, Ground, Plane_Policy);
+      Empty : constant World_Plane_Intersection_Array := Intersect_World_Rays_With_Plane
+        ([1 .. 0 => <>], Ground, Plane_Policy);
+      Pixel_Empty : constant World_Plane_Intersection_Array := Unproject_Pixels_Onto_World_Plane
+        ([1 .. 0 => <>], Ray_K, No_Distortion, Quarter_Pose, Ground, Plane_Policy);
+      Absent : World_Plane_Intersection;
+      Parallel : constant World_Plane_Intersection := Plane_Hit (([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]));
+      procedure Check_Guard (Value : World_Plane_Intersection; Which : Positive) is
+         Scalar : OpenCV.Float64_Value;
+         Point : Object_Point;
+         pragma Unreferenced (Scalar, Point);
+      begin
+         case Which is
+            when 1 => Scalar := Absolute_Incidence_Cosine (Value);
+            when 2 => Scalar := Signed_Ray_Distance (Value);
+            when 3 => Scalar := Absolute_Plane_Residual (Value);
+            when others => Point := Accepted_World_Position (Value);
+         end case;
+         Assert (False, "unavailable plane accessor did not raise");
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Check_Guard;
+   begin
+      Rays := [others => ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0])];
+      Assert (Saved'First = 1 and then Saved'Last = 2 and then
+              Signed_Ray_Distance (Saved (1)) = 2.0 and then Signed_Ray_Distance (Saved (2)) = 3.0,
+              "owned results survive temporary arrays and caller mutation");
+      Assert (Empty'First = 1 and then Empty'Last = 0 and then
+              Pixel_Empty'First = 1 and then Pixel_Empty'Last = 0, "empty one-based bounds");
+      Assert (not Incidence_Evaluated (Absent) and then not Has_Signed_Ray_Distance (Absent)
+              and then not Plane_Residual_Evaluated (Absent) and then not Accepted (Absent), "default unavailable");
+      for Which in 1 .. 4 loop
+         Check_Guard (Absent, Which);
+      end loop;
+      for Which in 2 .. 4 loop
+         Check_Guard (Parallel, Which);
+      end loop;
+   end Plane_Bounds_Guards;
+
+   procedure Plane_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      procedure Expect_Error
+        (Plane : World_Plane := Ground; Options : World_Plane_Intersection_Options := Plane_Policy;
+         Ray : World_Ray := ([0.0, 0.0, 1.0], [0.0, 0.0, -1.0]); Empty : Boolean := False)
+      is
+      begin
+         declare
+            Values : constant World_Plane_Intersection_Array := Intersect_World_Rays_With_Plane
+              ((if Empty then World_Ray_Array'[1 .. 0 => <>] else [Ray]), Plane, Options);
+            pragma Unreferenced (Values);
+         begin null; end;
+         Assert (False, "invalid plane/ray/policy accepted");
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Expect_Error;
+      procedure Expect_Pixel_Error
+        (Calibration : Camera_Intrinsics := Ray_K;
+         D : Distortion_Coefficients := No_Distortion;
+         Pose : World_To_Camera_Pose := Quarter_Pose;
+         Plane : World_Plane := Ground;
+         Options : World_Plane_Intersection_Options := Plane_Policy)
+      is
+      begin
+         declare
+            Values : constant World_Plane_Intersection_Array := Unproject_Pixels_Onto_World_Plane
+              ([1 .. 0 => <>], Calibration, D, Pose, Plane, Options);
+            pragma Unreferenced (Values);
+         begin null; end;
+         Assert (False, "invalid empty pixel unprojection accepted");
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Expect_Pixel_Error;
+   begin
+      Expect_Pixel_Error (Calibration => (0.0, 1.0, 0.0, 0.0));
+      Expect_Pixel_Error (Plane => ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]));
+      Expect_Pixel_Error (Options => (0.0, -1.0, 1.0, 0.0));
+      Expect_Error (Plane => ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]), Empty => True);
+      Expect_Error (Ray => ([0.0, 0.0, 1.0], [0.0, 0.0, 0.0]));
+      Expect_Error (Options => (-0.1, 0.0, 1.0, 0.0), Empty => True);
+      Expect_Error (Options => (1.1, 0.0, 1.0, 0.0));
+      Expect_Error (Options => (0.0, -1.0, 1.0, 0.0));
+      Expect_Error (Options => (0.0, 2.0, 1.0, 0.0));
+      Expect_Error (Options => (0.0, 0.0, 0.0, 0.0));
+      Expect_Error (Options => (0.0, 0.0, -1.0, 0.0));
+      Expect_Error (Options => (0.0, 0.0, 1.0, -1.0));
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         declare
+            Invalid : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Kind));
+         begin
+            Expect_Pixel_Error (Calibration => (1.0, 1.0, Invalid, 0.0));
+            Expect_Pixel_Error (D => (K3 => Invalid, others => 0.0));
+            Expect_Pixel_Error (Pose => ([Invalid, 0.0, 0.0], [0.0, 0.0, 0.0]));
+            Expect_Pixel_Error (Pose => ([0.0, 0.0, 0.0], [0.0, Invalid, 0.0]));
+            for Axis in 0 .. 2 loop
+               declare
+                  Plane : World_Plane := Ground;
+                  Ray : World_Ray := ([0.0, 0.0, 1.0], [0.0, 0.0, -1.0]);
+               begin
+                  Plane.Anchor (Axis) := Invalid;
+                  Expect_Error (Plane => Plane, Empty => True);
+                  Plane := Ground;
+                  Plane.Normal (Axis) := Invalid;
+                  Expect_Error (Plane => Plane, Empty => True);
+                  Ray.Origin (Axis) := Invalid;
+                  Expect_Error (Ray => Ray);
+                  Ray.Origin := [0.0, 0.0, 1.0];
+                  Ray.Direction (Axis) := Invalid;
+                  Expect_Error (Ray => Ray);
+               end;
+            end loop;
+            Expect_Error (Options => (Invalid, 0.0, 1.0, 0.0), Empty => True);
+            Expect_Error (Options => (0.0, Invalid, 1.0, 0.0), Empty => True);
+            Expect_Error (Options => (0.0, 0.0, Invalid, 0.0), Empty => True);
+            Expect_Error (Options => (0.0, 0.0, 1.0, Invalid), Empty => True);
+         end;
+      end loop;
+   end Plane_Invalid;
+
    procedure Rotation_Layout (T : in out Fixture) is
       pragma Unreferenced (T);
       function Layout (Field : Interfaces.Integer_32) return Interfaces.Integer_32
@@ -9144,6 +9456,14 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("metric tiny large and overflowing coordinates", Metric_Range'Access));
       Result.Add_Test (Caller.Create ("metric extreme positional bounds and empty", Metric_Bounds'Access));
       Result.Add_Test (Caller.Create ("metric invalid inputs and options", Metric_Invalid'Access));
+      Result.Add_Test (Caller.Create ("plane downward analytic pixel oracle", Plane_Downward'Access));
+      Result.Add_Test (Caller.Create ("plane vertical tilted normal scale sign oracles", Plane_Analytic'Access));
+      Result.Add_Test (Caller.Create ("plane independent all-five Brown oracle", Plane_Brown'Access));
+      Result.Add_Test (Caller.Create ("plane classifications and incidence boundaries", Plane_Classifications'Access));
+      Result.Add_Test (Caller.Create ("plane inclusive range and represented residual policies", Plane_Policies'Access));
+      Result.Add_Test (Caller.Create ("plane numerical extremes mixed batch", Plane_Extremes'Access));
+      Result.Add_Test (Caller.Create ("plane empty extreme bounds ownership guards", Plane_Bounds_Guards'Access));
+      Result.Add_Test (Caller.Create ("plane invalid input and policy validation", Plane_Invalid'Access));
       return Result;
    end Suite;
 end Calib3D_Tests;

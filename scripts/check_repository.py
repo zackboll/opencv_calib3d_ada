@@ -56,7 +56,7 @@ def main() -> None:
 
     tests = (ROOT / "tests/src/calib3d_tests.adb").read_text()
     registrations = re.findall(r"Result\.Add_Test\s*\(Caller\.Create", tests)
-    check(len(registrations) == 207, "update documented AUnit inventory when changing tests")
+    check(len(registrations) == 215, "update documented AUnit inventory when changing tests")
     check(len(declared) == 48, "update private ABI inventory when changing exports")
     # Task 022 is Ada orchestration, not another native estimator/solver.
     public_body = (ROOT / "src/opencv-calib3d.adb").read_text()
@@ -72,10 +72,11 @@ def main() -> None:
                   ("Estimate_Essential_RANSAC", "Solve_PnP_RANSAC", "Refine_Pose_Iterative", "C.")),
           "known-pose verification must not estimate, refine or bypass public native-backed APIs")
     example_names = manifests[2]["executables"]
-    check(len(example_names) == 11 and "known_pose_epipolar_synthetic" in example_names and
+    check(len(example_names) == 12 and "ray_plane_unprojection_synthetic" in example_names and
+          "known_pose_epipolar_synthetic" in example_names and
           "three_view_landmarks_synthetic" in example_names and
           all((ROOT / "examples/src" / f"{name}.adb").is_file() for name in example_names),
-          "eleven synthetic example source files must be registered")
+          "twelve synthetic example source files must be registered")
     layout = (ROOT / "tests/layout/calib3d_layout.c").read_text()
     check("calib3d_test_triangulation_layout" in layout and
           "calib3d_test_fill_triangulation" in tests and

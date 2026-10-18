@@ -1,5 +1,18 @@
 # Architecture
 
+## World-plane geometry (Task 024)
+
+The owned Ada layer intersects normalized supplied `World_Ray_Array` values with
+a caller's `World_Plane`; the pixel adapter calls existing `World_Bearing_Rays`
+and the identical intersection primitive. No production C++ or C ABI change.
+Validation precedes batch evaluation, and dedicated arithmetic-only failure
+handling cannot absorb native ray-pipeline errors. Private result flags guard
+incidence, signed distance and represented residual; coordinates publish only
+after all mandatory caller gates pass. Frames remain `X_camera = R * X_world + t`
+and `C_world = -R^T * t`; all positions/ranges/residuals use caller Cartesian
+length units. This is supplied infinite-plane geometry, not terrain or geodesy.
+See [contract](world-plane-intersection-contract.md).
+
 ## Task 023 three-view landmark qualification
 
 Ada-only composition: complete validation -> Task 022 individual epipolar screening

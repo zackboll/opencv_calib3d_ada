@@ -1,5 +1,19 @@
 # Coverage
 
+## Task 024 world-plane intersection
+
+215 AUnit registrations preserve all 207 baseline registrations and add eight
+grouped tests: downward-camera analytic pixels, vertical/tilted scalar geometry
+and normal invariance, independent all-five Brown projection, exact classifiers
+and incidence boundaries, inclusive/adjacent range and represented-residual
+policy, numerical extremes and mixed batches, empty/extreme bounds and owned
+guarded results, malformed inputs including empty pixel calibration/pose checks.
+Thirty actual-shim injected native exceptions exercise undistortion, Rodrigues,
+camera center, assignment atomicity, native-free empty requests and recovery.
+The twelfth example is `ray_plane_unprojection_synthetic`. Production C++ and
+48-operation ABI remain unchanged. See [execution evidence and developer
+self-review](world-plane-intersection-validation.md); inventory is not a pass claim.
+
 ## Task 023-R1 reference projection batching correction
 
 207 AUnit registrations preserve all 204 reviewed-head registrations. Three new

@@ -1,5 +1,16 @@
 # Roadmap
 
+## Task 024 approved scope
+
+Supplied Cartesian world-plane intersection only: pure-Ada normalized forward
+world rays and a calibrated pixel adapter reusing `World_Bearing_Rays`. Mandatory
+inclusive incidence/range/represented-residual policy; owned guarded diagnostics
+and accepted coordinates. No new native algorithm, ABI operation (still 48),
+dependency, terrain lookup, geographic conversion, or plane fitting. Local plane
+patch selection/containment and DTED/DEM modeling remain application work.
+See [contract](world-plane-intersection-contract.md) and
+[validation](world-plane-intersection-validation.md).
+
 ## Task 023 approved scope
 
 Epipolar-gated three-view metric landmarks only: Task 022 per-correspondence

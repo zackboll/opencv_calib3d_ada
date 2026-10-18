@@ -1,5 +1,27 @@
 # OpenCV Calib3D for Ada
 
+## Task 024: calibrated pixel-to-world-plane intersection
+
+`Intersect_World_Rays_With_Plane` intersects supplied forward world rays with a
+caller-defined Cartesian `World_Plane`. `Unproject_Pixels_Onto_World_Plane` first
+reuses `World_Bearing_Rays`. Mandatory inclusive incidence, forward-range and
+represented-plane-residual policies govern acceptance; private owned results
+guard unavailable diagnostics and expose world coordinates only after acceptance.
+No C++ or private ABI change (48 operations). No terrain lookup or Earth model.
+The pose remains `X_camera = R * X_world + t`, with center `C_world = -R^T * t`.
+World coordinates and ranges use caller length units. Supplied pose/plane accuracy
+is not established by geometric intersection.
+
+```sh
+alr -n -C examples build
+alr -n -C examples exec -- sh ../scripts/run_native.sh bin/ray_plane_unprojection_synthetic
+```
+
+The twelfth example asserts independent synthetic horizontal/tilted geometry and
+explicit rejected/unavailable outcomes; it is not sensor-derived terrain evidence.
+See [contract](docs/world-plane-intersection-contract.md) and
+[validation/self-review](docs/world-plane-intersection-validation.md).
+
 ## Task 023: epipolar-gated three-view metric landmarks
 
 `Qualify_Three_View_Landmarks` screens first–second correspondences using known-pose

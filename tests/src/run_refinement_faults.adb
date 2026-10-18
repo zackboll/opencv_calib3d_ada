@@ -34,6 +34,45 @@ procedure Run_Refinement_Faults is
    end Check;
 begin
    declare
+      Plane : constant World_Plane := ([0.0, 0.0, 10.0], [0.0, 0.0, 1.0]);
+      Policy : constant World_Plane_Intersection_Options := (0.0, 0.0, 100.0, 1.0E-10);
+      Identity : constant World_To_Camera_Pose := (others => <>);
+      Calibration : constant Camera_Intrinsics := (1000.0, 1000.0, 320.0, 240.0);
+      Pixels : constant Image_Point_Array := [[320.0, 240.0], [420.0, 440.0]];
+      function Request (Empty : Boolean := False) return World_Plane_Intersection_Array is
+        (Unproject_Pixels_Onto_World_Plane
+          ((if Empty then Image_Point_Array'[1 .. 0 => <>] else Pixels),
+           Calibration, No_Distortion, Identity, Plane, Policy));
+      Saved : World_Plane_Intersection_Array := Request;
+      Previous : constant World_Plane_Intersection_Array := Saved;
+      type Stages is array (Positive range <>) of Interfaces.C.int;
+      Count : Natural := 0;
+   begin
+      for Stage of Stages'[3, 4, 13, 14, 15, 16] loop
+         for Kind in Interfaces.C.int range 1 .. 5 loop
+            Fail (Stage, Kind);
+            declare
+               Empty : constant World_Plane_Intersection_Array := Request (True);
+            begin
+               Check (Empty'First = 1 and then Empty'Last = 0, "empty plane bounds");
+            end;
+            begin
+               Saved := Request;
+               raise Program_Error with "world-plane native fault was swallowed or consumed by empty request";
+            exception
+               when OpenCV.OpenCV_Error => Count := Count + 1;
+            end;
+            Check (Saved = Previous, "world-plane failure changed previously assigned results");
+            Saved := Request;
+            Check (Saved = Previous and then Accepted (Saved (1)) and then Accepted (Saved (2)),
+                   "world-plane did not recover after native fault");
+         end loop;
+      end loop;
+      Check (Count = 30, "world-plane native exception count");
+      Ada.Text_IO.Put_Line
+        ("PASS: world-plane 30 SYNTHETIC undistortion/Rodrigues/center faults, atomicity, empty bypass, recovery");
+   end;
+   declare
       A : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
       B : World_To_Camera_Pose := ([0.0, 0.0, 0.0], [-2.0, 0.0, 0.0]);
       Identity : constant Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);

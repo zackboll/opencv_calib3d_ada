@@ -1231,6 +1231,203 @@ package body OpenCV.Calib3D is
       end;
    end World_Bearing_Rays;
 
+   procedure Validate
+     (Plane : World_Plane; Options : World_Plane_Intersection_Options)
+   is
+      Normal : constant Object_Point := Unit_Vector (Object_Point (Plane.Normal));
+      pragma Unreferenced (Normal);
+   begin
+      Validate_Vector (Plane.Anchor);
+      if not Is_Finite (Options.Minimum_Absolute_Incidence_Cosine)
+        or else Options.Minimum_Absolute_Incidence_Cosine not in 0.0 .. 1.0
+        or else not Is_Finite (Options.Minimum_Forward_Range)
+        or else Options.Minimum_Forward_Range < 0.0
+        or else not Is_Finite (Options.Maximum_Forward_Range)
+        or else Options.Maximum_Forward_Range <= 0.0
+        or else Options.Maximum_Forward_Range < Options.Minimum_Forward_Range
+        or else not Is_Finite (Options.Maximum_Absolute_Plane_Residual)
+        or else Options.Maximum_Absolute_Plane_Residual < 0.0
+      then
+         raise OpenCV.OpenCV_Error with "Invalid world-plane intersection policy";
+      end if;
+   end Validate;
+
+   function Intersect_World_Rays_With_Plane
+     (Rays : World_Ray_Array; Plane : World_Plane;
+      Options : World_Plane_Intersection_Options)
+      return World_Plane_Intersection_Array
+   is
+      Normal : constant Object_Point := Unit_Vector (Object_Point (Plane.Normal));
+      Directions : Object_Point_Array (1 .. Rays'Length);
+      --  Only these local, arithmetic-only helpers raise this exception.
+      --  No native call, input validation, or accessor is inside its handler.
+      Arithmetic_Unavailable : exception;
+      function Finite_Value (Value : OpenCV.Float64_Value) return OpenCV.Float64_Value is
+      begin
+         if not Is_Finite (Value) then
+            raise Arithmetic_Unavailable;
+         end if;
+         return Value;
+      end Finite_Value;
+      function Difference (Left, Right : OpenCV.Float64_Value) return OpenCV.Float64_Value is
+      begin
+         return Finite_Value (Left - Right);
+      exception
+         when Constraint_Error => raise Arithmetic_Unavailable;
+      end Difference;
+      function Sum (Left, Right : OpenCV.Float64_Value) return OpenCV.Float64_Value is
+      begin
+         return Finite_Value (Left + Right);
+      exception
+         when Constraint_Error => raise Arithmetic_Unavailable;
+      end Sum;
+      function Product (Left, Right : OpenCV.Float64_Value) return OpenCV.Float64_Value is
+         Value : OpenCV.Float64_Value;
+      begin
+         Value := Finite_Value (Left * Right);
+         if Left /= 0.0 and then Right /= 0.0 and then Value = 0.0 then
+            raise Arithmetic_Unavailable;
+         end if;
+         return Value;
+      exception
+         when Constraint_Error => raise Arithmetic_Unavailable;
+      end Product;
+      function Quotient (Left, Right : OpenCV.Float64_Value) return OpenCV.Float64_Value is
+         Value : OpenCV.Float64_Value;
+      begin
+         Value := Finite_Value (Left / Right);
+         --  A nonzero distance must not silently become an at-origin result.
+         if Left /= 0.0 and then Value = 0.0 then
+            raise Arithmetic_Unavailable;
+         end if;
+         return Value;
+      exception
+         when Constraint_Error => raise Arithmetic_Unavailable;
+      end Quotient;
+      function Dot (Left, Right : Object_Point) return OpenCV.Float64_Value is
+         Value : OpenCV.Float64_Value := 0.0;
+      begin
+         for Axis in 0 .. 2 loop
+            Value := Sum (Value, Product (Left (Axis), Right (Axis)));
+         end loop;
+         return Value;
+      end Dot;
+   begin
+      Validate (Plane, Options);
+      --  Validate the whole batch before evaluating any intersection.
+      for I in Directions'Range loop
+         Validate_Vector (Rays (Rays'First + (I - 1)).Origin);
+         Directions (I) := Unit_Vector (Object_Point (Rays (Rays'First + (I - 1)).Direction));
+      end loop;
+      return Results : World_Plane_Intersection_Array (1 .. Rays'Length) do
+         for I in Results'Range loop
+            declare
+               Ray : World_Ray renames Rays (Rays'First + (I - 1));
+               Result : World_Plane_Intersection renames Results (I);
+               Offset, Position : Object_Point;
+               Denominator, Numerator, Distance : OpenCV.Float64_Value;
+            begin
+               Denominator := Dot (Normal, Directions (I));
+               Result.Incidence := abs Denominator;
+               Result.Has_Incidence := True;
+               for Axis in 0 .. 2 loop
+                  Offset (Axis) := Difference (Plane.Anchor (Axis), Ray.Origin (Axis));
+               end loop;
+               Numerator := Dot (Normal, Offset);
+               if Denominator = 0.0 then
+                  Result.State := (if Numerator = 0.0 then Coplanar_Ray else Parallel_Ray);
+               else
+                  Distance := Quotient (Numerator, Denominator);
+                  Result.Distance := Distance;
+                  Result.Has_Distance := True;
+                  if Distance = 0.0 then
+                     Result.State := Intersection_At_Origin;
+                  elsif Distance < 0.0 then
+                     Result.State := Intersection_Behind_Ray;
+                  elsif Result.Incidence < Options.Minimum_Absolute_Incidence_Cosine then
+                     Result.State := Grazing_Incidence_Rejected;
+                  elsif Distance < Options.Minimum_Forward_Range then
+                     Result.State := Below_Minimum_Forward_Range;
+                  elsif Distance > Options.Maximum_Forward_Range then
+                     Result.State := Above_Maximum_Forward_Range;
+                  else
+                     for Axis in 0 .. 2 loop
+                        Position (Axis) := Sum
+                          (Ray.Origin (Axis), Product (Distance, Directions (I) (Axis)));
+                        Offset (Axis) := Difference (Position (Axis), Plane.Anchor (Axis));
+                     end loop;
+                     Result.Residual := abs Dot (Normal, Offset);
+                     Result.Has_Residual := True;
+                     if Result.Residual > Options.Maximum_Absolute_Plane_Residual then
+                        Result.State := Plane_Residual_Rejected;
+                     else
+                        Result.Position := Position;
+                        Result.State := Forward_Intersection_Accepted;
+                     end if;
+                  end if;
+               end if;
+            exception
+               when Arithmetic_Unavailable => Results (I).State := Numerically_Unavailable;
+            end;
+         end loop;
+      end return;
+   end Intersect_World_Rays_With_Plane;
+
+   function Unproject_Pixels_Onto_World_Plane
+     (Pixels : Image_Point_Array; Intrinsics : Camera_Intrinsics;
+      Distortion : Distortion_Coefficients; Pose : World_To_Camera_Pose;
+      Plane : World_Plane; Options : World_Plane_Intersection_Options)
+      return World_Plane_Intersection_Array
+   is
+   begin
+      Validate (Plane, Options);
+      return Intersect_World_Rays_With_Plane
+        (World_Bearing_Rays (Pixels, Intrinsics, Distortion, Pose), Plane, Options);
+   end Unproject_Pixels_Onto_World_Plane;
+
+   function Disposition (Result : World_Plane_Intersection)
+      return World_Plane_Intersection_Disposition is (Result.State);
+   function Incidence_Evaluated (Result : World_Plane_Intersection) return Boolean is
+     (Result.Has_Incidence);
+   function Has_Signed_Ray_Distance (Result : World_Plane_Intersection) return Boolean is
+     (Result.Has_Distance);
+   function Plane_Residual_Evaluated (Result : World_Plane_Intersection) return Boolean is
+     (Result.Has_Residual);
+   function Accepted (Result : World_Plane_Intersection) return Boolean is
+     (Result.State = Forward_Intersection_Accepted);
+   function Absolute_Incidence_Cosine (Result : World_Plane_Intersection)
+      return OpenCV.Float64_Value is
+   begin
+      if not Result.Has_Incidence then
+         raise OpenCV.OpenCV_Error with "World-plane incidence unavailable";
+      end if;
+      return Result.Incidence;
+   end Absolute_Incidence_Cosine;
+   function Signed_Ray_Distance (Result : World_Plane_Intersection)
+      return OpenCV.Float64_Value is
+   begin
+      if not Result.Has_Distance then
+         raise OpenCV.OpenCV_Error with "World-plane distance unavailable";
+      end if;
+      return Result.Distance;
+   end Signed_Ray_Distance;
+   function Absolute_Plane_Residual (Result : World_Plane_Intersection)
+      return OpenCV.Float64_Value is
+   begin
+      if not Result.Has_Residual then
+         raise OpenCV.OpenCV_Error with "World-plane residual unavailable";
+      end if;
+      return Result.Residual;
+   end Absolute_Plane_Residual;
+   function Accepted_World_Position (Result : World_Plane_Intersection)
+      return Object_Point is
+   begin
+      if not Accepted (Result) then
+         raise OpenCV.OpenCV_Error with "World-plane intersection not accepted";
+      end if;
+      return Result.Position;
+   end Accepted_World_Position;
+
    function Project_Points
      (Points     : Object_Point_Array;
       Intrinsics : Camera_Intrinsics;
