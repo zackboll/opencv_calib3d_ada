@@ -8,6 +8,22 @@ from workflow_topology import check_topology  # noqa: E402
 
 
 class RepositoryTests(unittest.TestCase):
+    def test_reference_projection_is_one_batch_outside_reference_loops(self):
+        text = (ROOT / "src/opencv-calib3d.adb").read_text()
+        start = text.index("    function Evaluate_AP3P_References")
+        stop = text.index("    function Summarize_AP3P_References", start)
+        evaluator = text[start:stop]
+        self.assertEqual(evaluator.count("Project_Points"), 1)
+        transform_end = evaluator.index("if Eligible_Count > 0 then")
+        projection = evaluator.index("Project_Points")
+        residual_loop = evaluator.index("for Compact_Position in")
+        self.assertLess(transform_end, projection)
+        self.assertLess(projection, residual_loop)
+        self.assertIn("end loop;", evaluator[evaluator.index("for Reference_Index in"):transform_end])
+        self.assertIn("Eligible_World (1 .. Eligible_Count), Intrinsics, Distortion, Pose", evaluator)
+        self.assertIn("Original_Positions (Eligible_Count) := Column", evaluator)
+        self.assertIn("Positive_Depths (Eligible_Count) := Depth", evaluator)
+
     def test_three_view_reuses_existing_stages_and_isolates_third_pixels(self):
         text = (ROOT / "src/opencv-calib3d.adb").read_text()
         start = text.index("   function Qualify_Three_View_Landmarks")

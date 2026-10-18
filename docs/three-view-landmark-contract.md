@@ -94,8 +94,19 @@ Compact selected world candidates, corresponding third pixels, and a second
 owned original-position mapping. Call `Evaluate_AP3P_References` once with
 `[(Pose => Third_Pose)]`, using the third camera's own intrinsics and distortion.
 This neither solves AP3P nor selects a hypothesis. Its existing evaluator obtains
-native Rodrigues, checks representable camera coordinates and strictly positive
-depth, and batches eligible points into native projection.
+native Rodrigues once per hypothesis and checks all three camera coordinates.
+As corrected by Task 023-R1, it compacts finite positive-depth references with
+saved depths and an owned original-position map, then calls native `Project_Points`
+**once per hypothesis with eligible references**, outside both per-reference
+loops. No eligible references means no native projection. Here the single supplied
+third-pose hypothesis means zero or one native batch, distinct from the one call
+to the Ada evaluator. The reviewed original head called the Ada evaluator once
+but still projected each eligible reference separately; that was not batching.
+
+OpenCV batch/vectorized paths may round differently from singleton calls.
+No cross-version or batch-size bitwise equality is promised. Units, geometry,
+inclusive policy comparisons and failure semantics are preserved, without a new
+epsilon; points exactly at a policy boundary may reflect native rounding changes.
 
 * `Projected_Positive_Depth`: finite positive depth and finite nonnegative pixel
   error. Error <= `Maximum_Third_Pixel_Error` passes, including equality.

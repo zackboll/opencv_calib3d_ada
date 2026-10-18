@@ -8818,9 +8818,127 @@ package body Calib3D_Tests is
       end loop;
    end Three_Guards;
 
+   procedure Reference_Batch_Mapping (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Cam : constant Camera_Intrinsics := (2.0, 4.0, 1.0, -1.0);
+      Hypotheses : AP3P_Pose_Hypothesis_Array (Positive'Last - 3 .. Positive'Last);
+      Points : constant Object_Point_Array (Positive'Last - 4 .. Positive'Last) :=
+        [[2.0, 1.0, 2.0], [1.0, 1.0, 0.0], [-4.0, 2.0, 4.0],
+         [1.0, 1.0, -1.0], [0.0, -2.0, 8.0]];
+      Pixels : constant Image_Point_Array (27 .. 31) :=
+        [[3.0, 1.0], [100.0, 100.0], [-4.0, 5.0], [200.0, 200.0], [1.0, -2.0]];
+   begin
+      for I in 1 .. 4 loop
+         Hypotheses (Hypotheses'First + (I - 1)) :=
+           (Pose => ([0.0, 0.0, 0.0], [OpenCV.Float64_Value (I - 1), 0.0, 0.0]));
+      end loop;
+      declare
+         Values : constant AP3P_Reference_Result_Matrix :=
+           Evaluate_AP3P_References (Hypotheses, Points, Pixels, Cam);
+         Summary : constant AP3P_Hypothesis_Reference_Summary_Array := Summarize_AP3P_References (Values);
+      begin
+         Assert (Values'First (1) = 1 and then Values'Last (1) = 4 and then
+                 Values'First (2) = 1 and then Values'Last (2) = 5, "four batched hypotheses one-based results");
+         for Row in 1 .. 4 loop
+            for Position in 1 .. 5 loop
+               declare
+                  W : constant Object_Point := Points (Points'First + (Position - 1));
+               begin
+                  if Position = 2 or else Position = 4 then
+                     Assert (Values (Row, Position) = (Non_Positive_Depth, W (2), 0.0),
+                             "nonpositive reference original positions and depths retained");
+                  else
+                     --  Independent scalar pinhole oracle, not production projection.
+                     declare
+                        X : constant OpenCV.Float64_Value :=
+                          2.0 * (W (0) + OpenCV.Float64_Value (Row - 1)) / W (2) + 1.0;
+                        Y : constant OpenCV.Float64_Value := 4.0 * W (1) / W (2) - 1.0;
+                        Observed : constant Image_Point := Pixels (Pixels'First + (Position - 1));
+                        Expected : constant OpenCV.Float64_Value :=
+                          Math.Sqrt ((X - Observed (0)) ** 2 + (Y - Observed (1)) ** 2);
+                     begin
+                        Assert (Values (Row, Position).Disposition = Projected_Positive_Depth and then
+                                Values (Row, Position).Camera_Depth = W (2) and then
+                                Near (Values (Row, Position).Error_Pixels, Expected, 1.0E-12),
+                                "compact batch maps each original pixel/error to the correct row and position");
+                     end;
+                  end if;
+               end;
+            end loop;
+            Assert (Summary (Row).Projected_References = 3 and then
+                    Summary (Row).Non_Positive_Depth_References = 2 and then
+                    not Summary (Row).Entire_Set_Evaluable and then Summary (Row).Reprojection.Count = 3,
+                    "mixed batch preserves reference summary contract");
+         end loop;
+      end;
+      declare
+         One : constant AP3P_Reference_Result_Matrix := Evaluate_AP3P_References
+           ([Positive'Last => Hypotheses (Hypotheses'First)],
+            [Positive'Last => Points (Points'First)], [Positive'Last => Pixels (Pixels'First)], Cam);
+      begin
+         Assert (One (1, 1) = (Projected_Positive_Depth, 2.0, 0.0), "Positive Last singleton batch");
+      end;
+   end Reference_Batch_Mapping;
+
+   procedure Reference_Batch_Unavailable (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Turn : constant World_To_Camera_Pose :=
+        ([0.0, 0.0, Ada.Numerics.Pi / 4.0], [0.0, 0.0, 0.0]);
+      Cam : constant Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);
+      Points : constant Object_Point_Array :=
+        [[0.0, 0.0, 4.0], [1.5E308, -1.5E308, 4.0], [0.0, 0.0, -2.0], [0.0, 0.0, 8.0]];
+      Values : constant AP3P_Reference_Result_Matrix := Evaluate_AP3P_References
+        ([(Pose => Turn)], Points, [[3.0, 4.0], [0.0, 0.0], [0.0, 0.0], [6.0, 8.0]], Cam);
+      Huge_K : constant Camera_Intrinsics := (1.0E308, 1.0, 0.0, 0.0);
+      Residuals : constant AP3P_Reference_Result_Matrix := Evaluate_AP3P_References
+        ([(Pose => Metric_First)], [[0.0, 0.0, 2.0], [1.0, 0.0, 1.0], [0.0, 0.0, 4.0]],
+         [[3.0, 4.0], [-1.0E308, 0.0], [0.0, 2.0]], Huge_K);
+   begin
+      Assert (Values (1, 1) = (Projected_Positive_Depth, 4.0, 5.0) and then
+              Values (1, 2) = (Numerically_Unavailable, 0.0, 0.0) and then
+              Values (1, 3) = (Non_Positive_Depth, -2.0, 0.0) and then
+              Values (1, 4) = (Projected_Positive_Depth, 8.0, 10.0),
+              "camera-coordinate overflow excluded without disturbing compacted peers");
+      Assert (Residuals (1, 1) = (Projected_Positive_Depth, 2.0, 5.0) and then
+              Residuals (1, 2) = (Numerically_Unavailable, 0.0, 0.0) and then
+              Residuals (1, 3) = (Projected_Positive_Depth, 4.0, 2.0),
+              "successful batch then individual residual overflow preserves valid peers");
+   end Reference_Batch_Unavailable;
+
+   procedure Reference_Batch_Atomic (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Cam : constant Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);
+      Points : constant Object_Point_Array := [[0.0, 0.0, 2.0], [1.0E308, 0.0, 1.0]];
+      Pixels : constant Image_Point_Array := [[0.0, 0.0], [0.0, 0.0]];
+      Saved : AP3P_Reference_Result_Matrix (1 .. 2, 1 .. 2) := Evaluate_AP3P_References
+        ([(Pose => Metric_First), (Pose => Metric_First)], [[0.0, 0.0, 2.0], [1.0, 0.0, 1.0]], Pixels, Cam);
+      Before : constant AP3P_Reference_Result_Matrix := Saved;
+      Bad_K : constant Camera_Intrinsics := (2.0, 1.0, 0.0, 0.0);
+   begin
+      begin
+         Saved := Evaluate_AP3P_References
+           ([(Pose => Metric_First), (Pose => Metric_First)], Points, Pixels, Bad_K);
+         Assert (False, "nonfinite native batch projection must abort evaluator");
+      exception when OpenCV.OpenCV_Error => null; end;
+      Assert (Saved = Before, "native batch failure leaves previous complete assignment untouched");
+      declare
+         Empty : constant AP3P_Reference_Result_Matrix := Evaluate_AP3P_References
+           ([(Pose => Metric_First)], [1 .. 0 => <>], [1 .. 0 => <>], Cam);
+         Behind : constant AP3P_Reference_Result_Matrix := Evaluate_AP3P_References
+           ([(Pose => Metric_First)], [[1.0, 0.0, 0.0], [2.0, 0.0, -1.0]], Pixels, Cam);
+      begin
+         Assert (Empty'Length (2) = 0 and then
+                 Behind (1, 1) = (Non_Positive_Depth, 0.0, 0.0) and then
+                 Behind (1, 2) = (Non_Positive_Depth, -1.0, 0.0), "empty and no eligible batches");
+      end;
+   end Reference_Batch_Atomic;
+
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
+      Result.Add_Test (Caller.Create ("reference batch four hypotheses analytic positional errors", Reference_Batch_Mapping'Access));
+      Result.Add_Test (Caller.Create ("reference batch mixed transform and residual unavailability", Reference_Batch_Unavailable'Access));
+      Result.Add_Test (Caller.Create ("reference batch native failure atomicity empty and no positive depth", Reference_Batch_Atomic'Access));
       Result.Add_Test (Caller.Create ("three view rectified independent world and heldout oracle", Three_Oracle'Access));
       Result.Add_Test (Caller.Create ("three view noncommuting separate Brown calibration native third failure", Three_Calibration'Access));
       Result.Add_Test (Caller.Create ("three view outlier isolation and epipolar consistent wrong depth", Three_Isolation'Access));

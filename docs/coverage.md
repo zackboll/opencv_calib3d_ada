@@ -1,5 +1,16 @@
 # Coverage
 
+## Task 023-R1 reference projection batching correction
+
+207 AUnit registrations preserve all 204 reviewed-head registrations. Three new
+grouped tests cover four hypotheses, compact-to-original scalar pixel/error/depth
+oracles, unrelated and Positive'Last bounds, mixed transform/residual arithmetic
+unavailability, native batch failure atomicity, empty and no-positive-depth sets.
+Additional actual-shim fault cases verify ten projection errors with four
+hypotheses, armed faults surviving skipped batches, and healthy recovery. Source
+checks verify the one Project_Points call is outside both per-reference loops.
+See the R1 ledger in [validation](three-view-landmark-validation.md).
+
 ## Task 023 three-view landmarks
 
 204 AUnit registrations preserve all 193 prior registrations. Eleven new grouped

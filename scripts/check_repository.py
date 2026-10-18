@@ -56,7 +56,7 @@ def main() -> None:
 
     tests = (ROOT / "tests/src/calib3d_tests.adb").read_text()
     registrations = re.findall(r"Result\.Add_Test\s*\(Caller\.Create", tests)
-    check(len(registrations) == 204, "update documented AUnit inventory when changing tests")
+    check(len(registrations) == 207, "update documented AUnit inventory when changing tests")
     check(len(declared) == 48, "update private ABI inventory when changing exports")
     # Task 022 is Ada orchestration, not another native estimator/solver.
     public_body = (ROOT / "src/opencv-calib3d.adb").read_text()

@@ -1885,6 +1885,10 @@ package body OpenCV.Calib3D is
                   Hypotheses (Hypothesis_Index).Pose;
                 Matrix : constant Rotation_Matrix := Rotation_Matrix_Of (Pose);
                 Row : constant Positive := Hypothesis_Index - Hypotheses'First + 1;
+                Eligible_World : Object_Point_Array (1 .. Reference_World'Length);
+                Original_Positions : Inlier_Index_Array (Eligible_World'Range);
+                Positive_Depths : Reprojection_Error_Array (Eligible_World'Range);
+                Eligible_Count : Natural := 0;
              begin
                 for Reference_Index in Reference_World'Range loop
                    declare
@@ -1910,36 +1914,44 @@ package body OpenCV.Calib3D is
                       if Transform_Failed then
                          Results (Row, Column) := Unavailable;
                       elsif Depth > 0.0 then
-                            declare
-                               Predicted : constant Image_Point_Array := Project_Points
-                                 ([Point], Intrinsics, Distortion, Pose);
-                               Error : OpenCV.Float64_Value := 0.0;
-                               Residual_Failed : Boolean := False;
-                            begin
-                               begin
-                                  Error := Pixel_Error
-                                    (Predicted (Predicted'First),
-                                     Reference_Pixels (Reference_Pixels'First + (Column - 1)));
-                               exception
-                                  when Constraint_Error =>
-                                     Residual_Failed := True;
-                               end;
-                               if Residual_Failed then
-                                  Results (Row, Column) := Unavailable;
-                               else
-                                  Results (Row, Column) :=
-                                    (Disposition => Projected_Positive_Depth,
-                                     Camera_Depth => Depth,
-                                     Error_Pixels => Error);
-                               end if;
-                            end;
-                         else
-                            Results (Row, Column) :=
-                              (Disposition => Non_Positive_Depth,
-                               Camera_Depth => Depth, Error_Pixels => 0.0);
+                         Eligible_Count := Eligible_Count + 1;
+                         Eligible_World (Eligible_Count) := Point;
+                         Original_Positions (Eligible_Count) := Column;
+                         Positive_Depths (Eligible_Count) := Depth;
+                      else
+                         Results (Row, Column) :=
+                           (Disposition => Non_Positive_Depth,
+                            Camera_Depth => Depth, Error_Pixels => 0.0);
                       end if;
                    end;
                 end loop;
+                if Eligible_Count > 0 then
+                   declare
+                      --  Exactly one native projection batch per nonempty
+                      --  hypothesis. Keep it outside all per-point handlers:
+                      --  native failure aborts the entire owned result.
+                      Predicted : constant Image_Point_Array := Project_Points
+                        (Eligible_World (1 .. Eligible_Count), Intrinsics, Distortion, Pose);
+                   begin
+                      for Compact_Position in 1 .. Eligible_Count loop
+                         declare
+                            Column : constant Positive := Original_Positions (Compact_Position);
+                            Error : OpenCV.Float64_Value;
+                         begin
+                            Error := Pixel_Error
+                              (Predicted (Predicted'First + (Compact_Position - 1)),
+                               Reference_Pixels (Reference_Pixels'First + (Column - 1)));
+                            Results (Row, Column) :=
+                              (Disposition => Projected_Positive_Depth,
+                               Camera_Depth => Positive_Depths (Compact_Position),
+                               Error_Pixels => Error);
+                         exception
+                            when Constraint_Error =>
+                               Results (Row, Column) := Unavailable;
+                         end;
+                      end loop;
+                   end;
+                end if;
              end;
           end loop;
        end return;

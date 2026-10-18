@@ -21,6 +21,21 @@ for projection only when camera `Z` is finite and strictly greater than
 zero. `Z = 0` and `Z < 0` are `Non_Positive_Depth` and are not sent to
 native projection. There is no depth epsilon.
 
+For each hypothesis, all three camera coordinates are checked first. Only
+references with representable finite X/Y/Z and strictly positive Z enter an owned
+compact world array, original-position map and saved-depth array. The evaluator
+then calls `Project_Points` **once per hypothesis with eligible references**,
+outside the per-reference loops, and maps the projected pixels back before
+computing individual residuals. No eligible references means no native projection.
+One Ada evaluator call may therefore make zero through four native projection
+batches; it is not itself proof of one native call. No pose is recomputed or changed.
+
+Processing several coordinates in one OpenCV call may change floating-point
+rounding through native vectorized/batch paths relative to singleton calls.
+Disposition/units/inclusive comparison contracts are unchanged, but bitwise
+equality across batch sizes or OpenCV versions is not promised. At an exact policy
+boundary, a rounding difference can change acceptance; no epsilon is introduced.
+
 ## Result matrix
 
 The result is one-based:

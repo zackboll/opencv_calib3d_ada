@@ -1144,4 +1144,39 @@ begin
       Ada.Text_IO.Put_Line
         ("PASS: three-view 255 SYNTHETIC native exceptions, atomicity/recovery, zero-objective source modes, metric underflow; no Sampson checkpoint invented");
    end;
+   declare
+      Identity : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+      Calibration : constant Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);
+      Points : constant Object_Point_Array := [[0.0, 0.0, 2.0], [1.0, 0.0, -1.0], [2.0, 1.0, 4.0]];
+      Pixels : constant Image_Point_Array := [[0.0, 0.0], [10.0, 10.0], [0.5, 0.25]];
+      Hypotheses : constant AP3P_Pose_Hypothesis_Array := [1 .. 4 => (Pose => Identity)];
+      Saved : AP3P_Reference_Result_Matrix :=
+        Evaluate_AP3P_References (Hypotheses, Points, Pixels, Calibration);
+      Before : constant AP3P_Reference_Result_Matrix := Saved;
+   begin
+      for Stage in Interfaces.C.int range 1 .. 2 loop
+         for Kind in Interfaces.C.int range 1 .. 5 loop
+            Fail (Stage, Kind);
+            --  Empty and all-nonpositive requests must leave projection faults armed.
+            declare
+               Empty : constant AP3P_Reference_Result_Matrix := Evaluate_AP3P_References
+                 (Hypotheses, [1 .. 0 => <>], [1 .. 0 => <>], Calibration);
+               Behind : constant AP3P_Reference_Result_Matrix := Evaluate_AP3P_References
+                 (Hypotheses, [[0.0, 0.0, 0.0], [1.0, 0.0, -2.0]], [[0.0, 0.0], [0.0, 0.0]], Calibration);
+            begin
+               Check (Empty'Length (2) = 0 and then Behind (4, 2).Disposition = Non_Positive_Depth,
+                      "empty/nonpositive batch should skip native projection");
+            end;
+            begin
+               Saved := Evaluate_AP3P_References (Hypotheses, Points, Pixels, Calibration);
+               raise Program_Error with "batch projection fault swallowed or consumed by skipped batch";
+            exception when OpenCV.OpenCV_Error => null; end;
+            Check (Saved = Before, "batch native fault partially published matrix");
+            Saved := Evaluate_AP3P_References (Hypotheses, Points, Pixels, Calibration);
+            Check (Saved = Before, "batch healthy recovery failed");
+         end loop;
+      end loop;
+      Ada.Text_IO.Put_Line
+        ("PASS: R1 batched reference projection 10 native exceptions, four hypotheses, skipped-call armed faults, atomicity/recovery");
+   end;
 end Run_Refinement_Faults;
