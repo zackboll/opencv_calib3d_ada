@@ -21,6 +21,7 @@ package body Calib3D_Tests is
    use type Interfaces.Integer_32;
    use type Interfaces.C.double;
    use type Translation_Vector;
+   use type Image_Point;
 
    package ABI renames OpenCV.Calib3D.Internal.C_API;
    package Math is new Ada.Numerics.Generic_Elementary_Functions
@@ -7586,9 +7587,551 @@ package body Calib3D_Tests is
       Reject (False, True);
    end Metric_Refinement_Invalid;
 
+   --  Task 021 oracles deliberately do not use production transforms or
+   --  Project_Points to generate camera truth. R=Rz(.3), all five Brown terms.
+   Reloc_Truth : constant World_To_Camera_Pose := ([0.0, 0.0, 0.3], [0.2, -0.1, 6.0]);
+   Reloc_D : constant Distortion_Coefficients := (0.02, -0.003, 0.001, -0.002, 0.0004);
+   Reloc_RANSAC : constant RANSAC_Options := (1000, 1.0, 0.999);
+   Reloc_Policy : constant Relocalization_Verification_Options := (12, 0.5, 0.5, 0.8, 0.5);
+   Reloc_H : constant Object_Point_Array :=
+     [[-1.3, 0.4, 3.0], [1.1, -0.7, 2.9], [0.2, 1.2, 3.2], [-0.5, -1.1, 3.4]];
+
+   function Reloc_Project (Points : Object_Point_Array;
+                           Distortion : Distortion_Coefficients := Reloc_D) return Image_Point_Array is
+      C : constant OpenCV.Float64_Value := Math.Cos (0.3);
+      S : constant OpenCV.Float64_Value := Math.Sin (0.3);
+   begin
+      return Pixels : Image_Point_Array (1 .. Points'Length) do
+         for I in 1 .. Points'Length loop
+            declare
+               P : constant Object_Point := Points (Points'First + (I - 1));
+               X : constant OpenCV.Float64_Value := (C * P (0) - S * P (1) + 0.2) / (P (2) + 6.0);
+               Y : constant OpenCV.Float64_Value := (S * P (0) + C * P (1) - 0.1) / (P (2) + 6.0);
+               R2 : constant OpenCV.Float64_Value := X * X + Y * Y;
+               Radial : constant OpenCV.Float64_Value :=
+                 1.0 + Distortion.K1 * R2 + Distortion.K2 * R2 ** 2 + Distortion.K3 * R2 ** 3;
+            begin
+               Pixels (I) :=
+                 [K.Focal_X * (X * Radial + 2.0 * Distortion.P1 * X * Y +
+                    Distortion.P2 * (R2 + 2.0 * X * X)) + K.Center_X,
+                  K.Focal_Y * (Y * Radial + Distortion.P1 * (R2 + 2.0 * Y * Y) +
+                    2.0 * Distortion.P2 * X * Y) + K.Center_Y];
+            end;
+         end loop;
+      end return;
+   end Reloc_Project;
+
+   function Reloc_Field return Object_Point_Array is
+   begin
+      return Points : Object_Point_Array (1 .. 30) do
+         for I in Points'Range loop
+            Points (I) := [OpenCV.Float64_Value (I mod 6) * 0.5 - 1.3,
+                          OpenCV.Float64_Value (I / 6) * 0.4 - 0.9,
+                          OpenCV.Float64_Value (I mod 7) * 0.23];
+         end loop;
+      end return;
+   end Reloc_Field;
+
+   function Reloc_Noisy return Image_Point_Array is
+      Pixels : Image_Point_Array := Reloc_Project (Reloc_Field);
+   begin
+      for I in Pixels'Range loop
+         Pixels (I) (0) := Pixels (I) (0) + OpenCV.Float64_Value (I mod 3 - 1) * 0.08;
+         Pixels (I) (1) := Pixels (I) (1) + OpenCV.Float64_Value (I mod 5 - 2) * 0.04;
+      end loop;
+      return Pixels;
+   end Reloc_Noisy;
+
+   procedure Reloc_Guards (R : Camera_Relocalization_Result) is
+      P : World_To_Camera_Pose;
+      C : Object_Point;
+      Summary : Reprojection_Summary;
+      Errors : Reprojection_Error_Array (1 .. R.Count);
+      pragma Unreferenced (P, C, Summary, Errors);
+   begin
+      Assert (not Accepted (R), "guard fixture must not be accepted");
+      begin
+         P := Accepted_Pose (R); Assert (False, "rejected pose exposed");
+      exception when OpenCV.OpenCV_Error => null; end;
+      begin
+         C := Camera_Center (R); Assert (False, "rejected center exposed");
+      exception when OpenCV.OpenCV_Error => null; end;
+      if not Found (R) then
+         begin
+            P := Initial_Pose (R); Assert (False, "absent native pose exposed");
+         exception when OpenCV.OpenCV_Error => null; end;
+      end if;
+      if not Initial_Holdout_Valid (R) then
+         begin
+            Summary := Initial_Holdout (R); Assert (False, "absent initial summary exposed");
+         exception when OpenCV.OpenCV_Error => null; end;
+      end if;
+      if not Refined_Holdout_Valid (R) then
+         begin
+            Summary := Refined_Holdout (R); Assert (False, "absent refined summary exposed");
+         exception when OpenCV.OpenCV_Error => null; end;
+      end if;
+      if not Final_Inliers_Valid (R) then
+         begin
+            Summary := Final_Inlier_Summary (R); Assert (False, "absent final summary exposed");
+         exception when OpenCV.OpenCV_Error => null; end;
+         begin
+            Errors := Final_Inlier_Errors (R); Assert (False, "absent final errors exposed");
+         exception when OpenCV.OpenCV_Error => null; end;
+      end if;
+   end Reloc_Guards;
+
+   procedure Reloc_Oracle (T : in out Fixture) is
+      pragma Unreferenced (T);
+      W : constant Object_Point_Array (Positive'Last - 29 .. Positive'Last) := Reloc_Field;
+      Pixels : Image_Point_Array (7 .. 36) := Reloc_Project (W);
+      H : constant Image_Point_Array := Reloc_Project (Reloc_H);
+   begin
+      for Noisy in Boolean loop
+         if Noisy then
+            Pixels := Reloc_Noisy;
+         end if;
+         --  Gross deterministic mismatches, never used in refinement.
+         for Position in 1 .. W'Length loop
+            if Position mod 7 = 0 then
+               Pixels (Pixels'First + (Position - 1)) := [2000.0, -1500.0];
+            end if;
+         end loop;
+         declare
+            R : constant Camera_Relocalization_Result := Relocalize_Camera
+              (W, Pixels, Reloc_H, H, K, Reloc_D, Reloc_RANSAC, Reloc_Policy);
+            Indices : constant Inlier_Index_Array := Inliers (R);
+            IW : Object_Point_Array (1 .. R.Count);
+            IP : Image_Point_Array (1 .. R.Count);
+            Manual : World_To_Camera_Pose := Initial_Pose (R);
+            OK : Boolean := False;
+         begin
+            Assert (Accepted (R) and then Refinement_Attempted (R) and then
+                    Native_Refinement_Succeeded (R), "robust exact/noisy accepted");
+            Assert (Indices'First = 1 and then R.Count = Inlier_Count (R) and then
+                    R.Count >= Reloc_Policy.Minimum_Consensus_Inliers and then R.Count < 30,
+                    "actual native consensus, no version-specific count");
+            for I in Indices'Range loop
+               Assert (Indices (I) <= 30 and then Indices (I) mod 7 /= 0 and then
+                       (I = 1 or else Indices (I) > Indices (I - 1)), "original sorted inlier positions");
+               IW (I) := W (W'First + (Indices (I) - 1));
+               IP (I) := Pixels (Pixels'First + (Indices (I) - 1));
+            end loop;
+            Refine_Pose_Iterative (IW, IP, K, Reloc_D, Manual, OK);
+            Assert (OK, "manual inlier-only native refinement");
+            declare
+               A : constant Rotation_Matrix := Rotation_Matrix_Of (Accepted_Pose (R));
+               B : constant Rotation_Matrix := Rotation_Matrix_Of (Manual);
+               Errors : constant Reprojection_Error_Array := Reprojection_Errors
+                 (IW, IP, K, Reloc_D, Manual);
+               Center : constant Object_Point := Camera_Center (R);
+               C : constant OpenCV.Float64_Value := Math.Cos (0.3);
+               S : constant OpenCV.Float64_Value := Math.Sin (0.3);
+            begin
+               Assert (Near (A (0, 0), C, 0.002) and then Near (A (0, 1), -S, 0.002)
+                 and then Near (A (1, 0), S, 0.002) and then Near (A (2, 2), 1.0, 0.002),
+                 "independent analytic Rz matrix, not Rodrigues components");
+               for Axis in 0 .. 2 loop
+                  Assert (Near (Accepted_Pose (R).Translation (Axis), Reloc_Truth.Translation (Axis), 0.003),
+                          "known nonzero t");
+                  for Column in 0 .. 2 loop
+                     Assert (Near (A (Axis, Column), B (Axis, Column), 1.0E-12), "exact inlier-only replay");
+                  end loop;
+               end loop;
+               Assert (Near (Center (0), -C * 0.2 + S * 0.1, 0.02) and then
+                       Near (Center (1), S * 0.2 + C * 0.1, 0.02) and then
+                       Near (Center (2), -6.0, 0.02), "analytic -R^T t center");
+               for I in Errors'Range loop
+                  Assert (Near (Final_Inlier_Errors (R) (I), Errors (I), 1.0E-12), "inlier diagnostics replay");
+               end loop;
+               Assert (Final_Inlier_Summary (R).Count = R.Count and then
+                       Initial_Holdout (R).Count = Reloc_H'Length and then
+                       Refined_Holdout (R).Count = Reloc_H'Length, "whole-set scores");
+            end;
+         end;
+      end loop;
+      declare
+         R : constant Camera_Relocalization_Result := Relocalize_Camera
+           (W, Reloc_Project (W, No_Distortion), Reloc_H, Reloc_Project (Reloc_H, No_Distortion),
+            K, No_Distortion, Reloc_RANSAC, Reloc_Policy);
+      begin
+         Assert (Accepted (R), "zero Brown also qualified");
+      end;
+   end Reloc_Oracle;
+
+   procedure Reloc_Boundary (T : in out Fixture) is
+      pragma Unreferenced (T);
+      W : constant Object_Point_Array := Reloc_Field;
+      P : constant Image_Point_Array := Reloc_Project (W);
+   begin
+      for N in 0 .. 5 loop
+         declare
+            R : constant Camera_Relocalization_Result := Relocalize_Camera
+              (W (1 .. N), P (1 .. N), Reloc_H, Reloc_Project (Reloc_H),
+               K, Reloc_D, Reloc_RANSAC, Reloc_Policy);
+         begin
+            Assert (Disposition (R) = Insufficient_Fitting_Landmarks and then not Found (R)
+              and then Inlier_Count (R) = 0 and then not Refinement_Attempted (R), "0..5 no direct solve");
+            Reloc_Guards (R);
+         end;
+      end loop;
+      declare
+         Policy : Relocalization_Verification_Options := Reloc_Policy;
+         Six : constant Object_Point_Array := [W (1), W (7), W (13), W (20), W (25), W (30)];
+      begin
+         Policy.Minimum_Consensus_Inliers := 4;
+         declare
+            R : constant Camera_Relocalization_Result := Relocalize_Camera
+              (Six, Reloc_Project (Six), Reloc_H, Reloc_Project (Reloc_H),
+               K, Reloc_D, Reloc_RANSAC, Policy);
+         begin
+            Assert (Accepted (R), "six correspondences enter robust path");
+         end;
+      end;
+      declare
+         Policy : Relocalization_Verification_Options := Reloc_Policy;
+      begin
+         Policy.Minimum_Consensus_Inliers := 31;
+         declare
+            R : constant Camera_Relocalization_Result := Relocalize_Camera
+              (W, P, Reloc_H, Reloc_Project (Reloc_H), K, Reloc_D, Reloc_RANSAC, Policy);
+         begin
+            Assert (Disposition (R) = Insufficient_Consensus_Inliers and then Found (R)
+              and then not Refinement_Attempted (R), "caller minimum cannot be accepted");
+            Reloc_Guards (R);
+         end;
+      end;
+      declare
+         Bad : Image_Point_Array (1 .. 30);
+         Options : RANSAC_Options := Reloc_RANSAC;
+      begin
+         for I in Bad'Range loop
+            Bad (I) := [OpenCV.Float64_Value (I * I * 17 mod 701),
+                        OpenCV.Float64_Value (I * I * I * 13 mod 503)];
+         end loop;
+         Options.Reprojection_Error_Pixels := 1.0E-8;
+         declare
+            R : constant Camera_Relocalization_Result := Relocalize_Camera
+              (W, Bad, Reloc_H, Reloc_Project (Reloc_H), K, Reloc_D, Options, Reloc_Policy);
+         begin
+            Assert (Disposition (R) = No_Native_RANSAC_Pose and then not Found (R), "inconsistent no consensus fixture");
+            Reloc_Guards (R);
+         end;
+      end;
+   end Reloc_Boundary;
+
+   procedure Reloc_Policies (T : in out Fixture) is
+      pragma Unreferenced (T);
+      W : constant Object_Point_Array := Reloc_Field;
+      P : constant Image_Point_Array := Reloc_Noisy;
+      H : Image_Point_Array := Reloc_Project (Reloc_H);
+      R : constant Camera_Relocalization_Result := Relocalize_Camera
+        (W, P, Reloc_H, H, K, Reloc_D, Reloc_RANSAC, Reloc_Policy);
+      Policy : Relocalization_Verification_Options := Reloc_Policy;
+      procedure Check (Expected : Boolean) is
+         V : constant Camera_Relocalization_Result := Relocalize_Camera
+           (W, P, Reloc_H, H, K, Reloc_D, Reloc_RANSAC, Policy);
+      begin
+         Assert (Accepted (V) = Expected, "inclusive numerical policy boundary");
+         if not Expected then
+            Assert (Disposition (V) = Rejected_By_Policy and then Native_Refinement_Succeeded (V)
+              and then Found (V) and then Initial_Holdout_Valid (V) and then Refined_Holdout_Valid (V)
+              and then Final_Inliers_Valid (V), "native true is not acceptance; scores retained");
+            Reloc_Guards (V);
+         end if;
+      end Check;
+   begin
+      Assert (Accepted (R), "policy fixture");
+      Policy.Maximum_Final_Inlier_RMS_Pixels := Final_Inlier_Summary (R).RMS_Error_Pixels;
+      Check (True);
+      Policy.Maximum_Final_Inlier_RMS_Pixels := OpenCV.Float64_Value'Adjacent
+        (Policy.Maximum_Final_Inlier_RMS_Pixels, 0.0); Check (False);
+      Policy := Reloc_Policy;
+      Policy.Maximum_Holdout_RMS_Pixels := Refined_Holdout (R).RMS_Error_Pixels; Check (True);
+      Policy.Maximum_Holdout_RMS_Pixels := OpenCV.Float64_Value'Adjacent
+        (Policy.Maximum_Holdout_RMS_Pixels, 0.0); Check (False);
+      Policy := Reloc_Policy;
+      Policy.Maximum_Holdout_Point_Error_Pixels := Refined_Holdout (R).Maximum_Error_Pixels; Check (True);
+      Policy.Maximum_Holdout_Point_Error_Pixels := OpenCV.Float64_Value'Adjacent
+        (Policy.Maximum_Holdout_Point_Error_Pixels, 0.0); Check (False);
+      --  Comparator fixture, NOT an independent truth oracle: observations at
+      --  the initial native pose make its RMS zero and expose positive worsening.
+      H := Project_Points (Reloc_H, K, Reloc_D, Initial_Pose (R));
+      Policy := Reloc_Policy;
+      declare
+         V : constant Camera_Relocalization_Result := Relocalize_Camera
+           (W, P, Reloc_H, H, K, Reloc_D, Reloc_RANSAC, Policy);
+         Worsening : constant OpenCV.Float64_Value :=
+           Refined_Holdout (V).RMS_Error_Pixels - Initial_Holdout (V).RMS_Error_Pixels;
+      begin
+         Assert (Worsening > 0.0, "native refinement genuinely worsens heldout fixture");
+         Policy.Maximum_Holdout_RMS_Worsening_Pixels := Worsening; Check (True);
+         Policy.Maximum_Holdout_RMS_Worsening_Pixels := OpenCV.Float64_Value'Adjacent (Worsening, 0.0); Check (False);
+         Policy.Maximum_Holdout_RMS_Worsening_Pixels := 0.0; Check (False);
+      end;
+   end Reloc_Policies;
+
+   procedure Reloc_Unusable (T : in out Fixture) is
+      pragma Unreferenced (T);
+      W : Object_Point_Array := Reloc_Field;
+      H : Object_Point_Array (Positive'Last .. Positive'Last) := [others => [0.0, 0.0, -20.0]];
+      P : constant Image_Point_Array := Reloc_Project (W);
+   begin
+      for Huge in Boolean loop
+         if Huge then
+            H (H'First) := [OpenCV.Float64_Value'Last, -OpenCV.Float64_Value'Last, 1.0];
+         end if;
+         declare
+            R : constant Camera_Relocalization_Result := Relocalize_Camera
+              (W, P, H, [Positive'Last => [0.0, 0.0]], K, Reloc_D, Reloc_RANSAC, Reloc_Policy);
+         begin
+            Assert (Disposition (R) = Initial_Holdout_Unusable and then Found (R) and then
+              not Refinement_Attempted (R) and then not Initial_Holdout_Valid (R), "behind/overflow whole set unusable");
+            Reloc_Guards (R);
+         end;
+      end loop;
+      --  PnP does not promise positive depth for all native consensus points.
+      --  A mixed front/back field tests the independent final depth screen.
+      for I in 1 .. 4 loop
+         W (I) (2) := W (I) (2) - 15.0;
+      end loop;
+      declare
+         Estimate : constant Pose_Estimate := Solve_PnP_RANSAC
+           (W, Reloc_Project (W), K, Reloc_D, Reloc_RANSAC);
+         --  This diagnostic fixture places the held-out point in front of the
+         --  actual native initial camera, without assuming which mixed-depth
+         --  EPNP orientation a version returns. It is not a truth oracle.
+         HW : constant Object_Point_Array :=
+           [1 => Camera_To_World_Point (Pose => Pose (Estimate), Point => [0.0, 0.0, 10.0])];
+         HP : constant Image_Point_Array := Project_Points (HW, K, Reloc_D, Pose (Estimate));
+         R : constant Camera_Relocalization_Result := Relocalize_Camera
+           (W, Reloc_Project (W), HW, HP, K, Reloc_D, Reloc_RANSAC, Reloc_Policy);
+      begin
+         Ada.Text_IO.Put_Line ("mixed-depth relocalization: " & Disposition (R)'Image & Inlier_Count (R)'Image);
+         Assert (Disposition (R) = Final_Inlier_Verification_Unusable and then
+           Native_Refinement_Succeeded (R) and then Refined_Holdout_Valid (R), "final native consensus depth checked");
+         Reloc_Guards (R);
+      end;
+   end Reloc_Unusable;
+
+   procedure Reloc_Refined_Depth (T : in out Fixture) is
+      pragma Unreferenced (T);
+      W : constant Object_Point_Array := Reloc_Field;
+      P : constant Image_Point_Array := Reloc_Noisy;
+      Base : constant Camera_Relocalization_Result := Relocalize_Camera
+        (W, P, Reloc_H, Reloc_Project (Reloc_H), K, Reloc_D, Reloc_RANSAC, Reloc_Policy);
+      Initial : constant World_To_Camera_Pose := Initial_Pose (Base);
+      Candidate : constant World_To_Camera_Pose := Accepted_Pose (Base);
+      Exercised : Boolean := False;
+   begin
+      --  Diagnostic boundary construction, not an independent truth oracle.
+      --  Find a point just inside the initial camera's front half-space but
+      --  outside the refined camera's. Native pose is never altered by a hook.
+      for X of Reprojection_Error_Array'[-10000.0, 0.0, 10000.0] loop
+         for Y of Reprojection_Error_Array'[-10000.0, 0.0, 10000.0] loop
+            declare
+               At_Zero : constant Object_Point := World_To_Camera_Point
+                 (Candidate, Camera_To_World_Point (Initial, [X, Y, 0.0]));
+               At_One : constant Object_Point := World_To_Camera_Point
+                 (Candidate, Camera_To_World_Point (Initial, [X, Y, 1.0]));
+               Slope : constant OpenCV.Float64_Value := At_One (2) - At_Zero (2);
+            begin
+               if not Exercised and then At_Zero (2) < 0.0 and then Slope > 0.0 then
+                  declare
+                     H : constant Object_Point_Array := [1 => Camera_To_World_Point
+                       (Initial, [X, Y, -At_Zero (2) / Slope / 2.0])];
+                     V : constant Camera_Relocalization_Result := Relocalize_Camera
+                       (W, P, H, [1 => [320.0, 240.0]], K, Reloc_D, Reloc_RANSAC, Reloc_Policy);
+                  begin
+                     Assert (Disposition (V) = Refined_Holdout_Unusable and then
+                       Native_Refinement_Succeeded (V) and then Initial_Holdout_Valid (V) and then
+                       not Refined_Holdout_Valid (V) and then Final_Inliers_Valid (V),
+                       "refined held-out depth rejects, retaining initial/final available scores");
+                     Reloc_Guards (V);
+                     Exercised := True;
+                  end;
+               end if;
+            end;
+         end loop;
+      end loop;
+      Assert (Exercised, "noisy native refinement provides distinct camera half-spaces");
+   end Reloc_Refined_Depth;
+
+   procedure Reloc_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check); --  Deliberate IEEE invalid inputs.
+      W : Object_Point_Array := Reloc_Field;
+      H : Object_Point_Array := Reloc_H;
+      P : Image_Point_Array := Reloc_Project (W);
+      Q : Image_Point_Array := Reloc_Project (H);
+      Policy : Relocalization_Verification_Options := Reloc_Policy;
+      Options : RANSAC_Options := Reloc_RANSAC;
+      Intrinsics : Camera_Intrinsics := K;
+      D : Distortion_Coefficients := Reloc_D;
+      procedure Reject (N : Natural := 30; M : Natural := 4; Mismatch : Boolean := False) is
+      begin
+         declare
+            R : constant Camera_Relocalization_Result := Relocalize_Camera
+              (W (1 .. N), P (1 .. N - Boolean'Pos (Mismatch)), H (1 .. M), Q (1 .. M),
+               Intrinsics, D, Options, Policy);
+            pragma Unreferenced (R);
+         begin
+            Assert (False, "invalid relocalization accepted");
+         end;
+      exception when OpenCV.OpenCV_Error => null;
+      end Reject;
+   begin
+      Reject (Mismatch => True); Reject (M => 0);
+      W (2) := W (1); Reject; W := Reloc_Field;
+      H (2) := H (1); Reject; H := Reloc_H;
+      H (1) := W (1); Reject; H := Reloc_H;
+      Policy.Minimum_Consensus_Inliers := 3; Reject (0); Policy := Reloc_Policy;
+      for Value of Reprojection_Error_Array'[-1.0, OpenCV.Float64_Value (Nonfinite (0)),
+                                           OpenCV.Float64_Value (Nonfinite (1))] loop
+         Policy.Maximum_Final_Inlier_RMS_Pixels := Value; Reject (0); Policy := Reloc_Policy;
+         Policy.Maximum_Holdout_RMS_Pixels := Value; Reject (4); Policy := Reloc_Policy;
+         Policy.Maximum_Holdout_Point_Error_Pixels := Value; Reject (5); Policy := Reloc_Policy;
+         Policy.Maximum_Holdout_RMS_Worsening_Pixels := Value; Reject (0); Policy := Reloc_Policy;
+      end loop;
+      for Kind in Interfaces.Integer_32 range 0 .. 1 loop
+         declare
+            V : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Kind));
+         begin
+            W (1) (0) := V; Reject; W := Reloc_Field;
+            H (1) (2) := V; Reject (0); H := Reloc_H;
+            P (1) (1) := V; Reject; P := Reloc_Project (W);
+            Q (1) (0) := V; Reject (0); Q := Reloc_Project (H);
+            Intrinsics.Focal_X := V; Reject (0); Intrinsics := K;
+            D.K1 := V; Reject (0); D := Reloc_D;
+            Options.Confidence := V; Reject (0); Options := Reloc_RANSAC;
+         end;
+      end loop;
+      Options.Reprojection_Error_Pixels := 0.0; Reject (0); Options := Reloc_RANSAC;
+      Intrinsics.Focal_Y := 0.0; Reject (0);
+   end Reloc_Invalid;
+
+   procedure Reloc_Adapter (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check); --  Deliberately invalid adapter pixels.
+      A : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+      B : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [-2.0, 0.0, 0.0]);
+      Identity : constant Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);
+      Values : constant Metric_Point_Refinement_Result_Array := Refine_Metric_World_Points
+        ([[0.5, 0.126], [0.0, 0.0], [0.3, 0.152]],
+         [[0.25, 0.124], [0.0, 0.0], [0.1, 0.148]], Identity, Identity,
+         No_Distortion, No_Distortion, A, B, (0.0, 1.0, 1.0, 1.0), (20, 0.0), (1.0, 1.0));
+      Shifted : Metric_Point_Refinement_Result_Array (Positive'Last - 2 .. Positive'Last) := Values;
+      Pixels : constant Image_Point_Array (7 .. 9) := [[10.0, 20.0], [30.0, 40.0], [50.0, 60.0]];
+      Set : constant Accepted_Landmark_Set := Accepted_Landmark_Observations (Shifted, Pixels);
+      N : Natural := 0;
+   begin
+      Assert (Set.Count > 0 and then Set.Count < 3, "adapter mixed accepted/unavailable");
+      for I in 1 .. Values'Length loop
+         if Accepted (Values (I)) then
+            N := N + 1;
+            Assert (Original_Positions (Set) (N) = I and then
+              World_Points (Set) (N) = Accepted_World_Position (Values (I)) and then
+              Image_Points (Set) (N) = Pixels (Pixels'First + (I - 1)), "compaction preserves positional pairing");
+         end if;
+      end loop;
+      Shifted := [others => Values (2)];
+      declare
+         Empty : constant Accepted_Landmark_Set := Accepted_Landmark_Observations (Shifted, Pixels);
+         None : constant Accepted_Landmark_Set := Accepted_Landmark_Observations
+           (Values (1 .. 0), Pixels (7 .. 6));
+      begin
+         Assert (Empty.Count = 0 and then None.Count = 0 and then World_Points (Empty)'First = 1,
+                 "empty adapter no candidate/original fallback");
+      end;
+      begin
+         declare
+            Bad : constant Accepted_Landmark_Set := Accepted_Landmark_Observations (Shifted, Pixels (7 .. 8));
+            pragma Unreferenced (Bad);
+         begin
+            Assert (False, "adapter mismatch accepted");
+         end;
+      exception when OpenCV.OpenCV_Error => null; end;
+      declare
+         First, Second : Image_Point_Array (1 .. 30);
+         New_Image : Image_Point_Array (Positive'Last - 29 .. Positive'Last);
+      begin
+         for I in First'Range loop
+            declare
+               X : constant OpenCV.Float64_Value := OpenCV.Float64_Value (I mod 6) * 0.5 - 1.3;
+               Y : constant OpenCV.Float64_Value := OpenCV.Float64_Value (I / 6) * 0.4 - 0.9;
+               Z : constant OpenCV.Float64_Value := 8.0 + OpenCV.Float64_Value (I mod 7) * 0.23;
+            begin
+               First (I) := [X / Z, Y / Z + 0.001];
+               Second (I) := [(X - 2.0) / Z, Y / Z - 0.001];
+               if I mod 7 = 0 then
+                  First (I) := [0.0, 0.0]; Second (I) := [0.0, 0.0];
+               end if;
+            end;
+         end loop;
+         declare
+            Map : constant Metric_Point_Refinement_Result_Array (11 .. 40) := Refine_Metric_World_Points
+              (First, Second, Identity, Identity, No_Distortion, No_Distortion, A, B,
+               (0.0, 1.0, 1.0, 1.0), (20, 0.0), (1.0, 1.0));
+         begin
+            for I in 1 .. Map'Length loop
+               New_Image (New_Image'First + (I - 1)) := [2000.0, -1500.0];
+               if Accepted (Map (Map'First + (I - 1))) and then I mod 5 /= 0 then
+                  New_Image (New_Image'First + (I - 1)) := Reloc_Project
+                    ([1 => Accepted_World_Position (Map (Map'First + (I - 1)))]) (1);
+               end if;
+            end loop;
+            declare
+               Compact : constant Accepted_Landmark_Set := Accepted_Landmark_Observations (Map, New_Image);
+               R : constant Camera_Relocalization_Result := Relocalize_Camera
+                 (World_Points (Compact), Image_Points (Compact), Reloc_H, Reloc_Project (Reloc_H),
+                  K, Reloc_D, Reloc_RANSAC, Reloc_Policy);
+            begin
+               Assert (Compact.Count >= 20 and then Compact.Count < 30 and then Accepted (R),
+                       "Task 020 accepted compact map robustly relocalizes");
+               for Position of Inliers (R) loop
+                  declare
+                     Original : constant Positive := Original_Positions (Compact) (Position);
+                  begin
+                     Assert (Original mod 7 /= 0 and then Original mod 5 /= 0 and then
+                       Accepted (Map (Map'First + (Original - 1))) and then
+                       World_Points (Compact) (Position) =
+                         Accepted_World_Position (Map (Map'First + (Original - 1))),
+                       "native compact consensus maps through adapter to original landmark position");
+                  end;
+               end loop;
+            end;
+         end;
+      end;
+      declare
+         One : constant Accepted_Landmark_Set := Accepted_Landmark_Observations
+           ([Positive'Last => Values (1)], [Positive'Last => [10.0, 20.0]]);
+      begin
+         Assert (One.Count = 1 and then Original_Positions (One) (1) = 1,
+                 "Positive Last singleton positional indexing");
+      end;
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         begin
+            declare
+               Bad : constant Accepted_Landmark_Set := Accepted_Landmark_Observations
+                 ([1 => Values (2)], [1 => [OpenCV.Float64_Value (Nonfinite (Kind)), 0.0]]);
+               pragma Unreferenced (Bad);
+            begin
+               Assert (False, "nonfinite adapter pixel accepted even for skipped landmark");
+            end;
+         exception when OpenCV.OpenCV_Error => null; end;
+      end loop;
+   end Reloc_Adapter;
+
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
+      Result.Add_Test (Caller.Create ("relocalization analytic Brown robust inlier-only pose ownership", Reloc_Oracle'Access));
+      Result.Add_Test (Caller.Create ("relocalization four five no-pose and insufficient consensus", Reloc_Boundary'Access));
+      Result.Add_Test (Caller.Create ("relocalization inclusive policy adjacent rejection and worsening", Reloc_Policies'Access));
+      Result.Add_Test (Caller.Create ("relocalization behind unavailable and final inlier depth", Reloc_Unusable'Access));
+      Result.Add_Test (Caller.Create ("relocalization refined heldout unusable preserves available scores", Reloc_Refined_Depth'Access));
+      Result.Add_Test (Caller.Create ("relocalization invalid options finite counts duplicates isolation", Reloc_Invalid'Access));
+      Result.Add_Test (Caller.Create ("relocalization accepted landmark adapter positional compaction", Reloc_Adapter'Access));
       Result.Add_Test (Caller.Create ("metric refinement analytic noisy world oracle and preserved original", Metric_Refinement_Oracle'Access));
       Result.Add_Test (Caller.Create ("metric refinement independent pixel acceptance and equality", Metric_Refinement_Acceptance'Access));
       Result.Add_Test (Caller.Create ("metric refinement zero baseline unusable low parallax no improvement", Metric_Refinement_Skips'Access));

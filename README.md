@@ -1,5 +1,33 @@
 # OpenCV Calib3D for Ada
 
+## Task 021: independently verified landmark camera relocalization
+
+`Relocalize_Camera` robustly fits a new world-to-camera pose from at least six
+trusted Cartesian landmark/pixel pairs using existing fixed-EPNP RANSAC, copies
+the actual native consensus positions, and refines **only** those pairs once.
+Separate disjoint held-out landmarks verify both poses. Explicit caller limits
+govern final consensus RMS, held-out RMS, maximum error, and RMS worsening.
+Native optimizer success alone is never acceptance. The owned private result
+guards initial/accepted poses, camera center and available whole-set diagnostics.
+`Accepted_Landmark_Observations` optionally compacts accepted Task 020 values and
+new-image pixels, preserving original one-based positions. Neither landmark
+acceptance nor held-out compatibility establishes independent physical truth,
+global localization correctness, statistical independence or uncertainty bounds.
+No C++/ABI change (48 operations), new solver, or navigation dependency.
+See [contract](docs/landmark-relocalization-contract.md) and
+[validation](docs/landmark-relocalization-validation.md).
+
+```sh
+alr -n -C examples build
+alr -n -C examples exec -- sh ../scripts/run_native.sh bin/landmark_relocalization_synthetic
+```
+
+This ninth file-free example uses independent scalar analytic projections,
+gross fitting mismatches and separate held-out landmarks. It reports actual
+consensus, before/after held-out and final inlier scores, physical rotation and
+translation differences, and camera-center error. These are synthetic observations,
+not sensor data or evidence of real navigation accuracy.
+
 ## Task 020: fixed-pose metric world-point refinement
 
 `Refine_Metric_World_Points` reconstructs once, refines eligible unit-baseline

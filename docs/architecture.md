@@ -1,5 +1,18 @@
 # Architecture
 
+## Task 021 landmark relocalization
+
+Ada-only composition of the existing fixed-EPNP RANSAC, owned pose/inlier copy,
+inlier-only iterative refinement, native Rodrigues and native projection.
+The existing AP3P reference evaluator is reused as a general one-pose diagnostic
+engine; **no AP3P solver is called**. Whole-set guards prevent partial scores from
+being accepted. Separate fitting/held-out world sets are validated for exact
+disjointness. The result owns values independently of Pose_Estimate finalization.
+The optional Task 020 adapter consumes only guarded accepted world coordinates.
+No C++ implementation, raw pointer, ABI operation (48 unchanged), or dependency
+is added. Native errors abort publication; caller policy gates pose and center.
+See [contract](landmark-relocalization-contract.md).
+
 ## Task 020 metric point refinement
 
 One initial `Triangulate_World_Points` batch is preserved verbatim. Eligible

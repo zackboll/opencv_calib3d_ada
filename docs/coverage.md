@@ -1,5 +1,17 @@
 # Coverage
 
+## Task 021 inventory
+
+184 AUnit registrations preserve all 177 baseline cases and add seven grouped
+cases: analytic nonidentity Rz/t and five Brown terms, exact/noisy robust consensus
+and inlier-only replay, 0..5 native boundary/no pose/support, inclusive/adjacent
+numerical thresholds and positive worsening, whole-set depth/numerical screens,
+invalid finite inputs/isolation/options, and accepted Task 020 adapter compaction.
+Native fault campaigns add synthetic refinement false and 60 exception/atomicity
+checks. The ninth example is `landmark_relocalization_synthetic`. Private ABI
+remains 48. See [validation](landmark-relocalization-validation.md) for execution
+evidence and limits; inventory alone is not a claim of passing execution.
+
 ## Task 020 metric world-point refinement
 
 177 registrations preserve all 170 previous cases. Seven grouped cases cover
