@@ -8,6 +8,7 @@ procedure Run_Refinement_Faults is
    use type OpenCV.Float64_Value;
    use type Interfaces.C.int;
    use type Interfaces.C.double;
+   use type Object_Point;
    procedure Fail (Stage, Kind : Interfaces.C.int)
      with Import, Convention => C, External_Name => "opencv_calib3d_test_fail";
    procedure Return_False
@@ -940,4 +941,72 @@ begin
                              & "rejections, inputs unchanged, recovery");
     end;
 
+   declare
+      H : constant Object_Point_Array := [[0.7, -0.4, 3.0], [-0.8, 0.6, 2.8]];
+      HP : constant Image_Point_Array := Project_Points (H, K, No_Distortion, Truth);
+      Policy : constant Relocalization_Verification_Options := (4, 1.0, 1.0, 1.0, 1.0);
+      Options : constant RANSAC_Options := (1000, 1.0, 0.999);
+      --  Count is fixed only for this deliberately exact, clean nine-point
+      --  fault fixture. Native false/exception controls are SYNTHETIC.
+      Saved : Camera_Relocalization_Result (World'Length) := Relocalize_Camera
+        (World, Images, H, HP, K, No_Distortion, Options, Policy);
+      Original : constant World_To_Camera_Pose := Initial_Pose (Saved);
+      Center : constant Object_Point := Camera_Center (Saved);
+      type Stage_Array is array (Positive range <>) of Interfaces.C.int;
+      Count : Natural := 0;
+   begin
+      Check (Accepted (Saved), "relocalization fault fixture accepted");
+      Return_False;
+      declare
+         Value : constant Camera_Relocalization_Result := Relocalize_Camera
+           (World, Images, H, HP, K, No_Distortion, Options, Policy);
+      begin
+         Check (Disposition (Value) = Native_Refinement_False and then
+                Found (Value) and then Refinement_Attempted (Value) and then
+                not Native_Refinement_Succeeded (Value) and then
+                Initial_Pose (Value) = Original and then Initial_Holdout_Valid (Value) and then
+                not Refined_Holdout_Valid (Value) and then not Accepted (Value),
+                "synthetic native false retains initial and exposes no accepted pose");
+         begin
+            declare
+               Unexpected : constant World_To_Camera_Pose := Accepted_Pose (Value);
+               pragma Unreferenced (Unexpected);
+            begin
+               raise Program_Error with "synthetic false exposed accepted pose";
+            end;
+         exception when OpenCV.OpenCV_Error => null; end;
+      end;
+      --  RANSAC allocation/publication, Rodrigues, projection, refinement and
+      --  final accepted camera-center stages, all five native exception kinds.
+      for Stage of Stage_Array'[1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 15, 16] loop
+         for Kind in Interfaces.C.int range 1 .. 5 loop
+            Fail (Stage, Kind);
+            begin
+               Saved := Relocalize_Camera (World, Images, H, HP, K, No_Distortion, Options, Policy);
+               raise Program_Error with "relocalization swallowed native exception at" & Stage'Image;
+            exception when OpenCV.OpenCV_Error => Count := Count + 1; end;
+            Check (Accepted (Saved) and then Initial_Pose (Saved) = Original and then
+                   Camera_Center (Saved) = Center, "exception published partial relocalization");
+         end loop;
+      end loop;
+      Check (Count = 60, "relocalization translated all synthetic faults");
+      Saved := Relocalize_Camera (World, Images, H, HP, K, No_Distortion, Options, Policy);
+      Check (Accepted (Saved), "relocalization recovers after native exceptions");
+      --  Too few fitting points must not consume the native RANSAC checkpoint.
+      for N in 4 .. 5 loop
+         Fail (5, 1);
+         declare
+            Value : constant Camera_Relocalization_Result := Relocalize_Camera
+              (World (1 .. N), Images (1 .. N), H, HP, K, No_Distortion, Options, Policy);
+         begin
+            Check (Disposition (Value) = Insufficient_Fitting_Landmarks, "4/5 rejected before native solve");
+         end;
+         begin
+            Saved := Relocalize_Camera (World, Images, H, HP, K, No_Distortion, Options, Policy);
+            raise Program_Error with "4/5 consumed the RANSAC fault";
+         exception when OpenCV.OpenCV_Error => null; end;
+      end loop;
+      Ada.Text_IO.Put_Line
+        ("PASS: relocalization SYNTHETIC false, 60 native exception/atomicity checks, 4/5 no native entry, recovery");
+   end;
 end Run_Refinement_Faults;

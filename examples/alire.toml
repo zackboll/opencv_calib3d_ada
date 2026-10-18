@@ -6,7 +6,7 @@ maintainers = ["Zack Boll <zackboll@gmail.com>"]
 maintainers-logins = ["zackboll"]
 licenses = "Apache-2.0"
 project-files = ["opencv_calib3d_examples.gpr"]
-executables = ["pnp_synthetic", "homography_synthetic", "fundamental_synthetic", "essential_synthetic"]
+executables = ["pnp_synthetic", "homography_synthetic", "fundamental_synthetic", "essential_synthetic", "triangulation_synthetic", "relative_motion_synthetic", "metric_triangulation_synthetic", "metric_refinement_synthetic", "landmark_relocalization_synthetic"]
 
 [[depends-on]]
 opencv_calib3d = "*"

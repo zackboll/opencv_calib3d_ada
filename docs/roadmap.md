@@ -1,5 +1,15 @@
 # Roadmap
 
+## Task 021 approved scope
+
+Robust landmark-based relocalization only: existing fixed-EPNP RANSAC on six or
+more fitting pairs, preserved native consensus positions, one inlier-only native
+iterative refinement, and separate held-out verification with explicit inclusive
+caller policy. Optional Task 020 accepted-landmark adapter retains original
+positions. Owned Ada values and guarded accepted pose/center; no native solver,
+ABI operation, covariance, SLAM, bundle adjustment, navigation fusion or geographic
+conversion. See [contract](landmark-relocalization-contract.md).
+
 ## Task 020 approved scope
 
 Fixed-pose metric world-point refinement and explicit caller-controlled

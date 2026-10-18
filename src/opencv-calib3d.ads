@@ -962,7 +962,85 @@ package OpenCV.Calib3D is
       Pose          : in out World_To_Camera_Pose;
       Refined       : out Boolean);
 
+   --  Task 021: robust EPNP consensus followed by ONE inlier-only iterative
+   --  refinement. Held-out landmarks never fit the pose. Every policy field is
+   --  mandatory; limits are finite, nonnegative, inclusive, with no epsilon.
+   type Relocalization_Verification_Options is record
+      Minimum_Consensus_Inliers : Positive;
+      Maximum_Final_Inlier_RMS_Pixels : OpenCV.Float64_Value;
+      Maximum_Holdout_RMS_Pixels : OpenCV.Float64_Value;
+      Maximum_Holdout_Point_Error_Pixels : OpenCV.Float64_Value;
+      Maximum_Holdout_RMS_Worsening_Pixels : OpenCV.Float64_Value;
+   end record;
+
+   type Camera_Relocalization_Disposition is
+     (Insufficient_Fitting_Landmarks, No_Native_RANSAC_Pose,
+      Insufficient_Consensus_Inliers, Initial_Holdout_Unusable,
+      Native_Refinement_False, Refined_Holdout_Unusable,
+      Final_Inlier_Verification_Unusable, Rejected_By_Policy, Accepted);
+
+   --  Owned values, independent of the finalized Pose_Estimate. Count is the
+   --  native consensus count, NOT the number of post-refinement inliers.
+   type Camera_Relocalization_Result (Count : Natural) is private;
+   function Relocalize_Camera
+     (Fitting_World : Object_Point_Array; Fitting_Pixels : Image_Point_Array;
+      Holdout_World : Object_Point_Array; Holdout_Pixels : Image_Point_Array;
+      Intrinsics : Camera_Intrinsics; Distortion : Distortion_Coefficients;
+      RANSAC : RANSAC_Options; Verification : Relocalization_Verification_Options)
+      return Camera_Relocalization_Result;
+   --  Requires matched finite positional pairs, unique exact world points in
+   --  each set, no exact world overlap, >=1 holdout. Valid fitting counts <6
+   --  return Insufficient_Fitting_Landmarks without native entry (even 4/5).
+   --  Both sets share the caller's Cartesian world frame and length units.
+   function Disposition (Result : Camera_Relocalization_Result)
+      return Camera_Relocalization_Disposition;
+   function Found (Result : Camera_Relocalization_Result) return Boolean;
+   function Initial_Pose (Result : Camera_Relocalization_Result) return World_To_Camera_Pose;
+   function Inlier_Count (Result : Camera_Relocalization_Result) return Natural;
+   --  Sorted one-based ORIGINAL fitting positions, unchanged by refinement.
+   function Inliers (Result : Camera_Relocalization_Result) return Inlier_Index_Array;
+   function Refinement_Attempted (Result : Camera_Relocalization_Result) return Boolean;
+   function Native_Refinement_Succeeded (Result : Camera_Relocalization_Result) return Boolean;
+   function Initial_Holdout_Valid (Result : Camera_Relocalization_Result) return Boolean;
+   function Refined_Holdout_Valid (Result : Camera_Relocalization_Result) return Boolean;
+   function Final_Inliers_Valid (Result : Camera_Relocalization_Result) return Boolean;
+   --  Missing summaries/errors/poses raise OpenCV_Error, never placeholder scores.
+   function Initial_Holdout (Result : Camera_Relocalization_Result) return Reprojection_Summary;
+   function Refined_Holdout (Result : Camera_Relocalization_Result) return Reprojection_Summary;
+   function Final_Inlier_Summary (Result : Camera_Relocalization_Result) return Reprojection_Summary;
+   function Final_Inlier_Errors (Result : Camera_Relocalization_Result) return Reprojection_Error_Array;
+   function Accepted (Result : Camera_Relocalization_Result) return Boolean;
+   function Accepted_Pose (Result : Camera_Relocalization_Result) return World_To_Camera_Pose;
+   --  C_world=-R^T*t, NOT -t. Available only after full acceptance.
+   function Camera_Center (Result : Camera_Relocalization_Result) return Object_Point;
+
+   --  Optional Task 020 adapter. Acceptance is a reprojection policy, not proof
+   --  of physical landmark accuracy. Only Accepted_World_Position is consumed.
+   type Accepted_Landmark_Set (Count : Natural) is private;
+   function Accepted_Landmark_Observations
+     (Landmarks : Metric_Point_Refinement_Result_Array; Pixels : Image_Point_Array)
+      return Accepted_Landmark_Set;
+   function World_Points (Landmarks : Accepted_Landmark_Set) return Object_Point_Array;
+   function Image_Points (Landmarks : Accepted_Landmark_Set) return Image_Point_Array;
+   function Original_Positions (Landmarks : Accepted_Landmark_Set) return Inlier_Index_Array;
+
 private
+   type Accepted_Landmark_Set (Count : Natural) is record
+      World : Object_Point_Array (1 .. Count);
+      Pixels : Image_Point_Array (1 .. Count);
+      Positions : Inlier_Index_Array (1 .. Count) := [others => 1];
+   end record;
+   type Camera_Relocalization_Result (Count : Natural) is record
+      State : Camera_Relocalization_Disposition := Insufficient_Fitting_Landmarks;
+      Has_Initial, Attempted, Native_Succeeded : Boolean := False;
+      Initial_Valid, Refined_Valid, Inliers_Valid : Boolean := False;
+      Initial, Final_Pose : World_To_Camera_Pose :=
+        (Rotation => [others => 0.0], Translation => [others => 0.0]);
+      Center : Object_Point := [others => 0.0];
+      Initial_Summary, Refined_Summary, Inlier_Summary : Reprojection_Summary;
+      Positions : Inlier_Index_Array (1 .. Count) := [others => 1];
+      Errors : Reprojection_Error_Array (1 .. Count) := [others => 0.0];
+   end record;
    type Metric_Point_Refinement_Result is record
       State : Metric_Refinement_Disposition := Initial_No_Baseline;
       Original, Candidate : Metric_Triangulated_Point;

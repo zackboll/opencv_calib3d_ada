@@ -3602,4 +3602,266 @@ package body OpenCV.Calib3D is
       when Constraint_Error =>
          raise OpenCV.OpenCV_Error with "Epipolar correction arithmetic exceeds representable range";
    end Correct_Epipolar_Matches;
+   function Disposition (Result : Camera_Relocalization_Result)
+      return Camera_Relocalization_Disposition is (Result.State);
+   function Found (Result : Camera_Relocalization_Result) return Boolean is (Result.Has_Initial);
+   function Inlier_Count (Result : Camera_Relocalization_Result) return Natural is
+     (if Result.Has_Initial then Result.Count else 0);
+   function Inliers (Result : Camera_Relocalization_Result) return Inlier_Index_Array is
+     (if Result.Has_Initial then Result.Positions else Inlier_Index_Array'[1 .. 0 => <>]);
+   function Refinement_Attempted (Result : Camera_Relocalization_Result) return Boolean is (Result.Attempted);
+   function Native_Refinement_Succeeded (Result : Camera_Relocalization_Result) return Boolean is
+     (Result.Native_Succeeded);
+   function Initial_Holdout_Valid (Result : Camera_Relocalization_Result) return Boolean is (Result.Initial_Valid);
+   function Refined_Holdout_Valid (Result : Camera_Relocalization_Result) return Boolean is (Result.Refined_Valid);
+   function Final_Inliers_Valid (Result : Camera_Relocalization_Result) return Boolean is (Result.Inliers_Valid);
+   function Accepted (Result : Camera_Relocalization_Result) return Boolean is
+     (Result.State = Accepted and then Result.Native_Succeeded and then Result.Inliers_Valid
+      and then Result.Initial_Valid and then Result.Refined_Valid);
+
+   function Initial_Pose (Result : Camera_Relocalization_Result) return World_To_Camera_Pose is
+   begin
+      if not Found (Result) then
+         raise OpenCV.OpenCV_Error with "Relocalization has no native RANSAC pose";
+      end if;
+      return Result.Initial;
+   end Initial_Pose;
+
+   function Accepted_Pose (Result : Camera_Relocalization_Result) return World_To_Camera_Pose is
+   begin
+      if not Accepted (Result) then
+         raise OpenCV.OpenCV_Error with "Relocalization has no accepted pose";
+      end if;
+      return Result.Final_Pose;
+   end Accepted_Pose;
+
+   function Camera_Center (Result : Camera_Relocalization_Result) return Object_Point is
+   begin
+      if not Accepted (Result) then
+         raise OpenCV.OpenCV_Error with "Relocalization has no accepted camera center";
+      end if;
+      return Result.Center;
+   end Camera_Center;
+
+   function Initial_Holdout (Result : Camera_Relocalization_Result) return Reprojection_Summary is
+   begin
+      if not Result.Initial_Valid then
+         raise OpenCV.OpenCV_Error with "Relocalization initial holdout unavailable";
+      end if;
+      return Result.Initial_Summary;
+   end Initial_Holdout;
+   function Refined_Holdout (Result : Camera_Relocalization_Result) return Reprojection_Summary is
+   begin
+      if not Result.Refined_Valid then
+         raise OpenCV.OpenCV_Error with "Relocalization refined holdout unavailable";
+      end if;
+      return Result.Refined_Summary;
+   end Refined_Holdout;
+   function Final_Inlier_Summary (Result : Camera_Relocalization_Result) return Reprojection_Summary is
+   begin
+      if not Result.Inliers_Valid then
+         raise OpenCV.OpenCV_Error with "Relocalization final inlier diagnostics unavailable";
+      end if;
+      return Result.Inlier_Summary;
+   end Final_Inlier_Summary;
+   function Final_Inlier_Errors (Result : Camera_Relocalization_Result) return Reprojection_Error_Array is
+   begin
+      if not Result.Inliers_Valid then
+         raise OpenCV.OpenCV_Error with "Relocalization final inlier diagnostics unavailable";
+      end if;
+      return Result.Errors;
+   end Final_Inlier_Errors;
+
+   function World_Points (Landmarks : Accepted_Landmark_Set) return Object_Point_Array is (Landmarks.World);
+   function Image_Points (Landmarks : Accepted_Landmark_Set) return Image_Point_Array is (Landmarks.Pixels);
+   function Original_Positions (Landmarks : Accepted_Landmark_Set) return Inlier_Index_Array is (Landmarks.Positions);
+
+   function Accepted_Landmark_Observations
+     (Landmarks : Metric_Point_Refinement_Result_Array; Pixels : Image_Point_Array)
+      return Accepted_Landmark_Set
+   is
+      Count : Natural := 0;
+   begin
+      if Landmarks'Length /= Pixels'Length then
+         raise OpenCV.OpenCV_Error with "Landmark adapter world/pixel counts differ";
+      end if;
+      Validate (Pixels);
+      for Landmark of Landmarks loop
+         if Accepted (Landmark) then
+            Count := Count + 1;
+         end if;
+      end loop;
+      return Result : Accepted_Landmark_Set (Count) do
+         Count := 0;
+         for Position in 1 .. Landmarks'Length loop
+            declare
+               Landmark : Metric_Point_Refinement_Result renames
+                 Landmarks (Landmarks'First + (Position - 1));
+            begin
+               if Accepted (Landmark) then
+                  Count := Count + 1;
+                  Result.World (Count) := Accepted_World_Position (Landmark);
+                  Result.Pixels (Count) := Pixels (Pixels'First + (Position - 1));
+                  Result.Positions (Count) := Position;
+               end if;
+            end;
+         end loop;
+      end return;
+   end Accepted_Landmark_Observations;
+
+   function Relocalize_Camera
+     (Fitting_World : Object_Point_Array; Fitting_Pixels : Image_Point_Array;
+      Holdout_World : Object_Point_Array; Holdout_Pixels : Image_Point_Array;
+      Intrinsics : Camera_Intrinsics; Distortion : Distortion_Coefficients;
+      RANSAC : RANSAC_Options; Verification : Relocalization_Verification_Options)
+      return Camera_Relocalization_Result
+   is
+      procedure Require_Unique (Points : Object_Point_Array) is
+      begin
+         for Left in Points'Range loop
+            for Right in Points'First .. Left - 1 loop
+               if Same_World_Point (Points (Left), Points (Right)) then
+                  raise OpenCV.OpenCV_Error with "Relocalization repeats a world landmark";
+               end if;
+            end loop;
+         end loop;
+      end Require_Unique;
+
+      --  Existing evaluator obtains native R once, checks all camera coordinates,
+      --  and calls native Project_Points only at positive depth. Its arithmetic
+      --  unavailability does NOT swallow native exceptions. Never publish its
+      --  partial-set summary as a whole-set score.
+      procedure Evaluate
+        (Pose : World_To_Camera_Pose; World : Object_Point_Array;
+         Pixels : Image_Point_Array; Valid : out Boolean;
+         Summary : out Reprojection_Summary; Errors : out Reprojection_Error_Array)
+      is
+         Values : constant AP3P_Reference_Result_Matrix :=
+           Evaluate_AP3P_References ([(Pose => Pose)], World, Pixels, Intrinsics, Distortion);
+      begin
+         Valid := False;
+         Summary := (others => <>);
+         Errors := [others => 0.0];
+         for I in 1 .. World'Length loop
+            if Values (1, I).Disposition /= Projected_Positive_Depth then
+               return;
+            end if;
+         end loop;
+         for I in 1 .. World'Length loop
+            Errors (Errors'First + (I - 1)) := Values (1, I).Error_Pixels;
+         end loop;
+         Summary := Summarize_Reprojection (Errors);
+         Valid := True;
+      end Evaluate;
+   begin
+      --  Validate everything before the insufficient-fitting early return.
+      Validate (Intrinsics);
+      Validate (Distortion);
+      Validate (RANSAC);
+      Validate (Fitting_World);
+      Validate (Fitting_Pixels);
+      Validate (Holdout_World);
+      Validate (Holdout_Pixels);
+      Validate (AP3P_Refinement_Acceptance_Options'
+        (Verification.Maximum_Holdout_RMS_Pixels,
+         Verification.Maximum_Holdout_Point_Error_Pixels,
+         Verification.Maximum_Holdout_RMS_Worsening_Pixels));
+      if Verification.Minimum_Consensus_Inliers < 4
+        or else not Is_Finite (Verification.Maximum_Final_Inlier_RMS_Pixels)
+        or else Verification.Maximum_Final_Inlier_RMS_Pixels < 0.0
+      then
+         raise OpenCV.OpenCV_Error with "Invalid relocalization verification policy";
+      end if;
+      if Fitting_World'Length /= Fitting_Pixels'Length
+        or else Holdout_World'Length /= Holdout_Pixels'Length
+        or else Holdout_World'Length = 0
+        or else Fitting_World'Length > Natural (Interfaces.Integer_32'Last)
+        or else Holdout_World'Length > Natural (Interfaces.Integer_32'Last)
+      then
+         raise OpenCV.OpenCV_Error with "Invalid relocalization correspondence counts";
+      end if;
+      Require_Unique (Fitting_World);
+      Require_Unique (Holdout_World);
+      for Point of Holdout_World loop
+         for Other of Fitting_World loop
+            if Same_World_Point (Point, Other) then
+               raise OpenCV.OpenCV_Error with "Relocalization holdout overlaps fitting world";
+            end if;
+         end loop;
+      end loop;
+      if Fitting_World'Length < 6 then
+         return Result : Camera_Relocalization_Result (0);
+      end if;
+      declare
+         Estimate : constant Pose_Estimate := Solve_PnP_RANSAC
+           (Fitting_World, Fitting_Pixels, Intrinsics, Distortion, RANSAC);
+         Positions : constant Inlier_Index_Array := Inliers (Estimate);
+      begin
+         return Result : Camera_Relocalization_Result (Positions'Length) do
+            Result.State := No_Native_RANSAC_Pose;
+            if not Found (Estimate) then
+               return;
+            end if;
+            Result.Has_Initial := True;
+            Result.Initial := Pose (Estimate);
+            Result.Positions := Positions;
+            Result.State := Insufficient_Consensus_Inliers;
+            if Positions'Length < Verification.Minimum_Consensus_Inliers then
+               return;
+            end if;
+            declare
+               World : Object_Point_Array (1 .. Positions'Length);
+               Pixels : Image_Point_Array (1 .. Positions'Length);
+               Holdout_Errors : Reprojection_Error_Array (1 .. Holdout_World'Length);
+               Candidate : World_To_Camera_Pose := Result.Initial;
+            begin
+               Evaluate (Result.Initial, Holdout_World, Holdout_Pixels,
+                         Result.Initial_Valid, Result.Initial_Summary, Holdout_Errors);
+               Result.State := Initial_Holdout_Unusable;
+               if not Result.Initial_Valid then
+                  return;
+               end if;
+               for I in Positions'Range loop
+                  World (I) := Fitting_World (Fitting_World'First + (Positions (I) - 1));
+                  Pixels (I) := Fitting_Pixels (Fitting_Pixels'First + (Positions (I) - 1));
+               end loop;
+               Result.Attempted := True;
+               Refine_Pose_Iterative
+                 (World, Pixels, Intrinsics, Distortion, Candidate, Result.Native_Succeeded);
+               Result.State := Native_Refinement_False;
+               if not Result.Native_Succeeded then
+                  return;
+               end if;
+               Evaluate (Candidate, Holdout_World, Holdout_Pixels,
+                         Result.Refined_Valid, Result.Refined_Summary, Holdout_Errors);
+               --  Evaluate both diagnostics before rejection, retaining any
+               --  meaningful whole-set score even if the other set is unusable.
+               Evaluate (Candidate, World, Pixels,
+                         Result.Inliers_Valid, Result.Inlier_Summary, Result.Errors);
+               Result.State := Refined_Holdout_Unusable;
+               if not Result.Refined_Valid then
+                  return;
+               end if;
+               Result.State := Final_Inlier_Verification_Unusable;
+               if not Result.Inliers_Valid then
+                  return;
+               end if;
+               Result.State := Rejected_By_Policy;
+               if Result.Inlier_Summary.RMS_Error_Pixels > Verification.Maximum_Final_Inlier_RMS_Pixels
+                 or else Result.Refined_Summary.RMS_Error_Pixels > Verification.Maximum_Holdout_RMS_Pixels
+                 or else Result.Refined_Summary.Maximum_Error_Pixels > Verification.Maximum_Holdout_Point_Error_Pixels
+                 or else not OpenCV.Calib3D.Internal.Refinement_Policy.Holdout_RMS_Worsening_Within_Allowance
+                   (Result.Initial_Summary.RMS_Error_Pixels, Result.Refined_Summary.RMS_Error_Pixels,
+                    Verification.Maximum_Holdout_RMS_Worsening_Pixels)
+               then
+                  return;
+               end if;
+               --  Stage every fallible accepted value before publishing State.
+               Result.Center := Camera_Center (Candidate);
+               Result.Final_Pose := Candidate;
+               Result.State := Accepted;
+            end;
+         end return;
+      end;
+   end Relocalize_Camera;
 end OpenCV.Calib3D;
