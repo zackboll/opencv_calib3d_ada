@@ -6186,6 +6186,381 @@ package body Calib3D_Tests is
               Intrinsics.Focal_Y * YD + Intrinsics.Center_Y];
    end Scalar_Project;
 
+   --  Task 025 independent scalar Rodrigues oracle (test only). This and
+   --  Scalar_Project do not enter the production projection/ray/plane helpers.
+   function Plane_Oracle_Pixel
+     (Point : Object_Point; Pose : World_To_Camera_Pose;
+      Calibration : Camera_Intrinsics; D : Distortion_Coefficients) return Image_Point
+   is
+      Angle : constant OpenCV.Float64_Value := Math.Sqrt
+        (Pose.Rotation (0)**2 + Pose.Rotation (1)**2 + Pose.Rotation (2)**2);
+      Camera : Object_Point := Point;
+   begin
+      if Angle /= 0.0 then
+         declare
+            Axis : constant Object_Point :=
+              [Pose.Rotation (0) / Angle, Pose.Rotation (1) / Angle, Pose.Rotation (2) / Angle];
+            Dot : constant OpenCV.Float64_Value :=
+              Axis (0) * Point (0) + Axis (1) * Point (1) + Axis (2) * Point (2);
+            Cross : constant Object_Point :=
+              [Axis (1) * Point (2) - Axis (2) * Point (1),
+               Axis (2) * Point (0) - Axis (0) * Point (2),
+               Axis (0) * Point (1) - Axis (1) * Point (0)];
+         begin
+            for I in 0 .. 2 loop
+               Camera (I) := Point (I) * Math.Cos (Angle) + Cross (I) * Math.Sin (Angle)
+                 + Axis (I) * Dot * (1.0 - Math.Cos (Angle));
+            end loop;
+         end;
+      end if;
+      for I in 0 .. 2 loop
+         Camera (I) := Camera (I) + Pose.Translation (I);
+      end loop;
+      return Scalar_Project (Camera, Calibration, D);
+   end Plane_Oracle_Pixel;
+
+   PC_KA : constant Camera_Intrinsics := (1000.0, 1000.0, 320.0, 240.0);
+   PC_KB : constant Camera_Intrinsics := (800.0, 700.0, 300.0, 200.0);
+   PC_A : constant World_To_Camera_Pose :=
+     ([OpenCV.Float64_Value (Ada.Numerics.Pi), 0.0, 0.0], [0.0, 0.0, 10.0]);
+   PC_B : constant World_To_Camera_Pose :=
+     ([OpenCV.Float64_Value (Ada.Numerics.Pi), 0.0, 0.0], [-2.0, 0.0, 10.0]);
+   PC_Policy : constant Plane_Correspondence_Verification_Options := (Plane_Policy, 1.0E-8);
+   function PC_Run
+     (First : Image_Point_Array := [[420.0, 440.0]];
+      Second : Image_Point_Array := [[220.0, 340.0]];
+      A : World_To_Camera_Pose := PC_A; B : World_To_Camera_Pose := PC_B;
+      KA : Camera_Intrinsics := PC_KA; KB : Camera_Intrinsics := PC_KB;
+      DA : Distortion_Coefficients := No_Distortion; DB : Distortion_Coefficients := No_Distortion;
+      Plane : World_Plane := Ground;
+      O : Plane_Correspondence_Verification_Options := PC_Policy)
+      return Plane_Correspondence_Result_Array is
+     (Verify_Plane_Constrained_Correspondences (First, Second, KA, KB, DA, DB, A, B, Plane, O));
+
+   procedure PC_Downward (T : in out Fixture) is
+      pragma Unreferenced (T);
+      R : constant Plane_Correspondence_Result_Array := PC_Run;
+      Wrong : constant Plane_Correspondence_Result_Array := PC_Run (Second => [[223.0, 344.0]]);
+   begin
+      --  Analytic Rx(pi): (X,-Y,10-Z), then B adds -2 in X.
+      --  P=(1,-2,0): A=(420,440), B=(220,340), range=sqrt(105).
+      Assert (Accepted (R (1)), "two downward cameras accept independent pixel oracle");
+      Check_Vector (Accepted_World_Position (R (1)), [1.0, -2.0, 0.0]);
+      Assert (Near (Signed_Ray_Distance (Source_Intersection (R (1))), Math.Sqrt (105.0)) and then
+              Near (Second_Camera_Depth (R (1)), 10.0) and then
+              Near (Second_Pixel_Error (R (1)), 0.0), "analytic source range/target depth/error");
+      Assert (Source_Intersection (R (1)) = Source_Intersection (Wrong (1)), "target pixels changed source geometry");
+      Check_Vector (Accepted_World_Position (Source_Intersection (Wrong (1))), [1.0, -2.0, 0.0]);
+      Assert (Disposition (Wrong (1)) = Second_Reprojection_Rejected and then
+              Near (Second_Pixel_Error (Wrong (1)), 5.0), "independent 3/4/5 pixel mismatch");
+   end PC_Downward;
+
+   procedure PC_Brown_Tilted (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant World_To_Camera_Pose := ([0.13, -0.09, 0.04], [0.2, -0.3, 1.0]);
+      B : constant World_To_Camera_Pose := ([-0.07, 0.11, 0.16], [-1.0, 0.2, 1.5]);
+      DA : constant Distortion_Coefficients := (0.08, -0.02, 0.003, -0.004, 0.005);
+      DB : constant Distortion_Coefficients := (-0.06, 0.013, -0.002, 0.003, -0.001);
+      Points : constant Object_Point_Array := [[1.0, -2.0, 5.2], [-0.5, 0.5, 3.65], [0.2, 0.3, 3.89]];
+      --  Z=4+0.2X-0.5Y, normal=(-0.2,0.5,1).
+      Plane : constant World_Plane := ([0.0, 0.0, 4.0], [-0.2, 0.5, 1.0]);
+      First, Second : Image_Point_Array (1 .. Points'Length);
+   begin
+      for I in Points'Range loop
+         First (I) := Plane_Oracle_Pixel (Points (I), A, PC_KA, DA);
+         Second (I) := Plane_Oracle_Pixel (Points (I), B, PC_KB, DB);
+      end loop;
+      declare
+         R : constant Plane_Correspondence_Result_Array := PC_Run
+           (First, Second, A, B, DA => DA, DB => DB, Plane => Plane,
+            O => ((0.01, 0.0, 100.0, 1.0E-8), 1.0E-6));
+      begin
+         for I in R'Range loop
+            Assert (Accepted (R (I)), "independent all-five Brown/noncommuting rotation tilted fixture");
+            Check_Vector (Accepted_World_Position (R (I)), Points (I), 1.0E-8);
+            Assert (Second_Pixel_Error (R (I)) < 1.0E-6, "moderate distortion pixel tolerance");
+         end loop;
+      end;
+   end PC_Brown_Tilted;
+
+   procedure PC_Mixed (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Identity source, plane X+Z=1. lambda=1/(x+1).
+      R : constant Plane_Correspondence_Result_Array := PC_Run
+        ([[0.0, 0.0], [-1.0, 0.0], [-0.999, 0.0], [-2.0, 0.0],
+          [0.0, 0.0], [1.0, 0.0], [0.0, 0.0]],
+         [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0],
+          [5.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+         A => (others => <>), B => ([0.0, 0.0, 0.0], [0.0, 0.0, -0.75]),
+         KA => (1.0, 1.0, 0.0, 0.0), KB => (1.0, 1.0, 0.0, 0.0),
+         Plane => ([0.0, 0.0, 1.0], [1.0, 0.0, 1.0]),
+         O => ((0.01, 0.0, 10000.0, 1.0E-8), 1.0));
+      type States is array (Positive range <>) of Plane_Correspondence_Disposition;
+      Expected : constant States := [Plane_Correspondence_Accepted, Source_Intersection_Rejected,
+        Source_Intersection_Rejected, Source_Intersection_Rejected, Second_Reprojection_Rejected,
+        Second_Non_Positive_Depth, Plane_Correspondence_Accepted];
+   begin
+      for I in R'Range loop
+         Assert (Original_Position (R (I)) = I and then Disposition (R (I)) = Expected (I), "mixed original mapping");
+         Assert (Second_View_Evaluated (R (I)) = Accepted (Source_Intersection (R (I))), "source acceptance gate");
+      end loop;
+      Assert (Disposition (Source_Intersection (R (2))) = Parallel_Ray and then
+              Disposition (Source_Intersection (R (3))) = Grazing_Incidence_Rejected and then
+              Incidence_Evaluated (Source_Intersection (R (3))) and then
+              Absolute_Incidence_Cosine (Source_Intersection (R (3))) < 0.01 and then
+              Disposition (Source_Intersection (R (4))) = Intersection_Behind_Ray,
+              "complete source rejection diagnostics survive");
+      Assert (Near (Second_Camera_Depth (R (6)), -0.25), "nonpositive target depth retained");
+   end PC_Mixed;
+
+   procedure PC_Same_Center (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Both t=0, hence C=0. Rz and Rx do not commute; no baseline needed.
+      A : constant World_To_Camera_Pose := ([0.0, 0.0, 0.2], [others => 0.0]);
+      B : constant World_To_Camera_Pose := ([0.1, 0.0, 0.0], [others => 0.0]);
+      P : constant Object_Point := [0.3, -0.2, 4.0];
+      R : constant Plane_Correspondence_Result_Array := PC_Run
+        ([Plane_Oracle_Pixel (P, A, PC_KA, No_Distortion)],
+         [Plane_Oracle_Pixel (P, B, PC_KB, No_Distortion)], A, B,
+         Plane => ([0.0, 0.0, 4.0], [0.0, 0.0, 1.0]));
+   begin
+      Assert (Accepted (R (1)), "same physical center allowed");
+      Check_Vector (Accepted_World_Position (R (1)), P);
+   end PC_Same_Center;
+
+   procedure PC_Thresholds (T : in out Fixture) is
+      pragma Unreferenced (T);
+      O : Plane_Correspondence_Verification_Options := PC_Policy;
+      function Run return Plane_Correspondence_Result_Array is
+        (PC_Run ([[0.0, 0.0]], [[3.0, 4.0]], (others => <>), (others => <>),
+                 (1.0, 1.0, 0.0, 0.0), (1.0, 1.0, 0.0, 0.0),
+                 Plane => ([0.0, 0.0, 1.0], [0.0, 0.0, 1.0]), O => O));
+   begin
+      O.Intersection := (1.0, 1.0, 1.0, 0.0); -- exact source incidence/range/residual boundaries
+      for Limit of Object_Point'[6.0, 5.0, OpenCV.Float64_Value'Adjacent (5.0, 0.0)] loop
+         O.Maximum_Second_Pixel_Error := Limit;
+         declare R : constant Plane_Correspondence_Result_Array := Run;
+         begin
+            Assert (Second_Pixel_Error (R (1)) = 5.0 and then Accepted (R (1)) = (Limit >= 5.0),
+                    "inclusive target comparator and one representable step above policy");
+         end;
+      end loop;
+      declare
+         Zero : constant Plane_Correspondence_Result_Array := PC_Run
+           ([[0.0, 0.0]], [[0.0, 0.0]], (others => <>), (others => <>),
+            (1.0, 1.0, 0.0, 0.0), (1.0, 1.0, 0.0, 0.0),
+            Plane => ([0.0, 0.0, 1.0], [0.0, 0.0, 1.0]), O => (O.Intersection, 0.0));
+      begin
+         Assert (Accepted (Zero (1)) and then Second_Pixel_Error (Zero (1)) = 0.0, "exact zero policy");
+      end;
+      for Stage in 1 .. 3 loop
+         O.Intersection := (1.0, 1.0, 1.0, 0.0);
+         O.Maximum_Second_Pixel_Error := 6.0;
+         case Stage is
+            when 1 => O.Intersection.Minimum_Forward_Range := OpenCV.Float64_Value'Adjacent (1.0, 2.0);
+                      O.Intersection.Maximum_Forward_Range := 2.0;
+            when 2 => O.Intersection.Maximum_Forward_Range := OpenCV.Float64_Value'Adjacent (1.0, 0.0);
+                      O.Intersection.Minimum_Forward_Range := 0.0;
+            when 3 => O.Intersection.Minimum_Absolute_Incidence_Cosine := 1.0;
+         end case;
+         declare R : constant Plane_Correspondence_Result_Array := Run;
+         begin
+            Assert (Accepted (R (1)) = (Stage = 3), "inherited range boundary gates");
+         end;
+      end loop;
+      declare
+         function Run_Incidence (Policy : World_Plane_Intersection_Options)
+           return Plane_Correspondence_Result_Array is
+           (PC_Run (O => (Policy, 1.0E-8)));
+         Measured : constant Plane_Correspondence_Result_Array := Run_Incidence (Plane_Policy);
+         Incidence : constant OpenCV.Float64_Value :=
+           Absolute_Incidence_Cosine (Source_Intersection (Measured (1)));
+      begin
+         --  Measured values are comparator fixtures, not independent truth.
+         for Limit of Object_Point'[0.0, Incidence, OpenCV.Float64_Value'Adjacent (Incidence, 1.0)] loop
+            O.Intersection := Plane_Policy;
+            O.Intersection.Minimum_Absolute_Incidence_Cosine := Limit;
+            declare R : constant Plane_Correspondence_Result_Array := Run_Incidence (O.Intersection);
+            begin
+               Assert (Accepted (R (1)) = (Limit <= Incidence) and then
+                       Second_View_Evaluated (R (1)) = (Limit <= Incidence),
+                       "inherited incidence equality and one-step grazing boundary");
+            end;
+         end loop;
+      end;
+      declare
+         --  Source ray C=(1e16,0,0), D proportional to (-1,0,1).
+         --  At unit displacement the X decrement rounds away; reuse the
+         --  inherited represented-residual policy, without rebuilding geometry.
+         A : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [-1.0E16, 0.0, 0.0]);
+         Plane : constant World_Plane := ([1.0E16 - 2.0, 0.0, 0.0], [1.0, 0.0, -1.0]);
+         function Run_Residual (Policy : World_Plane_Intersection_Options)
+           return Plane_Correspondence_Result_Array is
+           (PC_Run ([[-1.0, 0.0]], [[-1.0, 0.0]], A, A,
+                    (1.0, 1.0, 0.0, 0.0), (1.0, 1.0, 0.0, 0.0),
+                    Plane => Plane, O => (Policy, OpenCV.Float64_Value'Last)));
+         Measured : constant Plane_Correspondence_Result_Array := Run_Residual (Plane_Policy);
+         Residual : constant OpenCV.Float64_Value := Absolute_Plane_Residual (Source_Intersection (Measured (1)));
+      begin
+         Assert (Residual > 0.0, "represented plane residual fixture must be nonzero");
+         for Limit of Object_Point'[Residual, OpenCV.Float64_Value'Adjacent (Residual, 0.0), 0.0] loop
+            O.Intersection := Plane_Policy;
+            O.Intersection.Maximum_Absolute_Plane_Residual := Limit;
+            declare R : constant Plane_Correspondence_Result_Array := Run_Residual (O.Intersection);
+            begin
+               Assert (Accepted (Source_Intersection (R (1))) = (Limit = Residual) and then
+                       Second_View_Evaluated (R (1)) = (Limit = Residual),
+                       "inherited represented-plane-residual inclusive comparator gates target entry");
+            end;
+         end loop;
+      end;
+   end PC_Thresholds;
+
+   procedure PC_Numerical (T : in out Fixture) is
+      pragma Unreferenced (T);
+      R : constant Plane_Correspondence_Result_Array := PC_Run
+        ([[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]],
+         [[-1.0E308, 0.0], [1.0E308, 0.0], [-1.0E308, 0.0]],
+         (others => <>), (others => <>), (1.0, 1.0, 0.0, 0.0), (1.0, 1.0, -1.0E308, 0.0),
+         Plane => ([0.0, 0.0, 1.0], [0.0, 0.0, 1.0]));
+      Overflow : constant Plane_Correspondence_Result_Array := PC_Run
+        ([[0.0, 0.0], [1.0, 0.0]], [[0.0, 0.0], [1.0 / 3.0, 0.0]],
+         (others => <>), ([0.0, 0.0, 0.0], [0.0, 0.0, 1.0E308]),
+         (1.0, 1.0, 0.0, 0.0), (1.0, 1.0, 0.0, 0.0),
+         Plane => ([0.0, 0.0, 1.0E308], [1.0, 0.0, 1.0]));
+      Saved : Plane_Correspondence_Result_Array := PC_Run;
+      Previous : constant Plane_Correspondence_Result_Array := Saved;
+   begin
+      Assert (Accepted (R (1)) and then Disposition (R (2)) = Second_Numerically_Unavailable and then
+              Accepted (R (3)), "residual overflow does not discard neighboring points");
+      Assert (Disposition (Overflow (1)) = Second_Numerically_Unavailable and then
+              Accepted (Overflow (2)), "camera-coordinate overflow isolated before native projection");
+      begin
+         --  Real native nonfinite Brown projection, not an injected checkpoint.
+         Saved := PC_Run (DB => (K1 => OpenCV.Float64_Value'Last, others => 0.0),
+                          Second => [[0.0, 0.0]]);
+         Assert (False, "native nonfinite projection must propagate atomically");
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end;
+      Assert (Saved = Previous, "native failure replaced complete assigned result");
+      Saved := PC_Run;
+      Assert (Saved = Previous, "healthy recovery after native failure");
+   end PC_Numerical;
+
+   procedure PC_Bounds_Guards (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check); -- Deliberate invalid adapter pixel.
+      First : Image_Point_Array (Positive'Last - 2 .. Positive'Last) :=
+        [[420.0, 440.0], [420.0, 440.0], [420.0, 440.0]];
+      Second : Image_Point_Array (17 .. 19) := [[220.0, 340.0], [230.0, 340.0], [220.0, 340.0]];
+      Values : constant Plane_Correspondence_Result_Array := PC_Run (First, Second);
+      Copy : constant Plane_Correspondence_Result_Array (Positive'Last - 1 .. Positive'Last) := Values (2 .. 3);
+      Later : Image_Point_Array (Positive'Last - 1 .. Positive'Last) := [[4.0, 5.0], [6.0, 7.0]];
+      Set : constant Accepted_Landmark_Set := Plane_Constrained_Landmark_Observations (Copy, Later);
+      Empty : constant Plane_Correspondence_Result_Array := PC_Run ([1 .. 0 => <>], [1 .. 0 => <>]);
+      Default : Plane_Correspondence_Result;
+      No_Source : constant Plane_Correspondence_Result_Array := PC_Run
+        (A => (others => <>), Plane => ([0.0, 0.0, -1.0], [0.0, 0.0, 1.0]));
+      No_Depth : constant Plane_Correspondence_Result_Array := PC_Run (B => (others => <>));
+      Unavailable : constant Plane_Correspondence_Result_Array := PC_Run
+        (Second => [[1.0E308, 1.0E308]], KB => (1.0, 1.0, -1.0E308, -1.0E308));
+      procedure Guard (R : Plane_Correspondence_Result; Which : Positive) is
+         Scalar : OpenCV.Float64_Value;
+         Point : Object_Point;
+         Source : World_Plane_Intersection;
+         State : AP3P_Reference_Disposition;
+         pragma Unreferenced (Scalar, Point, Source, State);
+      begin
+         case Which is
+            when 1 => Source := Source_Intersection (R);
+            when 2 => State := Second_View_Disposition (R);
+            when 3 => Scalar := Second_Camera_Depth (R);
+            when 4 => Scalar := Second_Pixel_Error (R);
+            when others => Point := Accepted_World_Position (R);
+         end case;
+         Assert (False, "unavailable plane correspondence accessor succeeded");
+      exception
+         when OpenCV.OpenCV_Error => null;
+      end Guard;
+   begin
+      First := [others => [0.0, 0.0]];
+      Second := [others => [0.0, 0.0]];
+      Assert (Values'First = 1 and then Values'Last = 3 and then Accepted (Values (3)), "owned positional results");
+      Assert (Empty'First = 1 and then Empty'Last = 0 and then Set.Count = 1 and then
+              Original_Positions (Set) (1) = 3 and then Image_Points (Set) (1) = Later (Later'Last),
+              "slice/rebase adapter original identity and only final acceptance");
+      declare
+         Reverse_Bounds : constant Plane_Correspondence_Result_Array := PC_Run
+           (Image_Point_Array'(11 .. 13 => [420.0, 440.0]),
+            Image_Point_Array'(Positive'Last - 2 .. Positive'Last => [220.0, 340.0]));
+         None : constant Accepted_Landmark_Set := Plane_Constrained_Landmark_Observations (No_Source, [[1.0, 2.0]]);
+         Empty_Set : constant Accepted_Landmark_Set := Plane_Constrained_Landmark_Observations (Empty, []);
+      begin
+         Assert (Accepted (Reverse_Bounds (3)) and then Original_Position (Reverse_Bounds (3)) = 3,
+                 "multi-element target bound ending at Positive Last");
+         Assert (None.Count = 0 and then World_Points (None)'First = 1 and then World_Points (None)'Last = 0
+                 and then Empty_Set.Count = 0, "empty and no final acceptance adapters");
+      end;
+      for Which in 1 .. 5 loop Guard (Default, Which); end loop;
+      for Which in 2 .. 5 loop Guard (No_Source (1), Which); end loop;
+      Guard (No_Depth (1), 4); Guard (No_Depth (1), 5);
+      Guard (Unavailable (1), 3); Guard (Unavailable (1), 4); Guard (Unavailable (1), 5);
+      Guard (Values (2), 5);
+      Assert (not Second_View_Evaluated (No_Source (1)) and then Second_Camera_Depth (No_Depth (1)) <= 0.0,
+              "no source survivors/no positive-depth survivors");
+      Later (Later'First) := [OpenCV.Float64_Value (Nonfinite (0)), 0.0];
+      begin
+         declare Bad : constant Accepted_Landmark_Set := Plane_Constrained_Landmark_Observations (Copy, Later);
+         begin Assert (Bad.Count = 999, "adapter validates rejected pixels"); end;
+      exception when OpenCV.OpenCV_Error => null; end;
+      begin
+         declare Bad : constant Accepted_Landmark_Set := Plane_Constrained_Landmark_Observations (Copy, []);
+         begin Assert (Bad.Count = 999, "adapter count validation"); end;
+      exception when OpenCV.OpenCV_Error => null; end;
+   end PC_Bounds_Guards;
+
+   procedure PC_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      procedure Bad
+        (First : Image_Point_Array := [1 .. 0 => <>]; Second : Image_Point_Array := [1 .. 0 => <>];
+         A : World_To_Camera_Pose := PC_A; B : World_To_Camera_Pose := PC_B;
+         KA : Camera_Intrinsics := PC_KA; KB : Camera_Intrinsics := PC_KB;
+         DA : Distortion_Coefficients := No_Distortion; DB : Distortion_Coefficients := No_Distortion;
+         Plane : World_Plane := Ground; O : Plane_Correspondence_Verification_Options := PC_Policy) is
+      begin
+         declare R : constant Plane_Correspondence_Result_Array := PC_Run (First, Second, A, B, KA, KB, DA, DB, Plane, O);
+         begin Assert (R'Length = 999, "malformed request accepted, including empty input"); end;
+      exception when OpenCV.OpenCV_Error => null; end Bad;
+   begin
+      Bad (First => [[0.0, 0.0]]);
+      Bad (KA => (0.0, 1.0, 0.0, 0.0)); Bad (KB => (1.0, -1.0, 0.0, 0.0));
+      Bad (Plane => ([0.0, 0.0, 0.0], [others => 0.0]));
+      Bad (O => (Plane_Policy, -1.0));
+      Bad (O => ((-0.1, 0.0, 1.0, 0.0), 0.0)); Bad (O => ((1.1, 0.0, 1.0, 0.0), 0.0));
+      Bad (O => ((0.0, -1.0, 1.0, 0.0), 0.0)); Bad (O => ((0.0, 2.0, 1.0, 0.0), 0.0));
+      Bad (O => ((0.0, 0.0, 0.0, 0.0), 0.0)); Bad (O => ((0.0, 0.0, 1.0, -1.0), 0.0));
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         declare N : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Kind));
+         begin
+            for Axis in 0 .. 1 loop
+               declare P : Image_Point := [0.0, 0.0];
+               begin P (Axis) := N; Bad ([P], [[0.0, 0.0]]); Bad ([[0.0, 0.0]], [P]); end;
+            end loop;
+            Bad (KA => (1.0, 1.0, N, 0.0)); Bad (KB => (1.0, 1.0, 0.0, N));
+            Bad (DA => (K3 => N, others => 0.0)); Bad (DB => (P1 => N, others => 0.0));
+            Bad (A => ([N, 0.0, 0.0], [others => 0.0])); Bad (B => ([0.0, N, 0.0], [others => 0.0]));
+            Bad (A => ([others => 0.0], [0.0, 0.0, N])); Bad (B => ([others => 0.0], [N, 0.0, 0.0]));
+            Bad (Plane => ([N, 0.0, 0.0], [0.0, 0.0, 1.0]));
+            Bad (Plane => ([0.0, 0.0, 0.0], [0.0, N, 1.0]));
+            Bad (O => (Plane_Policy, N));
+            Bad (O => ((N, 0.0, 1.0, 0.0), 0.0)); Bad (O => ((0.0, N, 1.0, 0.0), 0.0));
+            Bad (O => ((0.0, 0.0, N, 0.0), 0.0)); Bad (O => ((0.0, 0.0, 1.0, N), 0.0));
+         end;
+      end loop;
+   end PC_Invalid;
+
    procedure Compose_Projection (T : in out Fixture) is
       pragma Unreferenced (T);
       Camera_A : constant World_To_Camera_Pose :=
@@ -9464,6 +9839,14 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("plane numerical extremes mixed batch", Plane_Extremes'Access));
       Result.Add_Test (Caller.Create ("plane empty extreme bounds ownership guards", Plane_Bounds_Guards'Access));
       Result.Add_Test (Caller.Create ("plane invalid input and policy validation", Plane_Invalid'Access));
+      Result.Add_Test (Caller.Create ("plane correspondence downward and wrong-target oracles", PC_Downward'Access));
+      Result.Add_Test (Caller.Create ("plane correspondence independent Brown tilted rotations", PC_Brown_Tilted'Access));
+      Result.Add_Test (Caller.Create ("plane correspondence mixed source and target rejections", PC_Mixed'Access));
+      Result.Add_Test (Caller.Create ("plane correspondence same physical camera center", PC_Same_Center'Access));
+      Result.Add_Test (Caller.Create ("plane correspondence inclusive threshold boundaries", PC_Thresholds'Access));
+      Result.Add_Test (Caller.Create ("plane correspondence numerical and atomic native failures", PC_Numerical'Access));
+      Result.Add_Test (Caller.Create ("plane correspondence ownership bounds guards adapter", PC_Bounds_Guards'Access));
+      Result.Add_Test (Caller.Create ("plane correspondence complete invalid empty validation", PC_Invalid'Access));
       return Result;
    end Suite;
 end Calib3D_Tests;

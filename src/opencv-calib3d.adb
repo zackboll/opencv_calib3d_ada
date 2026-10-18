@@ -4328,6 +4328,176 @@ package body OpenCV.Calib3D is
       end return;
    end Three_View_Landmark_Observations;
 
+   function Original_Position (Result : Plane_Correspondence_Result) return Positive is (Result.Position);
+   function Disposition (Result : Plane_Correspondence_Result)
+      return Plane_Correspondence_Disposition is (Result.State);
+   function Source_Intersection_Evaluated (Result : Plane_Correspondence_Result) return Boolean is
+     (Result.Has_Source);
+   function Source_Intersection (Result : Plane_Correspondence_Result)
+      return World_Plane_Intersection is
+   begin
+      if not Result.Has_Source then
+         raise OpenCV.OpenCV_Error with "Plane correspondence source intersection unavailable";
+      end if;
+      return Result.Source;
+   end Source_Intersection;
+   function Second_View_Evaluated (Result : Plane_Correspondence_Result) return Boolean is (Result.Has_Second);
+   function Second_View_Disposition (Result : Plane_Correspondence_Result)
+      return AP3P_Reference_Disposition is
+   begin
+      if not Result.Has_Second then
+         raise OpenCV.OpenCV_Error with "Plane correspondence second view unavailable";
+      end if;
+      return Result.Second.Disposition;
+   end Second_View_Disposition;
+   function Second_Camera_Depth (Result : Plane_Correspondence_Result) return OpenCV.Float64_Value is
+   begin
+      if Second_View_Disposition (Result) = Numerically_Unavailable then
+         raise OpenCV.OpenCV_Error with "Plane correspondence second depth unavailable";
+      end if;
+      return Result.Second.Camera_Depth;
+   end Second_Camera_Depth;
+   function Second_Pixel_Error (Result : Plane_Correspondence_Result) return OpenCV.Float64_Value is
+   begin
+      if Second_View_Disposition (Result) /= Projected_Positive_Depth then
+         raise OpenCV.OpenCV_Error with "Plane correspondence second pixel error unavailable";
+      end if;
+      return Result.Second.Error_Pixels;
+   end Second_Pixel_Error;
+   function Accepted (Result : Plane_Correspondence_Result) return Boolean is
+     (Result.State = Plane_Correspondence_Accepted);
+   function Accepted_World_Position (Result : Plane_Correspondence_Result) return Object_Point is
+   begin
+      if not Accepted (Result) then
+         raise OpenCV.OpenCV_Error with "Plane correspondence not accepted";
+      end if;
+      return Accepted_World_Position (Source_Intersection (Result));
+   end Accepted_World_Position;
+
+   function Verify_Plane_Constrained_Correspondences
+     (First_Pixels, Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose : World_To_Camera_Pose;
+      Plane : World_Plane; Options : Plane_Correspondence_Verification_Options)
+      return Plane_Correspondence_Result_Array
+   is
+   begin
+      if First_Pixels'Length /= Second_Pixels'Length then
+         raise OpenCV.OpenCV_Error with "Plane correspondence pixel counts differ";
+      end if;
+      if Interfaces.Unsigned_64 (First_Pixels'Length) >
+        Interfaces.Unsigned_64 (Interfaces.Integer_32'Last)
+      then
+         raise OpenCV.OpenCV_Error with "Too many plane correspondences";
+      end if;
+      Validate (First_Pixels);
+      Validate (Second_Pixels);
+      Validate (First_Intrinsics);
+      Validate (Second_Intrinsics);
+      Validate (First_Distortion);
+      Validate (Second_Distortion);
+      Validate (First_Pose);
+      Validate (Second_Pose);
+      Validate (Plane, Options.Intersection);
+      if not Is_Finite (Options.Maximum_Second_Pixel_Error)
+        or else Options.Maximum_Second_Pixel_Error < 0.0
+      then
+         raise OpenCV.OpenCV_Error with "Invalid plane correspondence pixel limit";
+      end if;
+      declare
+         --  Exactly one source call; Camera B never participates in geometry.
+         Sources : constant World_Plane_Intersection_Array := Unproject_Pixels_Onto_World_Plane
+           (First_Pixels, First_Intrinsics, First_Distortion, First_Pose, Plane, Options.Intersection);
+         Count : Natural := 0;
+      begin
+         for Source of Sources loop
+            if Accepted (Source) then
+               Count := Count + 1;
+            end if;
+         end loop;
+         return Results : Plane_Correspondence_Result_Array (1 .. First_Pixels'Length) do
+            for I in Results'Range loop
+               Results (I).Position := I;
+               Results (I).Source := Sources (I);
+               Results (I).Has_Source := True;
+            end loop;
+            if Count > 0 then
+               declare
+                  World : Object_Point_Array (1 .. Count);
+                  Pixels : Image_Point_Array (1 .. Count);
+                  Mapping : Inlier_Index_Array (1 .. Count);
+                  N : Natural := 0;
+               begin
+                  for I in Results'Range loop
+                     if Accepted (Sources (I)) then
+                        N := N + 1;
+                        World (N) := Accepted_World_Position (Sources (I));
+                        Pixels (N) := Second_Pixels (Second_Pixels'First + (I - 1));
+                        Mapping (N) := I;
+                     end if;
+                  end loop;
+                  declare
+                     --  One evaluator invocation, one hypothesis, and at most
+                     --  one positive-depth native projection batch. No handler:
+                     --  native failures abort atomically, not per-point rejection.
+                     Values : constant AP3P_Reference_Result_Matrix := Evaluate_AP3P_References
+                       ([(Pose => Second_Pose)], World, Pixels, Second_Intrinsics, Second_Distortion);
+                  begin
+                     for J in Mapping'Range loop
+                        declare
+                           R : Plane_Correspondence_Result renames Results (Mapping (J));
+                        begin
+                           R.Second := Values (1, J);
+                           R.Has_Second := True;
+                           case R.Second.Disposition is
+                              when Non_Positive_Depth => R.State := Second_Non_Positive_Depth;
+                              when Numerically_Unavailable => R.State := Second_Numerically_Unavailable;
+                              when Projected_Positive_Depth =>
+                                 R.State := (if R.Second.Error_Pixels <= Options.Maximum_Second_Pixel_Error
+                                   then Plane_Correspondence_Accepted else Second_Reprojection_Rejected);
+                           end case;
+                        end;
+                     end loop;
+                  end;
+               end;
+            end if;
+         end return;
+      end;
+   end Verify_Plane_Constrained_Correspondences;
+
+   function Plane_Constrained_Landmark_Observations
+     (Landmarks : Plane_Correspondence_Result_Array; Pixels : Image_Point_Array)
+      return Accepted_Landmark_Set
+   is
+      Count : Natural := 0;
+   begin
+      if Landmarks'Length /= Pixels'Length then
+         raise OpenCV.OpenCV_Error with "Plane correspondence adapter pixel count mismatch";
+      end if;
+      Validate (Pixels);
+      for Landmark of Landmarks loop
+         if Accepted (Landmark) then
+            Count := Count + 1;
+         end if;
+      end loop;
+      return Result : Accepted_Landmark_Set (Count) do
+         Count := 0;
+         for I in 1 .. Landmarks'Length loop
+            declare
+               R : Plane_Correspondence_Result renames Landmarks (Landmarks'First + (I - 1));
+            begin
+               if Accepted (R) then
+                  Count := Count + 1;
+                  Result.World (Count) := Accepted_World_Position (R);
+                  Result.Pixels (Count) := Pixels (Pixels'First + (I - 1));
+                  Result.Positions (Count) := Original_Position (R);
+               end if;
+            end;
+         end loop;
+      end return;
+   end Plane_Constrained_Landmark_Observations;
+
    function World_Points (Landmarks : Accepted_Landmark_Set) return Object_Point_Array is (Landmarks.World);
    function Image_Points (Landmarks : Accepted_Landmark_Set) return Image_Point_Array is (Landmarks.Pixels);
    function Original_Positions (Landmarks : Accepted_Landmark_Set) return Inlier_Index_Array is (Landmarks.Positions);

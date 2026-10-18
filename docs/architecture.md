@@ -1,5 +1,19 @@
 # Architecture
 
+## Plane-constrained two-camera verification (Task 025)
+
+Complete Ada validation precedes one Task 024 source intersection batch. Preserve
+every source result; compact only accepted source coordinates and matching B
+pixels with original-position mapping. One `Evaluate_AP3P_References` invocation
+with one supplied B hypothesis reuses positive-depth filtering and one native
+projection batch when eligible. B is verification-only: it cannot change source
+geometry. Source rejection and per-point arithmetic failure are isolated; native
+exceptions remain atomic all-or-error. Guarded private owned results separate
+source acceptance from final acceptance. The distinct later-image adapter uses
+only final accepted coordinates. Same-center cameras need no Essential matrix.
+No duplicated geometry/distortion, C++/ABI/dependency change or optimization.
+See [contract](plane-correspondence-contract.md).
+
 ## World-plane geometry (Task 024)
 
 The owned Ada layer intersects normalized supplied `World_Ray_Array` values with

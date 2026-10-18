@@ -1,5 +1,17 @@
 # Roadmap
 
+## Task 025 approved scope
+
+Plane-constrained cross-camera correspondence verification only: caller-supplied
+independent calibration, world-to-camera poses, Cartesian plane and mandatory
+policy. Reuse Task 024 once and the batched reference evaluator once for source
+survivors. Owned independent per-match diagnostics, final accepted coordinates,
+and accepted-landmark/later-observation adapter. No estimator, refinement,
+homography, image warp, terrain lookup, Earth/geodesy model, SLAM, bundle adjustment
+or navigation fusion. No native ABI/dependency change. Windows remains post-merge;
+stop at independent review. See [contract](plane-correspondence-contract.md) and
+[qualification](plane-correspondence-validation.md).
+
 ## Task 024 approved scope
 
 Supplied Cartesian world-plane intersection only: pure-Ada normalized forward

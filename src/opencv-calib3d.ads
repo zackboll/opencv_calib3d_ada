@@ -1223,12 +1223,67 @@ package OpenCV.Calib3D is
      (Landmarks : Three_View_Landmark_Result_Array; Pixels : Image_Point_Array)
       return Accepted_Landmark_Set;
 
+   --  Task 025: Camera A and the supplied infinite Cartesian plane determine
+   --  the candidate. Camera B verifies only; no pose/point/plane is optimized.
+   --  Mandatory finite policy, inclusive pixel limit, no hidden epsilon.
+   type Plane_Correspondence_Verification_Options is record
+      Intersection : World_Plane_Intersection_Options;
+      Maximum_Second_Pixel_Error : OpenCV.Float64_Value;
+   end record;
+   type Plane_Correspondence_Disposition is
+     (Source_Intersection_Rejected, Second_Non_Positive_Depth,
+      Second_Numerically_Unavailable, Second_Reprojection_Rejected,
+      Plane_Correspondence_Accepted);
+   type Plane_Correspondence_Result is private;
+   type Plane_Correspondence_Result_Array is
+     array (Positive range <>) of Plane_Correspondence_Result;
+   --  Validate the entire request before native entry, including empty input.
+   --  One-based owned results; pair by position, not by input subscript.
+   --  Native exceptions abort the whole call, never a partial result.
+   function Verify_Plane_Constrained_Correspondences
+     (First_Pixels, Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose : World_To_Camera_Pose;
+      Plane : World_Plane; Options : Plane_Correspondence_Verification_Options)
+      return Plane_Correspondence_Result_Array;
+   function Original_Position (Result : Plane_Correspondence_Result) return Positive;
+   function Disposition (Result : Plane_Correspondence_Result)
+      return Plane_Correspondence_Disposition;
+   function Source_Intersection_Evaluated (Result : Plane_Correspondence_Result) return Boolean;
+   --  Complete owned source diagnostic, including rejected geometry. Requires
+   --  Source_Intersection_Evaluated; its own Task 024 guards remain authoritative.
+   function Source_Intersection (Result : Plane_Correspondence_Result)
+      return World_Plane_Intersection;
+   function Second_View_Evaluated (Result : Plane_Correspondence_Result) return Boolean;
+   --  Missing diagnostics raise OpenCV_Error, not a placeholder zero.
+   function Second_View_Disposition (Result : Plane_Correspondence_Result)
+      return AP3P_Reference_Disposition;
+   function Second_Camera_Depth (Result : Plane_Correspondence_Result) return OpenCV.Float64_Value;
+   function Second_Pixel_Error (Result : Plane_Correspondence_Result) return OpenCV.Float64_Value;
+   function Accepted (Result : Plane_Correspondence_Result) return Boolean;
+   --  Requires FINAL two-camera acceptance, not just source acceptance.
+   function Accepted_World_Position (Result : Plane_Correspondence_Result) return Object_Point;
+   --  Separately supplied later-image pixels, all validated. No pose estimate.
+   --  Original identities survive slicing/rebasing. Planar landmarks alone do
+   --  not establish 3-D depth diversity or robust six-DOF relocalization.
+   function Plane_Constrained_Landmark_Observations
+     (Landmarks : Plane_Correspondence_Result_Array; Pixels : Image_Point_Array)
+      return Accepted_Landmark_Set;
+
 private
    type World_Plane_Intersection is record
       State : World_Plane_Intersection_Disposition := Numerically_Unavailable;
       Has_Incidence, Has_Distance, Has_Residual : Boolean := False;
       Incidence, Distance, Residual : OpenCV.Float64_Value := 0.0;
       Position : Object_Point := [others => 0.0];
+   end record;
+   type Plane_Correspondence_Result is record
+      Position : Positive := 1;
+      State : Plane_Correspondence_Disposition := Source_Intersection_Rejected;
+      Has_Source, Has_Second : Boolean := False;
+      Source : World_Plane_Intersection;
+      Second : AP3P_Reference_Result := (Numerically_Unavailable, 0.0, 0.0);
    end record;
    type Three_View_Landmark_Result is record
       Position : Positive := 1;

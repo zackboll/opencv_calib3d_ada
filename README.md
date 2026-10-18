@@ -1,5 +1,30 @@
 # OpenCV Calib3D for Ada
 
+## Task 025: plane-constrained cross-camera correspondence verification
+
+`Verify_Plane_Constrained_Correspondences` composes the existing calibrated
+world-plane intersection with one batched supplied-pose Camera B evaluator.
+Independent intrinsics/Brown distortion and mandatory numerical policy; owned
+per-match source diagnostics, target depth/pixel residual and final acceptance.
+Camera A and the external plane supply the point; Camera B verifies only, never
+refines it. Same-center cameras are supported. No pose estimation or new native
+ABI/dependency is introduced (48 operations remain).
+
+Only final accepted coordinates enter `Plane_Constrained_Landmark_Observations`.
+Planar landmarks alone neither establish depth diversity nor guarantee robust
+six-DOF relocalization. Compatibility residuals do not prove physical truth or
+global localization. No image warping, terrain lookup or geodesy is performed.
+
+The thirteenth synthetic example is `plane_correspondence_synthetic`:
+
+```sh
+alr -n -C examples build
+alr -n -C examples exec -- sh ../scripts/run_native.sh bin/plane_correspondence_synthetic
+```
+
+See [contract](docs/plane-correspondence-contract.md) and
+[qualification / developer review](docs/plane-correspondence-validation.md).
+
 ## Task 024: calibrated pixel-to-world-plane intersection
 
 `Intersect_World_Rays_With_Plane` intersects supplied forward world rays with a
