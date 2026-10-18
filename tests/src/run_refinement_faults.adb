@@ -1067,4 +1067,81 @@ begin
       Ada.Text_IO.Put_Line
         ("PASS: known-pose epipolar 50 SYNTHETIC native exceptions, assignment atomicity, per-fault recovery, empty/insufficient no native entry, zero-baseline no undistortion; Sampson has no fault checkpoint");
    end;
+   declare
+      A : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+      B : World_To_Camera_Pose := ([0.0, 0.0, 0.0], [-2.0, 0.0, 0.0]);
+      Identity : constant Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);
+      Policy : Three_View_Landmark_Options :=
+        (1.0, (0.0, 1.0, 1.0, 1.0), (20, 0.0), (1.0, 1.0), Initial_Only, 1.0);
+      type Stages is array (Positive range <>) of Interfaces.C.int;
+      procedure Inject (X, Y, Z, W : Interfaces.C.double)
+        with Import, Convention => C, External_Name => "opencv_calib3d_test_triangulation_h";
+      function Reconstruct (N : Natural := 2) return Three_View_Landmark_Result_Array is
+        (Qualify_Three_View_Landmarks
+          ([1 .. N => [0.0, 0.0]], [1 .. N => [-0.5, 0.0]], [1 .. N => [0.0, 0.0]],
+           Identity, Identity, Identity, No_Distortion, No_Distortion, No_Distortion, A, B, A, Policy));
+      Saved : Three_View_Landmark_Result_Array := Reconstruct;
+      Original : constant Object_Point := Accepted_World_Position (Saved (1));
+      Count : Natural := 0;
+   begin
+      for Mode in Three_View_Source_Mode loop
+         Policy.Source_Mode := Mode;
+         for Stage of Stages'[1, 2, 3, 4, 13, 14, 15, 16, 37, 38, 39, 40, 41, 54, 55, 56, 57] loop
+            for Kind in Interfaces.C.int range 1 .. 5 loop
+               Fail (Stage, Kind);
+               begin
+                  Saved := Reconstruct;
+                  raise Program_Error with "three-view swallowed native error";
+               exception when OpenCV.OpenCV_Error => Count := Count + 1; end;
+               Check (Accepted_World_Position (Saved (1)) = Original,
+                      "three-view failure partially published assignment");
+               --  Healthy recovery uses initial-only so SVD no-improvement is
+               --  not interpreted as a required-refinement native failure.
+               declare
+                  O : constant Three_View_Source_Mode := Policy.Source_Mode;
+               begin
+                  Policy.Source_Mode := Initial_Only;
+                  Saved := Reconstruct;
+                  Check (Accepted (Saved (1)), "three-view healthy recovery failed");
+                  Policy.Source_Mode := O;
+               end;
+            end loop;
+         end loop;
+      end loop;
+      Policy.Source_Mode := Initial_Only;
+      Fail (15, 3);
+      declare V : constant Three_View_Landmark_Result_Array := Reconstruct (0);
+      begin Check (V'Length = 0, "empty three-view native entry"); end;
+      begin Saved := Reconstruct; raise Program_Error with "empty consumed armed fault";
+      exception when OpenCV.OpenCV_Error => null; end;
+      --  Exact analytic seed overrides only the native SVD result AFTER real
+      --  triangulation. It makes the optimizer objective exactly zero.
+      for Mode in Three_View_Source_Mode loop
+         Policy.Source_Mode := Mode;
+         Inject (0.0, 0.0, 2.0, 1.0);
+         Saved := Reconstruct;
+         if Mode = Require_Accepted_Refinement then
+            Check (Disposition (Saved (1)) = Refinement_Required_Unavailable,
+                   "required refinement published exact original with no improvement");
+         else
+            Check (Accepted (Saved (1)) and then Candidate_Source (Saved (1)) = Initial_Metric_Candidate,
+                   "no-improvement original fallback failed");
+         end if;
+         if Mode /= Initial_Only then
+            Check (Disposition (Refinement_Diagnostics (Saved (1))) = Refinement_No_Improving_Step,
+                   "exact zero objective should have no improving step");
+         end if;
+      end loop;
+      Policy.Source_Mode := Initial_Only;
+      B.Translation (0) := -1.0E-300;
+      Inject (1.0E-300, 0.0, 2.0, 1.0);
+      Saved := Reconstruct;
+      Check (Disposition (Saved (1)) = Stereo_Source_Unusable and then
+             Original_Reconstruction (Saved (1)).Disposition = Metric_Conversion_Unavailable and then
+             not Original_Reconstruction (Saved (1)).Geometry.Available,
+             "underflow cannot fabricate a selected candidate");
+      Check (Count = 255, "three-view native exception count");
+      Ada.Text_IO.Put_Line
+        ("PASS: three-view 255 SYNTHETIC native exceptions, atomicity/recovery, zero-objective source modes, metric underflow; no Sampson checkpoint invented");
+   end;
 end Run_Refinement_Faults;

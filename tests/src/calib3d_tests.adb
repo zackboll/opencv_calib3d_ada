@@ -8404,9 +8404,434 @@ package body Calib3D_Tests is
       exception when OpenCV.OpenCV_Error => null; end;
    end Pair_Adapter;
 
+   Three_Policy : constant Three_View_Landmark_Options :=
+     (1.0E-8, Metric_Policy, (20, 0.0), (1.0, 1.0), Initial_Only, 1.0E-6);
+   Three_C : constant World_To_Camera_Pose := ([0.0, 0.0, 0.2], [0.3, -0.4, 1.0]);
+   function Three_Observe (W : Object_Point) return Image_Point is
+     ([(Math.Cos (0.2) * W (0) - Math.Sin (0.2) * W (1) + 0.3) / (W (2) + 1.0),
+       (Math.Sin (0.2) * W (0) + Math.Cos (0.2) * W (1) - 0.4) / (W (2) + 1.0)]);
+   function Three_Run
+     (P : Image_Point_Array := [[0.5, 0.125]];
+      Q : Image_Point_Array := [[0.25, 0.125]];
+      H : Image_Point_Array := [Three_Observe ([4.0, 1.0, 8.0])];
+      A : World_To_Camera_Pose := Metric_First;
+      B : World_To_Camera_Pose := Metric_Second;
+      C : World_To_Camera_Pose := Three_C;
+      O : Three_View_Landmark_Options := Three_Policy)
+      return Three_View_Landmark_Result_Array is
+     (Qualify_Three_View_Landmarks (P, Q, H, Metric_K, Metric_K, Metric_K,
+       No_Distortion, No_Distortion, No_Distortion, A, B, C, O));
+
+   procedure Three_Oracle (T : in out Fixture) is
+      pragma Unreferenced (T);
+      R : constant Three_View_Landmark_Result_Array := Three_Run;
+   begin
+      Assert (R'First = 1 and then R'Length = 1 and then Accepted (R (1)), "three-view rectified accepted");
+      Assert (Point_Gap (Accepted_World_Position (R (1)), [4.0, 1.0, 8.0]) < 1.0E-12,
+              "independent disparity world oracle");
+      Assert (Near (Third_Camera_Depth (R (1)), 9.0) and then Third_Pixel_Error (R (1)) < 1.0E-12,
+              "independent scalar third Rz projection and depth");
+      Assert (Candidate_Source (R (1)) = Initial_Metric_Candidate and then
+              not Refinement_Requested (R (1)) and then not Has_Refinement_Diagnostics (R (1)), "initial-only provenance");
+   end Three_Oracle;
+
+   procedure Three_Calibration (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant World_To_Camera_Pose := ([0.0, 0.0, 0.3], [0.2, -0.1, 0.4]);
+      B : constant World_To_Camera_Pose := ([-0.2, 0.0, 0.0], [-1.8, 0.3, 0.2]);
+      C : constant World_To_Camera_Pose := ([0.0, 0.15, 0.0], [0.1, -0.4, 0.3]);
+      KA : constant Camera_Intrinsics := (800.0, 820.0, 320.0, 240.0);
+      KB : constant Camera_Intrinsics := (600.0, 640.0, 310.0, 220.0);
+      KC : constant Camera_Intrinsics := (730.0, 690.0, 270.0, 210.0);
+      DA : constant Distortion_Coefficients := (-0.12, 0.03, 0.001, -0.0015, 0.004);
+      DB : constant Distortion_Coefficients := (0.08, -0.02, -0.002, 0.001, -0.003);
+      DC : constant Distortion_Coefficients := (0.03, -0.01, 0.0015, -0.002, 0.002);
+      W : constant Object_Point := [1.4, 0.6, 8.0];
+      CA : constant Object_Point := [Math.Cos (0.3) * W (0) - Math.Sin (0.3) * W (1) + 0.2,
+        Math.Sin (0.3) * W (0) + Math.Cos (0.3) * W (1) - 0.1, 8.4];
+      CB : constant Object_Point := [W (0) - 1.8,
+        Math.Cos (-0.2) * W (1) - Math.Sin (-0.2) * W (2) + 0.3,
+        Math.Sin (-0.2) * W (1) + Math.Cos (-0.2) * W (2) + 0.2];
+      CC : constant Object_Point := [Math.Cos (0.15) * W (0) + Math.Sin (0.15) * W (2) + 0.1,
+        W (1) - 0.4, -Math.Sin (0.15) * W (0) + Math.Cos (0.15) * W (2) + 0.3];
+      R : constant Three_View_Landmark_Result_Array := Qualify_Three_View_Landmarks
+        ([Scalar_Project (CA, KA, DA)], [Scalar_Project (CB, KB, DB)], [Scalar_Project (CC, KC, DC)],
+         KA, KB, KC, DA, DB, DC, A, B, C, Three_Policy);
+   begin
+      Assert (Accepted (R (1)) and then Point_Gap (Accepted_World_Position (R (1)), W) < 1.0E-9 and then
+              Third_Pixel_Error (R (1)) < 1.0E-7, "three noncommuting rotations independent scalar Brown oracles");
+      --  Native output failure in the THIRD projection, after fitting succeeds.
+      begin
+         declare
+            Bad_K : constant Camera_Intrinsics := (OpenCV.Float64_Value'Last, 1.0, 0.0, 0.0);
+            Bad_C : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [100.0, 0.0, 0.0]);
+            V : constant Three_View_Landmark_Result_Array := Qualify_Three_View_Landmarks
+              ([[0.5, 0.125]], [[0.25, 0.125]], [[0.0, 0.0]], Metric_K, Metric_K, Bad_K,
+               No_Distortion, No_Distortion, No_Distortion, Metric_First, Metric_Second, Bad_C, Three_Policy);
+            pragma Unreferenced (V);
+         begin Assert (False, "third native projection failure swallowed"); end;
+      exception when OpenCV.OpenCV_Error => null; end;
+   end Three_Calibration;
+
+   procedure Three_Isolation (T : in out Fixture) is
+      pragma Unreferenced (T);
+      P : constant Image_Point_Array := [[0.5, 0.125], [0.5, 0.125], [0.5, 0.125], [0.5, 0.125]];
+      Q : constant Image_Point_Array := [[0.25, 0.125], [0.25, 2.0], [0.375, 0.125], [0.25, 0.125]];
+      H : constant Image_Point_Array := [Three_Observe ([4.0, 1.0, 8.0]), Three_Observe ([4.0, 1.0, 8.0]),
+        Three_Observe ([4.0, 1.0, 8.0]), [20.0, 20.0]];
+      R : constant Three_View_Landmark_Result_Array := Three_Run (P, Q, H);
+   begin
+      Assert (Accepted (R (1)) and then Disposition (R (2)) = Epipolar_Rejected and then
+              not Has_Initial_Reconstruction (R (2)), "one epipolar mismatch does not poison peers");
+      Assert (Epipolar_Error (R (2)).Defined and then not Epipolar_Error (R (2)).Passes_Point_Limit,
+              "rejected Sampson metric retained");
+      Assert (Epipolar_Disposition (R (3)) = Epipolar_Passed and then
+              Original_Reconstruction (R (3)).Disposition = Metric_Accepted and then
+              Point_Gap (Selected_World_Position (R (3)), [8.0, 2.0, 16.0]) < 1.0E-11 and then
+              Disposition (R (3)) = Third_Reprojection_Rejected, "epipolar consistent wrong depth fails heldout");
+      Assert (Disposition (R (4)) = Third_Reprojection_Rejected, "third mismatch rejected");
+      for I in R'Range loop
+         Assert (Original_Position (R (I)) = I, "original order retained");
+      end loop;
+   end Three_Isolation;
+
+   procedure Three_Refinement (T : in out Fixture) is
+      pragma Unreferenced (T);
+      O : Three_View_Landmark_Options := Three_Policy;
+   begin
+      O.Maximum_Normalized_Sampson_Error := 1.0;
+      O.Metric := (0.0, 1.0, 1.0, 1.0);
+      O.Maximum_Third_Pixel_Error := 1.0;
+      for Mode in Three_View_Source_Mode loop
+         O.Source_Mode := Mode;
+         declare
+            R : constant Three_View_Landmark_Result_Array := Three_Run
+              (P => [[0.5, 0.126]], Q => [[0.25, 0.124]], O => O);
+            Bad : constant Three_View_Landmark_Result_Array := Three_Run
+              (P => [[0.5, 0.126]], Q => [[0.25, 0.124]], H => [[30.0, 30.0]], O => O);
+         begin
+            Assert (Accepted (R (1)), "noisy fitting accepted in each mode");
+            Assert (Candidate_Source (R (1)) = (if Mode = Initial_Only then Initial_Metric_Candidate else Refined_Metric_Candidate),
+                    "deterministic source provenance");
+            Assert (Candidate_Source (R (1)) = Candidate_Source (Bad (1)) and then
+                    Point_Gap (Selected_World_Position (R (1)), Selected_World_Position (Bad (1))) = 0.0 and then
+                    not Accepted (Bad (1)), "changing only third pixels cannot change candidate or trigger retry");
+            if Mode /= Initial_Only then
+               Assert (Accepted (Refinement_Diagnostics (R (1))) and then
+                       Point_Gap (Selected_World_Position (R (1)), [4.0, 1.0, 8.0]) < 1.0E-8,
+                       "independent noisy mean-y least squares oracle");
+            end if;
+         end;
+      end loop;
+      O.Source_Mode := Prefer_Refined_With_Original_Fallback;
+      O.Refinement_Acceptance := (0.0, 0.0);
+      declare
+         R : constant Three_View_Landmark_Result_Array := Three_Run
+           (P => [[0.5, 0.126]], Q => [[0.25, 0.124]], O => O);
+      begin
+         Assert (Disposition (Refinement_Diagnostics (R (1))) = Refined_Policy_Rejected and then
+                 Original_Reconstruction (R (1)).Disposition = Metric_Accepted and then
+                 Candidate_Source (R (1)) = Initial_Metric_Candidate and then Accepted (R (1)),
+                 "rejected optimizer never supplies fallback coordinates");
+      end;
+      O.Source_Mode := Require_Accepted_Refinement;
+      declare
+         R : constant Three_View_Landmark_Result_Array := Three_Run
+           (P => [[0.5, 0.126]], Q => [[0.25, 0.124]], O => O);
+      begin
+         Assert (Disposition (R (1)) = Refinement_Required_Unavailable and then
+                 Candidate_Source (R (1)) = No_Selected_Candidate and then not Third_View_Evaluated (R (1)),
+                 "required rejected refinement does not publish valid original");
+      end;
+   end Three_Refinement;
+
+   procedure Three_No_Step (T : in out Fixture) is
+      pragma Unreferenced (T);
+      O : Three_View_Landmark_Options := Three_Policy;
+   begin
+      --  Exact zero objective seed is also qualified using existing native fault
+      --  override in the fault runner. Real SVD rounding may improve noiseless data.
+      O.Refinement.Minimum_Acute_Parallax_Radians := 1.5;
+      O.Source_Mode := Prefer_Refined_With_Original_Fallback;
+      declare
+         R : constant Three_View_Landmark_Result_Array := Three_Run (O => O);
+      begin
+         Assert (Accepted (R (1)) and then Candidate_Source (R (1)) = Initial_Metric_Candidate and then
+                 Disposition (Refinement_Diagnostics (R (1))) = Refinement_Low_Parallax, "skipped refinement fallback");
+      end;
+      O.Source_Mode := Require_Accepted_Refinement;
+      declare
+         R : constant Three_View_Landmark_Result_Array := Three_Run (O => O);
+      begin
+         Assert (Disposition (R (1)) = Refinement_Required_Unavailable and then
+                 Original_Reconstruction (R (1)).Disposition = Metric_Accepted, "required refinement refuses original");
+      end;
+   end Three_No_Step;
+
+   procedure Three_Third_Gates (T : in out Fixture) is
+      pragma Unreferenced (T);
+      O : Three_View_Landmark_Options := Three_Policy;
+      C : World_To_Camera_Pose := Metric_First;
+      Seed : constant Three_View_Landmark_Result_Array := Three_Run (C => C, H => [[1.0, 0.125]]);
+      Error : constant OpenCV.Float64_Value := Third_Pixel_Error (Seed (1));
+   begin
+      O.Maximum_Third_Pixel_Error := Error;
+      declare
+         Equal : constant Three_View_Landmark_Result_Array := Three_Run (C => C, H => [[1.0, 0.125]], O => O);
+      begin Assert (Accepted (Equal (1)), "third error equality inclusive"); end;
+      O.Maximum_Third_Pixel_Error := OpenCV.Float64_Value'Adjacent (Error, 0.0);
+      declare
+         Above : constant Three_View_Landmark_Result_Array := Three_Run (C => C, H => [[1.0, 0.125]], O => O);
+      begin
+         Assert (Disposition (Above (1)) = Third_Reprojection_Rejected and then
+                 Third_Pixel_Error (Above (1)) = OpenCV.Float64_Value'Adjacent (O.Maximum_Third_Pixel_Error, Error),
+                 "error one representable step above threshold rejects");
+      end;
+      C.Translation (2) := -Selected_World_Position (Seed (1)) (2);
+      for I in 0 .. 1 loop
+         C.Translation (2) := C.Translation (2) - OpenCV.Float64_Value (I);
+         declare
+            R : constant Three_View_Landmark_Result_Array := Three_Run (C => C);
+         begin
+            Assert (Disposition (R (1)) = Third_Non_Positive_Depth and then
+                    Third_View_Disposition (R (1)) = Non_Positive_Depth and then
+                    Third_Camera_Depth (R (1)) = -OpenCV.Float64_Value (I), "exact zero and negative third depth retained");
+            begin
+               declare E : constant OpenCV.Float64_Value := Third_Pixel_Error (R (1));
+                  pragma Unreferenced (E);
+               begin Assert (False, "nonpositive depth has no pixel score"); end;
+            exception when OpenCV.OpenCV_Error => null; end;
+         end;
+      end loop;
+      C := Metric_First;
+      C.Translation (2) := OpenCV.Float64_Value'Last;
+      declare
+         B : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [-2.0E307, 0.0, 0.0]);
+         R : constant Three_View_Landmark_Result_Array := Three_Run (B => B, C => C);
+      begin
+         Assert (Candidate_Source (R (1)) /= No_Selected_Candidate and then
+                 Disposition (R (1)) = Third_Numerically_Unavailable, "third camera sum overflow is per-point unavailable");
+      end;
+   end Three_Third_Gates;
+
+   procedure Three_Bounds (T : in out Fixture) is
+      pragma Unreferenced (T);
+      P : constant Image_Point_Array (Positive'Last - 2 .. Positive'Last) := [others => [0.5, 0.125]];
+      Q : constant Image_Point_Array (7 .. 9) := [[0.25, 0.125], [0.25, 2.0], [0.25, 0.125]];
+      H : constant Image_Point_Array (31 .. 33) := [others => Three_Observe ([4.0, 1.0, 8.0])];
+      R : constant Three_View_Landmark_Result_Array := Three_Run (P, Q, H);
+      S : constant Accepted_Landmark_Set := Three_View_Landmark_Observations (R, H);
+      Slice : constant Accepted_Landmark_Set := Three_View_Landmark_Observations
+        ([Positive'Last => R (3)], [Positive'Last => H (33)]);
+      One : constant Three_View_Landmark_Result_Array := Three_Run
+        ([Positive'Last => P (P'Last)], [Positive'Last => Q (9)], [Positive'Last => H (33)]);
+      Empty : constant Three_View_Landmark_Result_Array := Three_Run ([1 .. 0 => <>], [1 .. 0 => <>], [1 .. 0 => <>]);
+   begin
+      Assert (R'First = 1 and then R'Last = 3 and then Empty'First = 1 and then Empty'Last = 0,
+              "one-based positional and empty outputs");
+      Assert (Accepted (One (1)) and then S.Count = 2 and then Original_Positions (S) = [1, 3] and then
+              Original_Positions (Slice) = [1 => 3], "adapter original positions survive rebasing and slicing");
+      Assert (Point_Gap (World_Points (S) (2), [4.0, 1.0, 8.0]) < 1.0E-12 and then
+              Image_Points (S) (2) = H (33), "owned compact arrays remain valid after all native temporaries finalized");
+   end Three_Bounds;
+
+   procedure Three_Empty_Stages (T : in out Fixture) is
+      pragma Unreferenced (T);
+      Reject : constant Three_View_Landmark_Result_Array := Three_Run (Q => [[0.25, 5.0]]);
+      Infinity : constant Three_View_Landmark_Result_Array := Three_Run (P => [[0.0, 0.0]], Q => [[0.0, 0.0]]);
+      O : Three_View_Landmark_Options := Three_Policy;
+   begin
+      Assert (Disposition (Reject (1)) = Epipolar_Rejected and then not Has_Initial_Reconstruction (Reject (1)) and then
+              not Third_View_Evaluated (Reject (1)), "no epipolar survivors skips metric");
+      Assert (Disposition (Infinity (1)) = Stereo_Source_Unusable and then Has_Initial_Reconstruction (Infinity (1)) and then
+              not Third_View_Evaluated (Infinity (1)), "no metric survivors skips third evaluator");
+      O.Metric.Minimum_Acute_Parallax_Radians := 1.5;
+      declare R : constant Three_View_Landmark_Result_Array := Three_Run (O => O);
+      begin
+         Assert (Disposition (R (1)) = Stereo_Quality_Rejected and then
+                 Original_Reconstruction (R (1)).Geometry.Available, "quality rejection retains diagnostic world geometry only");
+      end;
+      declare
+         B : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [0.0, 0.0, -2.0]);
+         R : constant Three_View_Landmark_Result_Array := Three_Run
+           (P => [[0.0, 0.0], [0.5, 0.125]], Q => [[0.0, 0.0], [2.0 / 3.0, 1.0 / 6.0]],
+            H => [[0.0, 0.0], Three_Observe ([4.0, 1.0, 8.0])], B => B);
+      begin
+         Assert (Disposition (R (1)) = Epipolar_Undefined and then not Epipolar_Error (R (1)).Defined and then
+                 Accepted (R (2)), "undefined epipole must not discard another pair");
+      end;
+      declare
+         B : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [0.0, 0.0, 2.0]);
+         R : constant Three_View_Landmark_Result_Array := Three_Run
+           (P => [[1.0E160, 1.0E160]], Q => [[-1.0E160, 1.0E160]], B => B);
+      begin
+         Assert (Disposition (R (1)) = Epipolar_Undefined and then not Epipolar_Error (R (1)).Defined,
+                 "natural Sampson arithmetic unavailability");
+      end;
+   end Three_Empty_Stages;
+
+   procedure Three_Range (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : World_To_Camera_Pose := Metric_First;
+      B : World_To_Camera_Pose := Metric_Second;
+      O : Three_View_Landmark_Options := Three_Policy;
+   begin
+      declare R : constant Three_View_Landmark_Result_Array := Three_Run (B => A);
+      begin
+         Assert (Disposition (R (1)) = No_Stereo_Baseline and then not Has_Initial_Reconstruction (R (1)) and then
+                 not Epipolar_Error (R (1)).Defined, "exact zero physical baseline fabricates nothing");
+      end;
+      O.Maximum_Third_Pixel_Error := 1.0;
+      for Scale of Object_Point'[1.0E-300, 1.0E300, 1.0] loop
+         B.Translation (0) := -2.0 * Scale;
+         declare R : constant Three_View_Landmark_Result_Array := Three_Run (B => B, C => A, O => O);
+         begin
+            Assert (Accepted (R (1)) and then abs (Accepted_World_Position (R (1)) (2) / Scale - 8.0) < 1.0E-10,
+                    "tiny nonzero and large finite physical baseline retained");
+         end;
+      end loop;
+      A.Translation (0) := -1.0E12;
+      B.Translation (0) := -1.0E12 - 2.0;
+      declare R : constant Three_View_Landmark_Result_Array := Three_Run (A => A, B => B, C => A, O => O);
+      begin
+         Assert (Accepted (R (1)) and then abs (Accepted_World_Position (R (1)) (0) - (1.0E12 + 4.0)) < 0.001,
+                 "large origin analytic offset retained");
+      end;
+      B.Translation (0) := -1.0E308;
+      declare R : constant Three_View_Landmark_Result_Array := Three_Run (B => B);
+      begin
+         Assert (Disposition (R (1)) = Stereo_Source_Unusable and then
+                 Original_Reconstruction (R (1)).Disposition = Metric_Conversion_Unavailable,
+                 "metric conversion overflow no fabricated candidate");
+      end;
+   end Three_Range;
+
+   procedure Three_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check); --  Deliberate IEEE invalid inputs.
+      O : Three_View_Landmark_Options := Three_Policy;
+      P, Q, H : Image_Point_Array (1 .. 1) := [others => [0.0, 0.0]];
+      K1, K2, K3 : Camera_Intrinsics := Metric_K;
+      D : Distortion_Coefficients := No_Distortion;
+      C : World_To_Camera_Pose := Three_C;
+      procedure Reject (Empty : Boolean := False; Mismatch : Boolean := False) is
+      begin
+         declare R : constant Three_View_Landmark_Result_Array := Qualify_Three_View_Landmarks
+           (P (1 .. (if Empty then 0 else 1)), Q (1 .. (if Empty then 0 else 1)),
+            H (1 .. (if Empty or Mismatch then 0 else 1)), K1, K2, K3,
+            No_Distortion, No_Distortion, D, Metric_First, Metric_First, C, O);
+            pragma Unreferenced (R);
+         begin Assert (False, "invalid request accepted"); end;
+      exception when OpenCV.OpenCV_Error => null; end Reject;
+   begin
+      Reject (Mismatch => True);
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         declare Bad : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Kind));
+         begin
+            P (1) (0) := Bad; Reject; P (1) (0) := 0.0;
+            Q (1) (1) := Bad; Reject; Q (1) (1) := 0.0;
+            H (1) (0) := Bad; Reject; H (1) (0) := 0.0;
+            K1.Focal_X := Bad; Reject (Empty => True); K1 := Metric_K;
+            K2.Center_Y := Bad; Reject (Empty => True); K2 := Metric_K;
+            K3.Focal_Y := Bad; Reject; K3 := Metric_K;
+            D.K3 := Bad; Reject (Empty => True); D := No_Distortion;
+            C.Rotation (1) := Bad; Reject (Empty => True); C := Three_C;
+            for Field in 1 .. 9 loop
+               O := Three_Policy;
+               case Field is
+                  when 1 => O.Maximum_Normalized_Sampson_Error := Bad;
+                  when 2 => O.Maximum_Third_Pixel_Error := Bad;
+                  when 3 => O.Metric.Minimum_Acute_Parallax_Radians := Bad;
+                  when 4 => O.Metric.Maximum_Normalized_Reprojection_Error := Bad;
+                  when 5 => O.Metric.Maximum_First_Pixel_Reprojection_Error := Bad;
+                  when 6 => O.Metric.Maximum_Second_Pixel_Reprojection_Error := Bad;
+                  when 7 => O.Refinement.Minimum_Acute_Parallax_Radians := Bad;
+                  when 8 => O.Refinement_Acceptance.Maximum_First_Pixel_Worsening := Bad;
+                  when 9 => O.Refinement_Acceptance.Maximum_Second_Pixel_Worsening := Bad;
+               end case;
+               Reject (Empty => True);
+            end loop;
+            O := Three_Policy;
+         end;
+      end loop;
+      for Field in 1 .. 11 loop
+         O := Three_Policy;
+         case Field is
+            when 1 => O.Maximum_Normalized_Sampson_Error := -1.0;
+            when 2 => O.Maximum_Third_Pixel_Error := -1.0;
+            when 3 => O.Metric.Minimum_Acute_Parallax_Radians := -1.0;
+            when 4 => O.Metric.Maximum_Normalized_Reprojection_Error := -1.0;
+            when 5 => O.Metric.Maximum_First_Pixel_Reprojection_Error := -1.0;
+            when 6 => O.Metric.Maximum_Second_Pixel_Reprojection_Error := -1.0;
+            when 7 => O.Refinement.Minimum_Acute_Parallax_Radians := -1.0;
+            when 8 => O.Refinement_Acceptance.Maximum_First_Pixel_Worsening := -1.0;
+            when 9 => O.Refinement_Acceptance.Maximum_Second_Pixel_Worsening := -1.0;
+            when 10 => O.Refinement.Maximum_Iterations := 101;
+            when 11 => O.Refinement.Minimum_Acute_Parallax_Radians := 2.0;
+         end case;
+         Reject (Empty => True);
+      end loop;
+      O := Three_Policy;
+      K3.Focal_Y := 0.0; Reject;
+   end Three_Invalid;
+
+   procedure Three_Guards (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check); --  Deliberate IEEE invalid adapter pixels.
+      R : constant Three_View_Landmark_Result_Array := Three_Run (Q => [[0.25, 3.0]]);
+   begin
+      for Field in 1 .. 7 loop
+         begin
+            case Field is
+               when 1 => declare V : constant Object_Point := Accepted_World_Position (R (1));
+                  pragma Unreferenced (V); begin null; end;
+               when 2 => declare V : constant Object_Point := Selected_World_Position (R (1));
+                  pragma Unreferenced (V); begin null; end;
+               when 3 => declare V : constant Metric_Triangulated_Point := Original_Reconstruction (R (1));
+                  pragma Unreferenced (V); begin null; end;
+               when 4 => declare V : constant Metric_Point_Refinement_Result := Refinement_Diagnostics (R (1));
+                  pragma Unreferenced (V); begin null; end;
+               when 5 => declare V : constant AP3P_Reference_Disposition := Third_View_Disposition (R (1));
+                  pragma Unreferenced (V); begin null; end;
+               when 6 => declare V : constant OpenCV.Float64_Value := Third_Camera_Depth (R (1));
+                  pragma Unreferenced (V); begin null; end;
+               when 7 => declare V : constant OpenCV.Float64_Value := Third_Pixel_Error (R (1));
+                  pragma Unreferenced (V); begin null; end;
+            end case;
+            Assert (False, "missing diagnostic guard");
+         exception when OpenCV.OpenCV_Error => null; end;
+      end loop;
+      declare S : constant Accepted_Landmark_Set := Three_View_Landmark_Observations (R, [[0.0, 0.0]]);
+      begin Assert (S.Count = 0 and then World_Points (S)'Length = 0, "adapter cannot substitute diagnostic geometry"); end;
+      begin
+         declare S : constant Accepted_Landmark_Set := Three_View_Landmark_Observations (R, [1 .. 0 => <>]);
+            pragma Unreferenced (S);
+         begin Assert (False, "adapter count mismatch accepted"); end;
+      exception when OpenCV.OpenCV_Error => null; end;
+      for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+         begin
+            declare S : constant Accepted_Landmark_Set := Three_View_Landmark_Observations
+              (R, [[OpenCV.Float64_Value (Nonfinite (Kind)), 0.0]]);
+               pragma Unreferenced (S);
+            begin Assert (False, "adapter skipped invalid rejected pixels"); end;
+         exception when OpenCV.OpenCV_Error => null; end;
+      end loop;
+   end Three_Guards;
+
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
+      Result.Add_Test (Caller.Create ("three view rectified independent world and heldout oracle", Three_Oracle'Access));
+      Result.Add_Test (Caller.Create ("three view noncommuting separate Brown calibration native third failure", Three_Calibration'Access));
+      Result.Add_Test (Caller.Create ("three view outlier isolation and epipolar consistent wrong depth", Three_Isolation'Access));
+      Result.Add_Test (Caller.Create ("three view refinement provenance fallback third pixel isolation", Three_Refinement'Access));
+      Result.Add_Test (Caller.Create ("three view unavailable refinement source modes", Three_No_Step'Access));
+      Result.Add_Test (Caller.Create ("three view depth pixel inclusive adjacent numerical gates", Three_Third_Gates'Access));
+      Result.Add_Test (Caller.Create ("three view bounds ownership compact adapter original mapping", Three_Bounds'Access));
+      Result.Add_Test (Caller.Create ("three view no survivors undefined epipole quality rejection", Three_Empty_Stages'Access));
+      Result.Add_Test (Caller.Create ("three view zero tiny large baseline origin conversion range", Three_Range'Access));
+      Result.Add_Test (Caller.Create ("three view complete validation including disabled policies", Three_Invalid'Access));
+      Result.Add_Test (Caller.Create ("three view result guards and adapter rejection", Three_Guards'Access));
       Result.Add_Test (Caller.Create ("known pose rectified signed Essential analytic Sampson RMS", Pair_Rectified'Access));
       Result.Add_Test (Caller.Create ("known pose noncommuting signed coefficients and transpose reversal", Pair_Noncommuting'Access));
       Result.Add_Test (Caller.Create ("known pose separate Brown calibration and reversed errors", Pair_Calibration'Access));

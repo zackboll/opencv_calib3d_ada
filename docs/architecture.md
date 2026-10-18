@@ -1,5 +1,20 @@
 # Architecture
 
+## Task 023 three-view landmark qualification
+
+Ada-only composition: complete validation -> Task 022 individual epipolar screening
+(whole-set RMS disabled) -> owned compact first/second pairs and position map ->
+Task 019 once OR Task 020 once -> deterministic initial/refined candidate selection
+-> compact candidates/third pixels and map -> one existing-pose
+`Evaluate_AP3P_References` batch -> per-track third depth/pixel policy. No third
+pixels enter fitting or candidate selection; no post-rejection retry. Private
+owned results guard unavailable diagnostics and accepted coordinates. Existing
+metric/refinement policy validation is shared without changing its conditions.
+Core owns temporary Mats, borrowing stays callback-scoped, exceptions propagate
+atomically. No production C++/ABI/dependency change; 48 operations remain.
+The distinct accepted adapter name preserves existing aggregate-call compatibility.
+See [contract](three-view-landmark-contract.md).
+
 ## Task 022 known-pose epipolar verification
 
 Two known world-to-camera poses -> existing relative camera motion -> Ada

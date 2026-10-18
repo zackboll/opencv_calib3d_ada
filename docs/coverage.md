@@ -1,5 +1,18 @@
 # Coverage
 
+## Task 023 three-view landmarks
+
+204 AUnit registrations preserve all 193 prior registrations. Eleven new grouped
+tests cover independent rectified/noncommuting three-calibration Brown oracles,
+epipolar outlier isolation and consistent wrong depth, all source modes and
+third-pixel isolation, depth/numerical/native errors, inclusive/adjacent pixel
+limits, zero/tiny/large baseline and large origin, validation, ownership, guards,
+and positional adapter compaction including `Positive'Last`. Existing actual-shim
+fault campaigns add 255 exceptions plus exact no-improvement and underflow controls.
+The eleventh synthetic example asserts clean acceptance and incorrect-track
+rejection. Private ABI remains 48. See [validation](three-view-landmark-validation.md)
+for executed results; registrations/configured gates are not execution evidence.
+
 ## Task 022 inventory
 
 193 AUnit registrations preserve all 184 existing cases and add nine grouped

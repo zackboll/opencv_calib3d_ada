@@ -3127,28 +3127,8 @@ package body OpenCV.Calib3D is
       return Result;
    end Evaluate_Metric_Point;
 
-   function Triangulate_World_Points
-     (First_Pixels, Second_Pixels : Image_Point_Array;
-      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
-      First_Distortion, Second_Distortion : Distortion_Coefficients;
-      First_Pose, Second_Pose : World_To_Camera_Pose;
-      Options : Metric_Triangulation_Options)
-      return Metric_Triangulated_Point_Array
-   is
+   procedure Validate (Options : Metric_Triangulation_Options) is
    begin
-      Validate (First_Pixels);
-      Validate (Second_Pixels);
-      Validate (First_Intrinsics);
-      Validate (Second_Intrinsics);
-      Validate (First_Distortion);
-      Validate (Second_Distortion);
-      Validate (First_Pose);
-      Validate (Second_Pose);
-      if First_Pixels'Length /= Second_Pixels'Length or else
-        First_Pixels'Length > Interfaces.Integer_32'Last
-      then
-         raise OpenCV.OpenCV_Error with "Metric triangulation requires equal counts fitting INT32";
-      end if;
       if not Is_Finite (Options.Minimum_Acute_Parallax_Radians) or else
         Options.Minimum_Acute_Parallax_Radians < 0.0 or else
         Options.Minimum_Acute_Parallax_Radians > Math.Arctan (1.0, 0.0)
@@ -3163,6 +3143,27 @@ package body OpenCV.Calib3D is
             raise OpenCV.OpenCV_Error with "Invalid metric residual threshold";
          end if;
       end loop;
+   end Validate;
+
+   function Triangulate_World_Points
+     (First_Pixels, Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose : World_To_Camera_Pose;
+      Options : Metric_Triangulation_Options)
+      return Metric_Triangulated_Point_Array
+   is
+   begin
+      Validate (First_Pixels); Validate (Second_Pixels);
+      Validate (First_Intrinsics); Validate (Second_Intrinsics);
+      Validate (First_Distortion); Validate (Second_Distortion);
+      Validate (First_Pose); Validate (Second_Pose);
+      if First_Pixels'Length /= Second_Pixels'Length or else
+        First_Pixels'Length > Interfaces.Integer_32'Last
+      then
+         raise OpenCV.OpenCV_Error with "Metric triangulation requires equal counts fitting INT32";
+      end if;
+      Validate (Options);
       if First_Pixels'Length = 0 then
          return [1 .. 0 => <>];
       end if;
@@ -3238,6 +3239,28 @@ package body OpenCV.Calib3D is
       return Result.Candidate.Geometry.World_Position;
    end Accepted_World_Position;
 
+   procedure Validate
+     (Refinement_Options : Triangulation_Refinement_Options;
+      Acceptance : Metric_Refinement_Acceptance_Options)
+   is
+   begin
+      for Limit of OpenCV.Core.Float64_Vec2.Vector'
+        [Acceptance.Maximum_First_Pixel_Worsening, Acceptance.Maximum_Second_Pixel_Worsening]
+      loop
+         if not Is_Finite (Limit) or else Limit < 0.0 then
+            raise OpenCV.OpenCV_Error with "Invalid metric refinement allowance";
+         end if;
+      end loop;
+      --  Validate even for empty batches and unavailable physical baselines.
+      if Refinement_Options.Maximum_Iterations > 100 or else
+        not Is_Finite (Refinement_Options.Minimum_Acute_Parallax_Radians) or else
+        Refinement_Options.Minimum_Acute_Parallax_Radians < 0.0 or else
+        Refinement_Options.Minimum_Acute_Parallax_Radians > Math.Arctan (1.0, 0.0)
+      then
+         raise OpenCV.OpenCV_Error with "Invalid metric refinement options";
+      end if;
+   end Validate;
+
    function Refine_Metric_World_Points
      (First_Pixels, Second_Pixels : Image_Point_Array;
       First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
@@ -3258,21 +3281,7 @@ package body OpenCV.Calib3D is
          return Refined - Initial <= Allowance;
       end Worsening_OK;
    begin
-      for Limit of OpenCV.Core.Float64_Vec2.Vector'
-        [Acceptance.Maximum_First_Pixel_Worsening, Acceptance.Maximum_Second_Pixel_Worsening]
-      loop
-         if not Is_Finite (Limit) or else Limit < 0.0 then
-            raise OpenCV.OpenCV_Error with "Invalid metric refinement allowance";
-         end if;
-      end loop;
-      --  Validate even for empty batches and unavailable physical baselines.
-      if Refinement_Options.Maximum_Iterations > 100 or else
-        not Is_Finite (Refinement_Options.Minimum_Acute_Parallax_Radians) or else
-        Refinement_Options.Minimum_Acute_Parallax_Radians < 0.0 or else
-        Refinement_Options.Minimum_Acute_Parallax_Radians > Math.Arctan (1.0, 0.0)
-      then
-         raise OpenCV.OpenCV_Error with "Invalid metric refinement options";
-      end if;
+      Validate (Refinement_Options, Acceptance);
       declare
          Initial : constant Metric_Triangulated_Point_Array := Triangulate_World_Points
            (First_Pixels, Second_Pixels, First_Intrinsics, Second_Intrinsics,
@@ -3845,6 +3854,270 @@ package body OpenCV.Calib3D is
       end if;
       return Result.Errors;
    end Final_Inlier_Errors;
+
+   function Original_Position (Result : Three_View_Landmark_Result) return Positive is (Result.Position);
+   function Disposition (Result : Three_View_Landmark_Result)
+      return Three_View_Landmark_Disposition is (Result.State);
+   function Epipolar_Disposition (Result : Three_View_Landmark_Result)
+      return Three_View_Epipolar_Disposition is (Result.Screening);
+   function Epipolar_Error (Result : Three_View_Landmark_Result)
+      return Epipolar_Correspondence_Result is (Result.Sampson);
+   function Has_Initial_Reconstruction (Result : Three_View_Landmark_Result) return Boolean is (Result.Has_Initial);
+   function Original_Reconstruction (Result : Three_View_Landmark_Result)
+      return Metric_Triangulated_Point is
+   begin
+      if not Result.Has_Initial then
+         raise OpenCV.OpenCV_Error with "Three-view initial reconstruction unavailable";
+      end if;
+      return Result.Initial;
+   end Original_Reconstruction;
+   function Refinement_Requested (Result : Three_View_Landmark_Result) return Boolean is (Result.Wants_Refinement);
+   function Has_Refinement_Diagnostics (Result : Three_View_Landmark_Result) return Boolean is (Result.Has_Refinement);
+   function Refinement_Diagnostics (Result : Three_View_Landmark_Result)
+      return Metric_Point_Refinement_Result is
+   begin
+      if not Result.Has_Refinement then
+         raise OpenCV.OpenCV_Error with "Three-view refinement diagnostics unavailable";
+      end if;
+      return Result.Refined;
+   end Refinement_Diagnostics;
+   function Candidate_Source (Result : Three_View_Landmark_Result)
+      return Three_View_Candidate_Source is (Result.Selected);
+   function Selected_World_Position (Result : Three_View_Landmark_Result) return Object_Point is
+   begin
+      if Result.Selected = No_Selected_Candidate then
+         raise OpenCV.OpenCV_Error with "Three-view fitting candidate unavailable";
+      end if;
+      return Result.Candidate;
+   end Selected_World_Position;
+   function Third_View_Evaluated (Result : Three_View_Landmark_Result) return Boolean is (Result.Has_Third);
+   function Third_View_Disposition (Result : Three_View_Landmark_Result)
+      return AP3P_Reference_Disposition is
+   begin
+      if not Result.Has_Third then
+         raise OpenCV.OpenCV_Error with "Third-view evaluation unavailable";
+      end if;
+      return Result.Third.Disposition;
+   end Third_View_Disposition;
+   function Third_Camera_Depth (Result : Three_View_Landmark_Result) return OpenCV.Float64_Value is
+   begin
+      if Third_View_Disposition (Result) = Numerically_Unavailable then
+         raise OpenCV.OpenCV_Error with "Third-view depth unavailable";
+      end if;
+      return Result.Third.Camera_Depth;
+   end Third_Camera_Depth;
+   function Third_Pixel_Error (Result : Three_View_Landmark_Result) return OpenCV.Float64_Value is
+   begin
+      if Third_View_Disposition (Result) /= Projected_Positive_Depth then
+         raise OpenCV.OpenCV_Error with "Third-view pixel error unavailable";
+      end if;
+      return Result.Third.Error_Pixels;
+   end Third_Pixel_Error;
+   function Accepted (Result : Three_View_Landmark_Result) return Boolean is (Result.State = Three_View_Accepted);
+   function Accepted_World_Position (Result : Three_View_Landmark_Result) return Object_Point is
+   begin
+      if not Accepted (Result) then
+         raise OpenCV.OpenCV_Error with "Three-view landmark not accepted";
+      end if;
+      return Selected_World_Position (Result);
+   end Accepted_World_Position;
+
+   function Qualify_Three_View_Landmarks
+     (First_Pixels, Second_Pixels, Third_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics, Third_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion, Third_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose, Third_Pose : World_To_Camera_Pose;
+      Options : Three_View_Landmark_Options) return Three_View_Landmark_Result_Array
+   is
+   begin
+      --  Validate the COMPLETE request before any native call or early return.
+      Validate (First_Pixels); Validate (Second_Pixels); Validate (Third_Pixels);
+      Validate (First_Intrinsics); Validate (Second_Intrinsics); Validate (Third_Intrinsics);
+      Validate (First_Distortion); Validate (Second_Distortion); Validate (Third_Distortion);
+      Validate (First_Pose); Validate (Second_Pose); Validate (Third_Pose);
+      Validate (Options.Metric);
+      Validate (Options.Refinement, Options.Refinement_Acceptance);
+      if First_Pixels'Length /= Second_Pixels'Length or else
+        First_Pixels'Length /= Third_Pixels'Length or else
+        First_Pixels'Length > Interfaces.Integer_32'Last
+      then
+         raise OpenCV.OpenCV_Error with "Three-view counts must match and fit INT32";
+      end if;
+      for Limit of OpenCV.Core.Float64_Vec2.Vector'
+        [Options.Maximum_Normalized_Sampson_Error, Options.Maximum_Third_Pixel_Error]
+      loop
+         if not Is_Finite (Limit) or else Limit < 0.0 then
+            raise OpenCV.OpenCV_Error with "Invalid three-view acceptance threshold";
+         end if;
+      end loop;
+      if First_Pixels'Length = 0 then
+         return [1 .. 0 => <>];
+      end if;
+      declare
+         --  Deliberately disable whole-set RMS rejection. Individual errors,
+         --  NOT Accepted(Screen), decide eligibility even if a peer is undefined.
+         Screen : constant Known_Pose_Epipolar_Result := Verify_Known_Pose_Epipolar
+           (First_Pixels, Second_Pixels, First_Intrinsics, Second_Intrinsics,
+            First_Distortion, Second_Distortion, First_Pose, Second_Pose,
+            (1, OpenCV.Float64_Value'Last, Options.Maximum_Normalized_Sampson_Error));
+         Errors : constant Epipolar_Correspondence_Result_Array := Correspondence_Errors (Screen);
+         Eligible : Natural := 0;
+      begin
+         return Result : Three_View_Landmark_Result_Array (1 .. First_Pixels'Length) do
+            for I in Result'Range loop
+               Result (I).Position := I;
+               Result (I).Wants_Refinement := Options.Source_Mode /= Initial_Only;
+               Result (I).Sampson := Errors (I);
+               if not Geometry (Screen).Defined then
+                  Result (I).State := No_Stereo_Baseline;
+               elsif not Errors (I).Defined then
+                  Result (I).Screening := Epipolar_Metric_Undefined;
+               elsif not Errors (I).Passes_Point_Limit then
+                  Result (I).Screening := Epipolar_Limit_Rejected;
+                  Result (I).State := Epipolar_Rejected;
+               else
+                  Result (I).Screening := Epipolar_Passed;
+                  Eligible := Eligible + 1;
+               end if;
+            end loop;
+            if Eligible > 0 then
+               declare
+                  P, Q : Image_Point_Array (1 .. Eligible);
+                  Mapping : Inlier_Index_Array (1 .. Eligible);
+                  N : Natural := 0;
+               begin
+                  for I in Result'Range loop
+                     if Result (I).Screening = Epipolar_Passed then
+                        N := N + 1;
+                        Mapping (N) := I;
+                        P (N) := First_Pixels (First_Pixels'First + (I - 1));
+                        Q (N) := Second_Pixels (Second_Pixels'First + (I - 1));
+                     end if;
+                  end loop;
+                  if Options.Source_Mode = Initial_Only then
+                     declare
+                        Initial : constant Metric_Triangulated_Point_Array := Triangulate_World_Points
+                          (P, Q, First_Intrinsics, Second_Intrinsics, First_Distortion,
+                           Second_Distortion, First_Pose, Second_Pose, Options.Metric);
+                     begin
+                        for J in Mapping'Range loop
+                           Result (Mapping (J)).Initial := Initial (J);
+                           Result (Mapping (J)).Has_Initial := True;
+                        end loop;
+                     end;
+                  else
+                     declare
+                        Refined : constant Metric_Point_Refinement_Result_Array := Refine_Metric_World_Points
+                          (P, Q, First_Intrinsics, Second_Intrinsics, First_Distortion,
+                           Second_Distortion, First_Pose, Second_Pose, Options.Metric,
+                           Options.Refinement, Options.Refinement_Acceptance);
+                     begin
+                        for J in Mapping'Range loop
+                           Result (Mapping (J)).Refined := Refined (J);
+                           Result (Mapping (J)).Has_Refinement := True;
+                           Result (Mapping (J)).Initial := Original_Reconstruction (Refined (J));
+                           Result (Mapping (J)).Has_Initial := True;
+                        end loop;
+                     end;
+                  end if;
+                  N := 0;
+                  --  Candidate selection is complete before third pixels are read.
+                  for J in Mapping'Range loop
+                     declare
+                        R : Three_View_Landmark_Result renames Result (Mapping (J));
+                     begin
+                        if R.Has_Refinement and then Accepted (R.Refined) then
+                           R.Candidate := Accepted_World_Position (R.Refined);
+                           R.Selected := Refined_Metric_Candidate;
+                        elsif Options.Source_Mode = Require_Accepted_Refinement then
+                           R.State := Refinement_Required_Unavailable;
+                        elsif R.Initial.Disposition = Metric_Accepted and then R.Initial.Geometry.Available then
+                           R.Candidate := R.Initial.Geometry.World_Position;
+                           R.Selected := Initial_Metric_Candidate;
+                        elsif R.Initial.Disposition = Metric_Policy_Rejected then
+                           R.State := Stereo_Quality_Rejected;
+                        else
+                           R.State := Stereo_Source_Unusable;
+                        end if;
+                        if R.Selected /= No_Selected_Candidate then
+                           N := N + 1;
+                        end if;
+                     end;
+                  end loop;
+                  if N > 0 then
+                     declare
+                        World : Object_Point_Array (1 .. N);
+                        Pixels : Image_Point_Array (1 .. N);
+                        Selected_Map : Inlier_Index_Array (1 .. N);
+                     begin
+                        N := 0;
+                        for I in Result'Range loop
+                           if Result (I).Selected /= No_Selected_Candidate then
+                              N := N + 1;
+                              Selected_Map (N) := I;
+                              World (N) := Selected_World_Position (Result (I));
+                              Pixels (N) := Third_Pixels (Third_Pixels'First + (I - 1));
+                           end if;
+                        end loop;
+                        declare
+                           Values : constant AP3P_Reference_Result_Matrix := Evaluate_AP3P_References
+                             ([(Pose => Third_Pose)], World, Pixels, Third_Intrinsics, Third_Distortion);
+                        begin
+                           for J in Selected_Map'Range loop
+                              declare
+                                 R : Three_View_Landmark_Result renames Result (Selected_Map (J));
+                              begin
+                                 R.Third := Values (1, J);
+                                 R.Has_Third := True;
+                                 case R.Third.Disposition is
+                                    when Non_Positive_Depth => R.State := Third_Non_Positive_Depth;
+                                    when Numerically_Unavailable => R.State := Third_Numerically_Unavailable;
+                                    when Projected_Positive_Depth =>
+                                       R.State := (if R.Third.Error_Pixels <= Options.Maximum_Third_Pixel_Error
+                                         then Three_View_Accepted else Third_Reprojection_Rejected);
+                                 end case;
+                              end;
+                           end loop;
+                        end;
+                     end;
+                  end if;
+               end;
+            end if;
+         end return;
+      end;
+   end Qualify_Three_View_Landmarks;
+
+   function Three_View_Landmark_Observations
+     (Landmarks : Three_View_Landmark_Result_Array; Pixels : Image_Point_Array)
+      return Accepted_Landmark_Set
+   is
+      Count : Natural := 0;
+   begin
+      if Landmarks'Length /= Pixels'Length then
+         raise OpenCV.OpenCV_Error with "Three-view adapter pixel count mismatch";
+      end if;
+      Validate (Pixels);
+      for Landmark of Landmarks loop
+         if Accepted (Landmark) then
+            Count := Count + 1;
+         end if;
+      end loop;
+      return Result : Accepted_Landmark_Set (Count) do
+         Count := 0;
+         for I in 1 .. Landmarks'Length loop
+            declare
+               R : Three_View_Landmark_Result renames Landmarks (Landmarks'First + (I - 1));
+            begin
+               if Accepted (R) then
+                  Count := Count + 1;
+                  Result.World (Count) := Accepted_World_Position (R);
+                  Result.Pixels (Count) := Pixels (Pixels'First + (I - 1));
+                  Result.Positions (Count) := Original_Position (R);
+               end if;
+            end;
+         end loop;
+      end return;
+   end Three_View_Landmark_Observations;
 
    function World_Points (Landmarks : Accepted_Landmark_Set) return Object_Point_Array is (Landmarks.World);
    function Image_Points (Landmarks : Accepted_Landmark_Set) return Image_Point_Array is (Landmarks.Pixels);

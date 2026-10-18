@@ -9,7 +9,7 @@ project Opencv_Calib3D_Examples is
    for Main use ("pnp_synthetic.adb", "homography_synthetic.adb", "fundamental_synthetic.adb",
                   "essential_synthetic.adb", "triangulation_synthetic.adb",
                    "relative_motion_synthetic.adb", "metric_triangulation_synthetic.adb", "metric_refinement_synthetic.adb",
-                    "landmark_relocalization_synthetic.adb", "known_pose_epipolar_synthetic.adb");
+                    "landmark_relocalization_synthetic.adb", "known_pose_epipolar_synthetic.adb", "three_view_landmarks_synthetic.adb");
    for Create_Missing_Dirs use "True";
    package Compiler is
       for Default_Switches ("Ada") use

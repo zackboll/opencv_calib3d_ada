@@ -1,5 +1,17 @@
 # Roadmap
 
+## Task 023 approved scope
+
+Epipolar-gated three-view metric landmarks only: Task 022 per-correspondence
+screening, compact first/second metric triangulation or refinement, explicit
+fitting-stage candidate provenance/fallback, third-camera held-out positive-depth
+and pixel verification, and accepted landmark compaction with original positions.
+All three poses supplied; third pixels never fit coordinates or select candidates.
+No new solver/native ABI/dependency. Features, Video, DTED, coordinate-system
+conversion, SLAM, bundle adjustment and navigation fusion remain outside this
+binding. See [contract](three-view-landmark-contract.md) and
+[validation](three-view-landmark-validation.md).
+
 ## Task 022 approved scope
 
 Known-pose two-view calibrated epipolar verification only: existing relative

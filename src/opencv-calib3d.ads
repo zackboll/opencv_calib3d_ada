@@ -1100,7 +1100,88 @@ package OpenCV.Calib3D is
    --  Magnitude-only epipolar errors cannot verify absolute position, physical
    --  baseline magnitude, E sign, positive depth, reconstruction or match truth.
 
+   --  Task 023: first/second observations fit a metric candidate; third pixels
+   --  verify it only, never select it or participate in reconstruction.
+   type Three_View_Source_Mode is
+     (Initial_Only, Prefer_Refined_With_Original_Fallback,
+      Require_Accepted_Refinement);
+   type Three_View_Landmark_Options is record
+      Maximum_Normalized_Sampson_Error : OpenCV.Float64_Value;
+      Metric : Metric_Triangulation_Options;
+      Refinement : Triangulation_Refinement_Options;
+      Refinement_Acceptance : Metric_Refinement_Acceptance_Options;
+      Source_Mode : Three_View_Source_Mode;
+      Maximum_Third_Pixel_Error : OpenCV.Float64_Value;
+   end record;
+   type Three_View_Landmark_Disposition is
+     (No_Stereo_Baseline, Epipolar_Undefined, Epipolar_Rejected,
+      Stereo_Source_Unusable, Stereo_Quality_Rejected,
+      Refinement_Required_Unavailable, Third_Non_Positive_Depth,
+      Third_Numerically_Unavailable, Third_Reprojection_Rejected,
+      Three_View_Accepted);
+   type Three_View_Epipolar_Disposition is
+     (Epipolar_Not_Evaluated, Epipolar_Metric_Undefined,
+      Epipolar_Limit_Rejected, Epipolar_Passed);
+   type Three_View_Candidate_Source is
+     (No_Selected_Candidate, Initial_Metric_Candidate, Refined_Metric_Candidate);
+   type Three_View_Landmark_Result is private;
+   type Three_View_Landmark_Result_Array is
+     array (Positive range <>) of Three_View_Landmark_Result;
+   function Qualify_Three_View_Landmarks
+     (First_Pixels, Second_Pixels, Third_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics, Third_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion, Third_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose, Third_Pose : World_To_Camera_Pose;
+      Options : Three_View_Landmark_Options) return Three_View_Landmark_Result_Array;
+   function Original_Position (Result : Three_View_Landmark_Result) return Positive;
+   function Disposition (Result : Three_View_Landmark_Result)
+      return Three_View_Landmark_Disposition;
+   function Epipolar_Disposition (Result : Three_View_Landmark_Result)
+      return Three_View_Epipolar_Disposition;
+   function Epipolar_Error (Result : Three_View_Landmark_Result)
+      return Epipolar_Correspondence_Result;
+   function Has_Initial_Reconstruction (Result : Three_View_Landmark_Result) return Boolean;
+   function Original_Reconstruction (Result : Three_View_Landmark_Result)
+      return Metric_Triangulated_Point;
+   function Refinement_Requested (Result : Three_View_Landmark_Result) return Boolean;
+   function Has_Refinement_Diagnostics (Result : Three_View_Landmark_Result) return Boolean;
+   function Refinement_Diagnostics (Result : Three_View_Landmark_Result)
+      return Metric_Point_Refinement_Result;
+   function Candidate_Source (Result : Three_View_Landmark_Result)
+      return Three_View_Candidate_Source;
+   --  Fitting-stage accepted candidate, NOT final three-view acceptance.
+   --  Raises OpenCV_Error when Candidate_Source=No_Selected_Candidate.
+   function Selected_World_Position (Result : Three_View_Landmark_Result) return Object_Point;
+   function Third_View_Evaluated (Result : Three_View_Landmark_Result) return Boolean;
+   --  Disposition after evaluation; finite depth unless numerically unavailable;
+   --  pixel error only after positive-depth projection.
+   --  All unavailable guarded accessors raise OpenCV_Error, never return zeros.
+   function Third_View_Disposition (Result : Three_View_Landmark_Result)
+      return AP3P_Reference_Disposition;
+   function Third_Camera_Depth (Result : Three_View_Landmark_Result) return OpenCV.Float64_Value;
+   function Third_Pixel_Error (Result : Three_View_Landmark_Result) return OpenCV.Float64_Value;
+   function Accepted (Result : Three_View_Landmark_Result) return Boolean;
+   function Accepted_World_Position (Result : Three_View_Landmark_Result) return Object_Point;
+   --  Pixels may be separately supplied fourth-image observations. No fourth
+   --  pose estimation/verification occurs. Original positions survive slicing.
+   function Three_View_Landmark_Observations
+     (Landmarks : Three_View_Landmark_Result_Array; Pixels : Image_Point_Array)
+      return Accepted_Landmark_Set;
+
 private
+   type Three_View_Landmark_Result is record
+      Position : Positive := 1;
+      State : Three_View_Landmark_Disposition := Epipolar_Undefined;
+      Screening : Three_View_Epipolar_Disposition := Epipolar_Not_Evaluated;
+      Sampson : Epipolar_Correspondence_Result;
+      Has_Initial, Wants_Refinement, Has_Refinement : Boolean := False;
+      Initial : Metric_Triangulated_Point;
+      Refined : Metric_Point_Refinement_Result;
+      Selected : Three_View_Candidate_Source := No_Selected_Candidate;
+      Candidate : Object_Point := [others => 0.0];
+      Has_Third : Boolean := False;
+      Third : AP3P_Reference_Result;
+   end record;
    type Known_Pose_Epipolar_Result (Count : Natural) is record
       State : Epipolar_Verification_Disposition := Insufficient_Correspondences;
       Has_Geometry, Has_Summary : Boolean := False;

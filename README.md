@@ -1,5 +1,30 @@
 # OpenCV Calib3D for Ada
 
+## Task 023: epipolar-gated three-view metric landmarks
+
+`Qualify_Three_View_Landmarks` screens first–second correspondences using known-pose
+normalized Sampson errors, reconstructs metric world points with optional fixed-pose
+refinement, selects a fitting-stage-approved initial/refined candidate, and only
+then verifies it against the third camera. Three calibrations and known poses are
+independent inputs; third pixels never enter fitting or candidate selection, and
+third rejection never triggers a fallback retry. All limits are caller-selected,
+finite, nonnegative and inclusive. Per-track results retain original positions,
+screening, initial/refinement diagnostics and guarded candidate/accepted geometry.
+`Three_View_Landmark_Observations` compacts only accepted coordinates into the
+existing owned landmark set, optionally paired with fourth-image observations.
+
+The third image adds geometric evidence, not true statistical independence,
+correct feature identity, global localization, physical ground truth or an
+uncertainty bound. No C++/ABI change (48 operations), new solver or dependency.
+See [contract](docs/three-view-landmark-contract.md) and
+[validation](docs/three-view-landmark-validation.md). The eleventh synthetic example
+includes epipolar mismatches, epipolar-consistent wrong depth and third mismatches:
+
+```sh
+alr -n -C examples build
+alr -n -C examples exec -- sh ../scripts/run_native.sh bin/three_view_landmarks_synthetic
+```
+
 ## Task 022: known-pose calibrated two-view epipolar verification
 
 `Essential_From_Camera_Poses` builds `E=[normalize(t_relative)]_x R_relative`
