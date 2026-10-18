@@ -8,6 +8,21 @@ from workflow_topology import check_topology  # noqa: E402
 
 
 class RepositoryTests(unittest.TestCase):
+    def test_world_plane_reuses_rays_and_has_no_native_arithmetic_handler(self):
+        text = (ROOT / "src/opencv-calib3d.adb").read_text()
+        start = text.index("   function Intersect_World_Rays_With_Plane")
+        stop = text.index("   function Project_Points", start)
+        operation = text[start:stop]
+        self.assertIn("Unit_Vector (Object_Point (Plane.Normal))", operation)
+        self.assertIn("Unit_Vector (Object_Point (Rays", operation)
+        self.assertIn("when Arithmetic_Unavailable", operation)
+        self.assertNotIn("when OpenCV.OpenCV_Error", operation)
+        self.assertNotIn("C.", operation)
+        self.assertEqual(operation.count("World_Bearing_Rays (Pixels, Intrinsics, Distortion, Pose)"), 1)
+        for filename in ("cross-platform.yml", "opencv-compatibility.yml"):
+            self.assertIn("bin/ray_plane_unprojection_synthetic",
+                          (ROOT / ".github/workflows" / filename).read_text())
+
     def test_reference_projection_is_one_batch_outside_reference_loops(self):
         text = (ROOT / "src/opencv-calib3d.adb").read_text()
         start = text.index("    function Evaluate_AP3P_References")

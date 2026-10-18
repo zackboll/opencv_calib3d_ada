@@ -171,6 +171,53 @@ package OpenCV.Calib3D is
       Direction : World_Direction;
    end record;
    type World_Ray_Array is array (Positive range <>) of World_Ray;
+   --  N . (X - Anchor) = 0 in the caller's Cartesian world frame.
+   --  Normal and ray directions need not be unit vectors, but must be finite
+   --  and nonzero. Range and residual use the caller's world length units.
+   type World_Plane is record
+      Anchor : Object_Point;
+      Normal : World_Direction;
+   end record;
+   type World_Plane_Intersection_Options is record
+      Minimum_Absolute_Incidence_Cosine : OpenCV.Float64_Value;
+      Minimum_Forward_Range : OpenCV.Float64_Value;
+      Maximum_Forward_Range : OpenCV.Float64_Value;
+      Maximum_Absolute_Plane_Residual : OpenCV.Float64_Value;
+   end record;
+   type World_Plane_Intersection_Disposition is
+     (Forward_Intersection_Accepted, Parallel_Ray, Coplanar_Ray,
+      Grazing_Incidence_Rejected, Intersection_At_Origin,
+      Intersection_Behind_Ray, Below_Minimum_Forward_Range,
+      Above_Maximum_Forward_Range, Plane_Residual_Rejected,
+      Numerically_Unavailable);
+   type World_Plane_Intersection is private;
+   type World_Plane_Intersection_Array is
+     array (Positive range <>) of World_Plane_Intersection;
+   --  Validate ALL inputs before intersection, including empty requests.
+   --  One-based, owned results preserve input order, regardless of bounds.
+   --  Precedence: arithmetic availability at each stage; exact parallel or
+   --  coplanar; signed distance zero/negative; incidence; min/max range;
+   --  represented residual; acceptance. No hidden epsilons or defaults.
+   function Intersect_World_Rays_With_Plane
+     (Rays : World_Ray_Array; Plane : World_Plane;
+      Options : World_Plane_Intersection_Options)
+      return World_Plane_Intersection_Array;
+   function Disposition (Result : World_Plane_Intersection)
+      return World_Plane_Intersection_Disposition;
+   function Incidence_Evaluated (Result : World_Plane_Intersection) return Boolean;
+   function Absolute_Incidence_Cosine (Result : World_Plane_Intersection)
+      return OpenCV.Float64_Value;
+   function Has_Signed_Ray_Distance (Result : World_Plane_Intersection) return Boolean;
+   function Signed_Ray_Distance (Result : World_Plane_Intersection)
+      return OpenCV.Float64_Value;
+   function Plane_Residual_Evaluated (Result : World_Plane_Intersection) return Boolean;
+   function Absolute_Plane_Residual (Result : World_Plane_Intersection)
+      return OpenCV.Float64_Value;
+   function Accepted (Result : World_Plane_Intersection) return Boolean;
+   --  Every unavailable numeric accessor raises OpenCV_Error. Position is
+   --  available ONLY after full acceptance, never merely after construction.
+   function Accepted_World_Position (Result : World_Plane_Intersection)
+      return Object_Point;
    type Rotation_Matrix is array (Natural range 0 .. 2, Natural range 0 .. 2)
      of OpenCV.Float64_Value;
 
@@ -611,6 +658,14 @@ package OpenCV.Calib3D is
      (Points : Image_Point_Array; Intrinsics : Camera_Intrinsics;
       Distortion : Distortion_Coefficients; Pose : World_To_Camera_Pose)
       return World_Ray_Array;
+
+   --  Reuses World_Bearing_Rays, including validation and native-free empty
+   --  behavior. Native errors propagate atomically, not as ray dispositions.
+   function Unproject_Pixels_Onto_World_Plane
+     (Pixels : Image_Point_Array; Intrinsics : Camera_Intrinsics;
+      Distortion : Distortion_Coefficients; Pose : World_To_Camera_Pose;
+      Plane : World_Plane; Options : World_Plane_Intersection_Options)
+      return World_Plane_Intersection_Array;
 
    type Planar_Motion_Hypothesis is record
       Rotation_First_To_Second : Rotation_Matrix;
@@ -1169,6 +1224,12 @@ package OpenCV.Calib3D is
       return Accepted_Landmark_Set;
 
 private
+   type World_Plane_Intersection is record
+      State : World_Plane_Intersection_Disposition := Numerically_Unavailable;
+      Has_Incidence, Has_Distance, Has_Residual : Boolean := False;
+      Incidence, Distance, Residual : OpenCV.Float64_Value := 0.0;
+      Position : Object_Point := [others => 0.0];
+   end record;
    type Three_View_Landmark_Result is record
       Position : Positive := 1;
       State : Three_View_Landmark_Disposition := Epipolar_Undefined;
