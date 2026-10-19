@@ -34,6 +34,81 @@ procedure Run_Refinement_Faults is
    end Check;
 begin
    declare
+      Calibration : constant Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);
+      A : constant World_To_Camera_Pose := (others => <>);
+      B : constant World_To_Camera_Pose := ([others => 0.0], [-0.2, 0.0, 0.0]);
+      Plane : constant World_Plane := ([0.0, 0.0, 1.0], [0.0, 0.0, 1.0]);
+      Policy : constant Plane_Homography_Consistency_Options := (2000, 1.0E-5, 0.999, 18, 2.0E-6, 2.0E-6, 2.0E-6);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1 : constant Image_Point_Array := [[0.07, 0.03], [0.13, -0.12]];
+      H2 : constant Image_Point_Array := [[-0.13, 0.03], [-0.07, -0.12]];
+      function Request (O : Plane_Homography_Consistency_Options := Policy; Q : Image_Point_Array := H2)
+         return Plane_Homography_Consistency_Result is
+        (Verify_Known_Plane_Homography_Consistency
+          (F1, F2, H1, Q, Calibration, Calibration, No_Distortion, No_Distortion, A, B, Plane, O));
+      type Stages is array (Positive range <>) of Interfaces.C.int;
+      Count : Natural := 0;
+      function Invalid_Number (Kind : Interfaces.C.int) return Interfaces.C.double
+        with Import, Convention => C, External_Name => "calib3d_test_nonfinite";
+   begin
+      for I in F1'Range loop
+         F1 (I) := [OpenCV.Float64_Value ((I - 1) mod 6) * 0.11 - 0.29,
+                    OpenCV.Float64_Value ((I - 1) / 6) * 0.13 - 0.21];
+         F2 (I) := [F1 (I) (0) - 0.2, F1 (I) (1)];
+      end loop;
+      declare
+         Saved : Plane_Homography_Consistency_Result := Request;
+         Previous : constant Plane_Homography_Consistency_Result := Saved;
+      begin
+         for Stage of Stages'[3, 4, 15, 16, 54, 55, 56, 57, 13, 14, 17, 18, 19, 20, 21, 22] loop
+            for Kind in Interfaces.C.int range 1 .. 5 loop
+               Fail (Stage, Kind);
+               declare
+                  pragma Suppress (Validity_Check);
+                  Invalid : Plane_Homography_Consistency_Options := Policy;
+                  Late : Image_Point_Array := H2;
+               begin
+                  Invalid.Maximum_Model_Separation_Normalized := -1.0;
+                  begin Saved := Request (Invalid);
+                     raise Program_Error with "late policy accepted before fault";
+                  exception when OpenCV.OpenCV_Error => null; end;
+                  Late (Late'Last) (1) := OpenCV.Float64_Value (Invalid_Number (0));
+                  begin Saved := Request (Q => Late);
+                     raise Program_Error with "late heldout pixel accepted before fault";
+                  exception when OpenCV.OpenCV_Error => null; end;
+                  begin Saved := Request (Q => H2 (1 .. 1));
+                     raise Program_Error with "heldout mismatch accepted before fault";
+                  exception when OpenCV.OpenCV_Error => null; end;
+               end;
+               begin Saved := Request;
+                  raise Program_Error with "consistency actual native checkpoint not reached";
+               exception when OpenCV.OpenCV_Error => Count := Count + 1; end;
+               Check (Saved = Previous, "consistency failed assignment changed owned result");
+               Saved := Request;
+               Check (Accepted (Saved) and then Saved = Previous, "consistency native healthy recovery");
+            end loop;
+         end loop;
+      end;
+      Check (Count = 80, "consistency actual pipeline fault count");
+      Ada.Text_IO.Put_Line ("PASS: consistency 80 actual pipeline faults, validation, atomic owned assignment and recovery");
+      --  First-hit 13/14 above reach FIRST fitting undistortion only. No claim
+      --  that they reach second fitting or either later held-out calibration.
+      --  Exercise second-camera calibration independently with its real inputs.
+      for Stage of Stages'[13, 14] loop
+         for Kind in Interfaces.C.int range 1 .. 5 loop
+            Fail (Stage, Kind);
+            begin
+               declare N : constant Normalized_Image_Point_Array := Undistort_To_Normalized (F2, Calibration, No_Distortion);
+                  pragma Unreferenced (N);
+               begin raise Program_Error with "isolated second camera undistortion hook not reached"; end;
+            exception when OpenCV.OpenCV_Error => null; end;
+            declare N : constant Normalized_Image_Point_Array := Undistort_To_Normalized (H2, Calibration, No_Distortion);
+            begin Check (N'Length = 2, "isolated second calibration recovery"); end;
+         end loop;
+      end loop;
+      Ada.Text_IO.Put_Line ("PASS: 10 isolated second-camera undistortion faults, NOT later-call pipeline hook coverage");
+   end;
+   declare
       A : constant World_To_Camera_Pose := (others => <>);
       B : constant World_To_Camera_Pose := ([0.1, -0.2, 0.3], [-1.0, 0.2, 0.1]);
       Plane : constant World_Plane := ([0.0, 0.0, 4.0], [0.0, 0.0, 1.0]);

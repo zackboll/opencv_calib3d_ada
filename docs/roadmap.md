@@ -1,5 +1,19 @@
 # Roadmap
 
+## Task 028 approved scope
+
+Compare Task 027 supplied-geometry H with one robust empirical normalized H from
+independent fitting observations. Require caller-selected final support and every
+separately calibrated held-out pair to pass all three inclusive normalized gates.
+Preserve complete owned diagnostics and exact geometric absence. No adjustment of
+poses/plane, duplicate estimator, C++ change, dependency or private ABI expansion.
+252 AUnit groups preserve all 241 baseline registrations; sixteen examples.
+Physical ray-plane/reciprocal acceptance remains separate; statistical independence
+is a caller obligation, not inferred from coordinates. No navigation accuracy claim.
+Windows remains post-merge only; stop at independent source review, without merging.
+See [contract](plane-homography-consistency-contract.md) and
+[qualification](plane-homography-consistency-validation.md).
+
 ## Task 027 approved scope
 
 Known-pose, known-Cartesian-plane homography construction only: normalized mapping,

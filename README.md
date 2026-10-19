@@ -1,5 +1,29 @@
 # OpenCV Calib3D for Ada
 
+## Known-plane versus empirical homography with held-out verification (Task 028)
+
+`Verify_Known_Plane_Homography_Consistency` constructs the supplied-geometry H,
+fits one robust empirical H from separately calibrated fitting pixels, and checks
+a distinct held-out set. Every held-out pair must pass explicit inclusive
+predicted/observed, empirical/observed and model/model normalized-coordinate
+limits; fitting must also meet caller-selected final inlier support. All results
+are owned Ada values with guarded per-point diagnostics. No held-out data fits H.
+
+Normalized coordinates are dimensionless, **not pixels**. Low residual does not
+prove correct poses/plane/features or independent sampling; these remain caller
+obligations. Pure rotation can pass algebraically without physical plane evidence.
+Tasks 024–026 retain separate physical ray/plane and reciprocal acceptance.
+No production C++, dependency, solver, or private ABI expansion: still 48 operations.
+Current inventory: **252 AUnit groups (all 241 baseline preserved), sixteen examples**.
+See [contract](docs/plane-homography-consistency-contract.md) and
+[qualification/developer review](docs/plane-homography-consistency-validation.md).
+From `/home/zboll/git/opencv/calib3d`, run the sixteenth synthetic example serially:
+
+```sh
+alr -n -C examples build
+alr -n -C examples exec -- sh ../scripts/run_native.sh bin/plane_homography_consistency_synthetic
+```
+
 ## Known-pose plane homography (Task 027)
 
 `Construct_Known_Plane_Homography` derives a normalized plane-induced mapping from

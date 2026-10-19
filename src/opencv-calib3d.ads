@@ -213,6 +213,58 @@ package OpenCV.Calib3D is
      (Geometry : Known_Plane_Homography_Result;
       Points : Normalized_Image_Point_Array) return Normalized_Plane_Transfer_Array;
 
+   --  All limits are explicit and dimensionless NORMALIZED coordinates, not
+   --  pixels. Each camera's raw Brown pixels are calibrated independently.
+   type Plane_Homography_Consistency_Options is record
+      Maximum_RANSAC_Iterations : Positive;
+      RANSAC_Threshold_Normalized : OpenCV.Float64_Value;
+      RANSAC_Confidence : OpenCV.Float64_Value;
+      Minimum_Final_Fitting_Inliers : Positive;
+      Maximum_Predicted_Observed_Error_Normalized : OpenCV.Float64_Value;
+      Maximum_Empirical_Observed_Error_Normalized : OpenCV.Float64_Value;
+      Maximum_Model_Separation_Normalized : OpenCV.Float64_Value;
+   end record;
+   type Plane_Homography_Consistency_Disposition is
+     (Predicted_Model_Unavailable, Empirical_Model_Not_Found,
+      Insufficient_Empirical_Inliers, Heldout_Verification_Rejected,
+      Plane_Homography_Consistency_Accepted);
+   type Plane_Homography_Holdout_Disposition is
+     (Predicted_Transfer_Unavailable, Empirical_Transfer_Unavailable,
+      Holdout_Arithmetic_Unavailable, Predicted_Observation_Rejected,
+      Empirical_Observation_Rejected, Model_Agreement_Rejected,
+      Holdout_Consistency_Accepted);
+   type Plane_Homography_Consistency_Metric is
+     (Predicted_Observed, Empirical_Observed, Model_Separation);
+   type Plane_Homography_Holdout_Result is private;
+   type Plane_Homography_Holdout_Array is
+     array (Positive range <>) of Plane_Homography_Holdout_Result;
+   type Plane_Homography_Consistency_Result (<>) is private;
+   function Disposition (Result : Plane_Homography_Consistency_Result)
+      return Plane_Homography_Consistency_Disposition;
+   function Predicted_Model (Result : Plane_Homography_Consistency_Result)
+      return Known_Plane_Homography_Result;
+   function Empirical_Found (Result : Plane_Homography_Consistency_Result) return Boolean;
+   --  Guarded by Empirical_Found. Matrix and inlier identities are owned copies.
+   function Empirical_Homography (Result : Plane_Homography_Consistency_Result) return Homography_Matrix;
+   function Inlier_Count (Result : Plane_Homography_Consistency_Result) return Natural;
+   function Inliers (Result : Plane_Homography_Consistency_Result) return Inlier_Index_Array;
+   function Holdout_Count (Result : Plane_Homography_Consistency_Result) return Natural;
+   function Holdouts (Result : Plane_Homography_Consistency_Result) return Plane_Homography_Holdout_Array;
+   function Accepted (Result : Plane_Homography_Consistency_Result) return Boolean;
+   function Disposition (Result : Plane_Homography_Holdout_Result) return Plane_Homography_Holdout_Disposition;
+   function Original_Position (Result : Plane_Homography_Holdout_Result) return Positive;
+   function Predicted_Target_Available (Result : Plane_Homography_Holdout_Result) return Boolean;
+   function Empirical_Target_Available (Result : Plane_Homography_Holdout_Result) return Boolean;
+   function Predicted_Target (Result : Plane_Homography_Holdout_Result) return Normalized_Image_Point;
+   function Empirical_Target (Result : Plane_Homography_Holdout_Result) return Normalized_Image_Point;
+   function Metric_Available
+     (Result : Plane_Homography_Holdout_Result; Metric : Plane_Homography_Consistency_Metric) return Boolean;
+   --  Guarded independently for each metric; equality with its limit passes.
+   function Normalized_Error
+     (Result : Plane_Homography_Holdout_Result; Metric : Plane_Homography_Consistency_Metric)
+      return OpenCV.Float64_Value;
+   function Accepted (Result : Plane_Homography_Holdout_Result) return Boolean;
+
    type World_Plane_Intersection_Options is record
       Minimum_Absolute_Incidence_Cosine : OpenCV.Float64_Value;
       Minimum_Forward_Range : OpenCV.Float64_Value;
@@ -670,6 +722,19 @@ package OpenCV.Calib3D is
      (Result : Known_Plane_Homography_Result;
       First_Intrinsics, Second_Intrinsics : Camera_Intrinsics)
       return Homography_Matrix;
+
+   --  Fitting >=5 pairs; held-out >=1 pair. Held-out observations NEVER fit H.
+   --  Feature identities and statistical withholding remain caller obligations.
+   --  Algebraic consistency only, including pure rotation; no physical depth or
+   --  ray-plane acceptance. Native failures propagate without partial results.
+   function Verify_Known_Plane_Homography_Consistency
+     (Fitting_First_Pixels, Fitting_Second_Pixels : Image_Point_Array;
+      Holdout_First_Pixels, Holdout_Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose : World_To_Camera_Pose;
+      Plane : World_Plane; Options : Plane_Homography_Consistency_Options)
+      return Plane_Homography_Consistency_Result;
 
    --  R = native Rodrigues(Pose.Rotation), X_camera = R * X_world + t.
    --  All six pose components must be finite, even for direction operations.
@@ -1484,6 +1549,23 @@ private
    type Known_Plane_Homography_Result is record
       State : Known_Plane_Homography_Disposition := Homography_Numerically_Unavailable;
       Matrix : Homography_Matrix := [others => [others => 0.0]];
+   end record;
+   type Consistency_Metric_Flags is array (Plane_Homography_Consistency_Metric) of Boolean;
+   type Consistency_Metric_Values is array (Plane_Homography_Consistency_Metric) of OpenCV.Float64_Value;
+   type Plane_Homography_Holdout_Result is record
+      Position : Positive := 1;
+      State : Plane_Homography_Holdout_Disposition := Predicted_Transfer_Unavailable;
+      Predicted, Empirical : Normalized_Plane_Transfer;
+      Available : Consistency_Metric_Flags := [others => False];
+      Errors : Consistency_Metric_Values := [others => 0.0];
+   end record;
+   type Plane_Homography_Consistency_Result (Fitting_Count, Heldout_Count : Natural) is record
+      State : Plane_Homography_Consistency_Disposition := Predicted_Model_Unavailable;
+      Geometry : Known_Plane_Homography_Result;
+      Has_Empirical : Boolean := False;
+      Matrix : Homography_Matrix := [others => [others => 0.0]];
+      Positions : Inlier_Index_Array (1 .. Fitting_Count);
+      Diagnostics : Plane_Homography_Holdout_Array (1 .. Heldout_Count);
    end record;
    type Pose_Estimate is new Ada.Finalization.Limited_Controlled with record
       Has_Pose : Boolean := False;
