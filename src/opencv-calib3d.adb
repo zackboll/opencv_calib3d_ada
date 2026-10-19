@@ -972,6 +972,194 @@ package body OpenCV.Calib3D is
          raise OpenCV.OpenCV_Error with "Camera motion exceeds Float64 range";
    end Measure_Camera_Motion;
 
+   --  Arithmetic-only projective helpers. Never wrap native calls or guarded
+   --  public accessors in a handler for Unavailable.
+   package Plane_Projective_Arithmetic is
+      Unavailable : exception;
+      function Difference (L, R : OpenCV.Float64_Value) return OpenCV.Float64_Value;
+      function Sum (L, R : OpenCV.Float64_Value) return OpenCV.Float64_Value;
+      function Product (L, R : OpenCV.Float64_Value) return OpenCV.Float64_Value;
+      function Quotient (L, R : OpenCV.Float64_Value) return OpenCV.Float64_Value;
+      function Scaled (H : Homography_Matrix) return Homography_Matrix;
+      function Multiply (L, R : Homography_Matrix) return Homography_Matrix;
+   end Plane_Projective_Arithmetic;
+
+   package body Plane_Projective_Arithmetic is
+      function Check (V : OpenCV.Float64_Value) return OpenCV.Float64_Value is
+      begin
+         if not Is_Finite (V) then raise Unavailable; end if;
+         return V;
+      end Check;
+      function Difference (L, R : OpenCV.Float64_Value) return OpenCV.Float64_Value is
+      begin
+         return Check (L - R);
+      exception when Constraint_Error => raise Unavailable;
+      end Difference;
+      function Sum (L, R : OpenCV.Float64_Value) return OpenCV.Float64_Value is
+      begin
+         return Check (L + R);
+      exception when Constraint_Error => raise Unavailable;
+      end Sum;
+      function Product (L, R : OpenCV.Float64_Value) return OpenCV.Float64_Value is
+         V : OpenCV.Float64_Value;
+      begin
+         V := Check (L * R);
+         if L /= 0.0 and then R /= 0.0 and then V = 0.0 then raise Unavailable; end if;
+         return V;
+      exception when Constraint_Error => raise Unavailable;
+      end Product;
+      function Quotient (L, R : OpenCV.Float64_Value) return OpenCV.Float64_Value is
+         V : OpenCV.Float64_Value;
+      begin
+         V := Check (L / R);
+         if L /= 0.0 and then V = 0.0 then raise Unavailable; end if;
+         return V;
+      exception when Constraint_Error => raise Unavailable;
+      end Quotient;
+      function Scaled (H : Homography_Matrix) return Homography_Matrix is
+         Scale : OpenCV.Float64_Value := 0.0;
+         Result : Homography_Matrix;
+      begin
+         for V of H loop Scale := OpenCV.Float64_Value'Max (Scale, abs Check (V)); end loop;
+         if Scale = 0.0 then raise Unavailable; end if;
+         for I in 0 .. 2 loop
+            for J in 0 .. 2 loop Result (I, J) := Quotient (H (I, J), Scale); end loop;
+         end loop;
+         return Result;
+      end Scaled;
+      function Multiply (L, R : Homography_Matrix) return Homography_Matrix is
+         H : Homography_Matrix := [others => [others => 0.0]];
+      begin
+         for I in 0 .. 2 loop
+            for J in 0 .. 2 loop
+               for K in 0 .. 2 loop H (I, J) := Sum (H (I, J), Product (L (I, K), R (K, J))); end loop;
+            end loop;
+         end loop;
+         return Scaled (H);
+      end Multiply;
+   end Plane_Projective_Arithmetic;
+
+   function Disposition (Result : Known_Plane_Homography_Result)
+      return Known_Plane_Homography_Disposition is (Result.State);
+
+   function Defined (Result : Known_Plane_Homography_Result) return Boolean is
+     (Result.State in General_Plane_Homography | Pure_Rotation_Homography);
+
+   function Normalized_Homography (Result : Known_Plane_Homography_Result)
+      return Homography_Matrix is
+   begin
+      if not Defined (Result) then
+         raise OpenCV.OpenCV_Error with "Known-plane homography is unavailable";
+      end if;
+      return Result.Matrix;
+   end Normalized_Homography;
+
+   function Construct_Known_Plane_Homography
+     (First_Pose, Second_Pose : World_To_Camera_Pose; Plane : World_Plane)
+      return Known_Plane_Homography_Result
+   is
+      use Plane_Projective_Arithmetic;
+      Normal : constant Object_Point := Unit_Vector (Object_Point (Plane.Normal));
+   begin
+      Validate (First_Pose);
+      Validate (Second_Pose);
+      Validate_Vector (Plane.Anchor);
+      declare
+         --  Reuse the existing exact physical-center convention and native
+         --  inversion/composition. Relative translation is in Camera 2.
+         Motion : constant Camera_Motion_Result := Measure_Camera_Motion (First_Pose, Second_Pose);
+         R : constant Rotation_Matrix := Rotation_Matrix_Of (Motion.Relative_Pose);
+         N1 : constant Camera_Direction := World_To_Camera_Direction (First_Pose, World_Direction (Normal));
+         D1, D2 : OpenCV.Float64_Value := 0.0;
+         Scale, A : OpenCV.Float64_Value;
+         B : Object_Point;
+         H : Homography_Matrix;
+      begin
+         if not Motion.Baseline_Direction_Defined then
+            return (Pure_Rotation_Homography, Homography_Matrix (R));
+         end if;
+         --  Only arithmetic below this point can produce routine numerical
+         --  unavailability. Native failures above propagate unchanged.
+         begin
+            for Axis in 0 .. 2 loop
+               D1 := Sum (D1, Product (Normal (Axis), Difference
+                 (Plane.Anchor (Axis), Motion.First_Center_World (Axis))));
+               D2 := Sum (D2, Product (Normal (Axis), Difference
+                 (Plane.Anchor (Axis), Motion.Second_Center_World (Axis))));
+            end loop;
+            if D1 = 0.0 then
+               return (State => Plane_Through_First_Camera_Center, others => <>);
+            elsif D2 = 0.0 then
+               return (State => Plane_Through_Second_Camera_Center, others => <>);
+            end if;
+            Scale := abs D1;
+            for V of Motion.Relative_Pose.Translation loop
+               Scale := OpenCV.Float64_Value'Max (Scale, abs V);
+            end loop;
+            if Scale = 0.0 then raise Unavailable; end if;
+            A := Quotient (D1, Scale);
+            for Axis in 0 .. 2 loop B (Axis) := Quotient (Motion.Relative_Pose.Translation (Axis), Scale); end loop;
+            for I in 0 .. 2 loop
+               for J in 0 .. 2 loop
+                  H (I, J) := Sum (Product (A, R (I, J)), Product (B (I), N1 (J)));
+               end loop;
+            end loop;
+            return (General_Plane_Homography, Scaled (H));
+         exception
+            when Unavailable => return (others => <>);
+         end;
+      end;
+   end Construct_Known_Plane_Homography;
+
+   function Ideal_Pixel_Homography
+     (Result : Known_Plane_Homography_Result;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics) return Homography_Matrix
+   is
+      use Plane_Projective_Arithmetic;
+      H : constant Homography_Matrix := Normalized_Homography (Result);
+      K1, K2, Inverse : Homography_Matrix;
+   begin
+      Validate (First_Intrinsics);
+      Validate (Second_Intrinsics);
+      --  Scale K before products; the adjugate is a projectively equivalent
+      --  inverse, avoiding unconditional reciprocals of tiny focal lengths.
+      begin
+         K1 := Scaled ([[First_Intrinsics.Focal_X, 0.0, First_Intrinsics.Center_X],
+                        [0.0, First_Intrinsics.Focal_Y, First_Intrinsics.Center_Y], [0.0, 0.0, 1.0]]);
+         K2 := Scaled ([[Second_Intrinsics.Focal_X, 0.0, Second_Intrinsics.Center_X],
+                        [0.0, Second_Intrinsics.Focal_Y, Second_Intrinsics.Center_Y], [0.0, 0.0, 1.0]]);
+         Inverse := [[Product (K1 (1, 1), K1 (2, 2)), 0.0, -Product (K1 (1, 1), K1 (0, 2))],
+                     [0.0, Product (K1 (0, 0), K1 (2, 2)), -Product (K1 (0, 0), K1 (1, 2))],
+                     [0.0, 0.0, Product (K1 (0, 0), K1 (1, 1))]];
+         return Multiply (K2, Multiply (H, Scaled (Inverse)));
+      exception
+         when Unavailable => raise OpenCV.OpenCV_Error with "Ideal-pixel homography exceeds Float64 representation";
+      end;
+   end Ideal_Pixel_Homography;
+
+   function Transfer_Normalized_Plane_Points
+     (Geometry : Known_Plane_Homography_Result;
+      Points : Normalized_Image_Point_Array) return Normalized_Plane_Transfer_Array
+   is
+      H : constant Homography_Matrix := Normalized_Homography (Geometry);
+   begin
+      for P of Points loop
+         for V of P loop
+            if not Is_Finite (V) then raise OpenCV.OpenCV_Error with "Normalized points must be finite"; end if;
+         end loop;
+      end loop;
+      return Results : Normalized_Plane_Transfer_Array (1 .. Points'Length) do
+         for I in Results'Range loop
+            declare
+               M : constant Homography_Point_Result := Map_With_Homography
+                 (H, Image_Point (Points (Points'First + (I - 1))));
+            begin
+               Results (I) := (if M.Finite then (True, Normalized_Image_Point (M.Point)) else (Finite => False));
+            end;
+         end loop;
+      end return;
+   end Transfer_Normalized_Plane_Points;
+
    function Essential_From_Camera_Poses
      (First, Second : World_To_Camera_Pose) return Known_Pose_Essential_Result
    is

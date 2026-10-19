@@ -1,5 +1,33 @@
 # OpenCV Calib3D for Ada
 
+## Known-pose plane homography (Task 027)
+
+`Construct_Known_Plane_Homography` derives a normalized plane-induced mapping from
+two supplied world-to-camera poses and one supplied Cartesian world plane, without
+fitting correspondences. Owned guarded results distinguish general mapping, exact
+common-center pure rotation, either through-center plane, and numerical absence.
+`Transfer_Normalized_Plane_Points` preserves batch order and reports unavailable
+projective coordinates without placeholders. `Ideal_Pixel_Homography` uses two
+independent calibrations in `K2 * H12 * inverse(K1)` order and maps **ideal undistorted
+pinhole pixels only**, not arbitrary raw Brown-distorted observations. Calibrate
+each camera separately with `Undistort_To_Normalized` before normalized transfer.
+
+Translation in `X2=R21*X1+t21` is in Camera 2, not world camera displacement.
+Homography scale is arbitrary; h22 need not be one or nonzero. Algebraic mapping
+does not establish positive depth or Task 024–026 physical acceptance, and one
+plane is not arbitrary nonplanar terrain. No estimator, image warp, terrain lookup,
+dependency or private ABI change (48 operations) is added.
+
+See the [contract](docs/known-plane-homography-contract.md) and
+[validation/review ledger](docs/known-plane-homography-validation.md).
+The fifteenth file-free synthetic example is run from
+`/home/zboll/git/opencv/calib3d` with:
+
+```sh
+alr -n -C examples build
+alr -n -C examples exec -- sh ../scripts/run_native.sh bin/known_plane_homography_synthetic
+```
+
 ## Task 026: reciprocal plane-constrained two-camera verification
 
 `Verify_Reciprocal_Plane_Correspondences` reuses Task 025 once per direction,

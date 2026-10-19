@@ -9970,9 +9970,286 @@ package body Calib3D_Tests is
       end;
    end Reference_Batch_Atomic;
 
+   --  Task 027 independent geometry and projective-domain regression groups.
+   Plane_H_A : constant World_To_Camera_Pose :=
+     ([Ada.Numerics.Pi, 0.0, 0.0], [0.0, 0.0, 10.0]);
+   Plane_H_B : constant World_To_Camera_Pose :=
+     ([Ada.Numerics.Pi, 0.0, 0.0], [-2.0, 0.0, 10.0]);
+   Plane_H_Ground : constant World_Plane := ([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]);
+
+   procedure Assert_Plane_Map
+     (G : Known_Plane_Homography_Result; P, Q : Image_Point;
+      Tolerance : OpenCV.Float64_Value := 1.0E-11)
+   is
+      M : constant Homography_Point_Result := Map_With_Homography (Normalized_Homography (G), P);
+      B : constant Normalized_Plane_Transfer_Array := Transfer_Normalized_Plane_Points
+        (G, [Normalized_Image_Point (P)]);
+   begin
+      Assert (Defined (G) and then M.Finite and then B (1).Finite, "defined finite plane mapping");
+      for I in 0 .. 1 loop
+         Assert (Near (M.Point (I), Q (I), Tolerance) and then Near (B (1).Point (I), Q (I), Tolerance),
+                 "independent plane projection oracle");
+      end loop;
+   end Assert_Plane_Map;
+
+   procedure Plane_H_Rectified (T : in out Fixture) is
+      pragma Unreferenced (T);
+      G : constant Known_Plane_Homography_Result := Construct_Known_Plane_Homography (Plane_H_A, Plane_H_B, Plane_H_Ground);
+   begin
+      Assert (Disposition (G) = General_Plane_Homography, "general rectified plane");
+      Assert_Plane_Map (G, [0.1, 0.2], [-0.1, 0.2]);
+      Assert_Plane_Map (G, [0.0, -0.3], [-0.2, -0.3]);
+   end Plane_H_Rectified;
+
+   procedure Plane_H_Pixels (T : in out Fixture) is
+      pragma Unreferenced (T);
+      G : constant Known_Plane_Homography_Result := Construct_Known_Plane_Homography (Plane_H_A, Plane_H_B, Plane_H_Ground);
+      H : constant Homography_Matrix := Ideal_Pixel_Homography
+        (G, (1000.0, 1000.0, 320.0, 240.0), (800.0, 700.0, 300.0, 200.0));
+      M : constant Homography_Point_Result := Map_With_Homography (H, [420.0, 440.0]);
+   begin
+      Assert (M.Finite and then Near (M.Point (0), 220.0) and then Near (M.Point (1), 340.0), "independent ideal-pixel oracle");
+      --  Compare projective coefficients only through their common scale.
+      Assert (Near (H (0, 0) / H (2, 2), 0.8) and then Near (H (0, 2) / H (2, 2), -116.0)
+              and then Near (H (1, 1) / H (2, 2), 0.7) and then Near (H (1, 2) / H (2, 2), 32.0), "K2 H K1 inverse order");
+      for Mode in 1 .. 2 loop
+         begin
+            declare
+               Bad : constant Homography_Matrix := Ideal_Pixel_Homography
+                 (G, (if Mode = 1 then Camera_Intrinsics'(0.0, 1.0, 0.0, 0.0)
+                      else Camera_Intrinsics'(1.0E-300, 1.0E300, 0.0, 0.0)), K);
+               pragma Unreferenced (Bad);
+            begin Assert (False, "invalid/unrepresentable pixel matrix accepted"); end;
+         exception when OpenCV.OpenCV_Error => null; end;
+      end loop;
+   end Plane_H_Pixels;
+
+   procedure Plane_H_Rotations (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant World_To_Camera_Pose := ([0.31, -0.22, 0.14], [0.2, -0.3, 1.0]);
+      B : constant World_To_Camera_Pose := ([-0.18, 0.29, -0.24], [-0.7, 0.4, 0.5]);
+      Plane : constant World_Plane := ([0.0, 0.0, 4.0], [-0.2, 0.5, 1.0]);
+      Points : constant Object_Point_Array := [[1.0, 2.0, 3.2], [-2.0, 1.0, 3.1], [0.3, -0.4, 4.26]];
+      G : constant Known_Plane_Homography_Result := Construct_Known_Plane_Homography (A, B, Plane);
+      Back : constant Known_Plane_Homography_Result := Construct_Known_Plane_Homography (B, A, Plane);
+   begin
+      for P of Points loop
+         declare
+            X : constant Image_Point := Plane_Oracle_Pixel (P, A, (1.0, 1.0, 0.0, 0.0), No_Distortion);
+            Y : constant Image_Point := Plane_Oracle_Pixel (P, B, (1.0, 1.0, 0.0, 0.0), No_Distortion);
+         begin
+            Assert_Plane_Map (G, X, Y);
+            Assert_Plane_Map (Back, Y, X);
+         end;
+      end loop;
+   end Plane_H_Rotations;
+
+   procedure Plane_H_Normals (T : in out Fixture) is
+      pragma Unreferenced (T);
+      type Factors is array (Positive range <>) of OpenCV.Float64_Value;
+   begin
+      for F of Factors'[1.0, -1.0, 17.0, 1.0E300] loop
+         declare
+            G : constant Known_Plane_Homography_Result := Construct_Known_Plane_Homography
+              (Plane_H_A, Plane_H_B, ([0.0, 0.0, 0.0], [-0.2 * F, 0.1 * F, F]));
+         begin
+            --  P=(1,-2,.4), z=.2*x-.1*y; depths=9.6.
+            Assert_Plane_Map (G, [1.0 / 9.6, 2.0 / 9.6], [-1.0 / 9.6, 2.0 / 9.6]);
+         end;
+      end loop;
+   end Plane_H_Normals;
+
+   procedure Plane_H_Pure (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant World_To_Camera_Pose := (others => <>);
+      B : constant World_To_Camera_Pose := ([0.0, 0.0, Ada.Numerics.Pi / 2.0], [others => 0.0]);
+   begin
+      for Z in 0 .. 1 loop
+         declare
+            G : constant Known_Plane_Homography_Result := Construct_Known_Plane_Homography
+              (A, B, ([0.0, 0.0, OpenCV.Float64_Value (Z)], [0.0, 0.0, 1.0]));
+         begin
+            Assert (Disposition (G) = Pure_Rotation_Homography, "exact common center before plane degeneracy");
+            Assert_Plane_Map (G, [0.1, 0.2], [-0.2, 0.1]);
+         end;
+      end loop;
+      declare
+         --  Exactly represented nonzero common center C=(0,0,10), rotations
+         --  about world Z leave that axis unchanged; t=(0,0,-10) for both.
+         G : constant Known_Plane_Homography_Result := Construct_Known_Plane_Homography
+           (([others => 0.0], [0.0, 0.0, -10.0]),
+            ([0.0, 0.0, Ada.Numerics.Pi / 2.0], [0.0, 0.0, -10.0]),
+            ([0.0, 0.0, 10.0], [0.0, 0.0, 1.0]));
+      begin
+         Assert (Disposition (G) = Pure_Rotation_Homography, "nonzero exact common center on plane");
+         Assert_Plane_Map (G, [0.1, 0.2], [-0.2, 0.1]);
+      end;
+   end Plane_H_Pure;
+
+   procedure Plane_H_Degenerate (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant World_To_Camera_Pose := (others => <>);
+      B : constant World_To_Camera_Pose := ([others => 0.0], [0.0, 0.0, -2.0]);
+      G : Known_Plane_Homography_Result;
+   begin
+      G := Construct_Known_Plane_Homography (A, B, Plane_H_Ground);
+      Assert (not Defined (G) and then Disposition (G) = Plane_Through_First_Camera_Center, "first center exact plane");
+      G := Construct_Known_Plane_Homography (A, B, ([0.0, 0.0, 2.0], [0.0, 0.0, 1.0]));
+      Assert (not Defined (G) and then Disposition (G) = Plane_Through_Second_Camera_Center, "second center exact plane");
+      G := Construct_Known_Plane_Homography (A, B, ([0.0, 0.0, 1.0E-150], [0.0, 0.0, 1.0]));
+      Assert (Defined (G) and then Disposition (G) = General_Plane_Homography, "no near-plane epsilon");
+      G := Construct_Known_Plane_Homography (A, ([others => 0.0], [-1.0E-150, 0.0, 0.0]),
+                                          ([0.0, 0.0, 1.0], [0.0, 0.0, 1.0]));
+      Assert (Disposition (G) = General_Plane_Homography, "tiny nonzero baseline is not rotation");
+      G := Construct_Known_Plane_Homography
+        (([others => 0.0], [-1.0E12, 0.0, 0.0]), ([others => 0.0], [-1.0E12 - 2.0, 0.0, 0.0]),
+         ([1.0E12, 0.0, 10.0], [0.0, 0.0, 1.0]));
+      Assert_Plane_Map (G, [0.1, 0.2], [-0.1, 0.2]);
+      G := Construct_Known_Plane_Homography
+        (([others => 0.0], [0.0, 0.0, 1.0E308]), ([others => 0.0], [1.0, 0.0, 1.0E308]),
+         ([0.0, 0.0, 1.0E308], [0.0, 0.0, 1.0]));
+      Assert (Disposition (G) = Homography_Numerically_Unavailable, "unrepresentable signed offset");
+      G := Construct_Known_Plane_Homography (A, ([others => 0.0], [1.0E-300, 0.0, 0.0]),
+                                          ([0.0, 0.0, 1.0E300], [0.0, 0.0, 1.0]));
+      Assert (Disposition (G) = Homography_Numerically_Unavailable, "required translation scaling underflow");
+   end Plane_H_Degenerate;
+
+   procedure Plane_H_Transfer (T : in out Fixture) is
+      pragma Unreferenced (T);
+      --  Plane x+z=1, Camera 2 translated by -z: H=[[1,0,0],[0,1,0],[-1,0,0]].
+      G : constant Known_Plane_Homography_Result := Construct_Known_Plane_Homography
+        ((others => <>), ([others => 0.0], [0.0, 0.0, -1.0]), ([0.0, 0.0, 1.0], [1.0, 0.0, 1.0]));
+   begin
+      --  This particular plane contains C2, so use a nondegenerate nearby plane
+      --  with H bottom row [-1,0,1], horizon x=1, and no h22 normalization.
+      Assert (not Defined (G), "second-center plane excluded from ordinary models");
+      declare
+         H : constant Known_Plane_Homography_Result := Construct_Known_Plane_Homography
+           ((others => <>), ([others => 0.0], [0.0, 0.0, -1.0]), ([0.0, 0.0, 2.0], [2.0, 0.0, 1.0]));
+         Points : constant Normalized_Image_Point_Array (Positive'Last - 2 .. Positive'Last) :=
+           [[0.0, 0.2], [0.5, 0.0], [0.25, OpenCV.Float64_Value'Last]];
+         R : constant Normalized_Plane_Transfer_Array := Transfer_Normalized_Plane_Points (H, Points);
+         Empty : constant Normalized_Plane_Transfer_Array := Transfer_Normalized_Plane_Points (H, [9 .. 8 => <>]);
+         Rebased : constant Normalized_Plane_Transfer_Array := Transfer_Normalized_Plane_Points
+           (H, Normalized_Image_Point_Array'(7 => [0.0, 0.2]));
+         Upper : constant Normalized_Plane_Transfer_Array := Transfer_Normalized_Plane_Points
+           (H, Normalized_Image_Point_Array'(Positive'Last => [0.0, 0.2]));
+      begin
+         Assert (R'First = 1 and then R'Last = 3 and then R (1).Finite and then
+                 not R (2).Finite and then not R (3).Finite, "mixed finite horizon and coordinate overflow");
+         Assert (Near (R (1).Point (1), 0.4), "unavailable not a zero-coordinate success");
+         Assert (Empty'First = 1 and then Empty'Last = 0 and then Rebased (1) = R (1) and then Upper (1) = R (1), "positional rebasing and empty");
+      end;
+      declare
+         --  Valid nonsingular general H with h22 exactly zero, no special scale.
+         H : constant Known_Plane_Homography_Result := Construct_Known_Plane_Homography
+           ((others => <>), ([others => 0.0], [1.0, 0.0, -1.0]), ([0.0, 0.0, 1.0], [1.0, 0.0, 1.0]));
+      begin
+         Assert (Defined (H) and then Normalized_Homography (H) (2, 2) = 0.0, "h22 need not be one or nonzero");
+         Assert_Plane_Map (H, [1.0, 0.0], [-3.0, 0.0]);
+      end;
+   end Plane_H_Transfer;
+
+   procedure Plane_H_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      G : Known_Plane_Homography_Result;
+      Bad : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (0));
+   begin
+      for Mode in 1 .. 7 loop
+         begin
+            case Mode is
+               when 1 =>
+                  declare H : constant Homography_Matrix := Normalized_Homography (G); pragma Unreferenced (H);
+                  begin Assert (False, "absent matrix guard"); end;
+               when 2 =>
+                  declare R : constant Normalized_Plane_Transfer_Array := Transfer_Normalized_Plane_Points (G, [1 .. 0 => <>]);
+                     pragma Unreferenced (R);
+                  begin Assert (False, "empty absent model guard"); end;
+               when 3 => G := Construct_Known_Plane_Homography (Plane_H_A, Plane_H_B, ([Bad, 0.0, 0.0], [0.0, 0.0, 1.0]));
+               when 4 => G := Construct_Known_Plane_Homography (Plane_H_A, Plane_H_B, ([others => 0.0], [others => 0.0]));
+               when 5 => G := Construct_Known_Plane_Homography (([Bad, 0.0, 0.0], [others => 0.0]), Plane_H_B, Plane_H_Ground);
+               when 6 => G := Construct_Known_Plane_Homography (Plane_H_A, ([others => 0.0], [0.0, Bad, 0.0]), Plane_H_Ground);
+               when 7 =>
+                  declare
+                     R : constant Normalized_Plane_Transfer_Array := Transfer_Normalized_Plane_Points
+                       (Construct_Known_Plane_Homography (Plane_H_A, Plane_H_B, Plane_H_Ground), [[0.0, 0.0], [Bad, 0.0]]);
+                     pragma Unreferenced (R);
+                  begin Assert (False, "invalid late point accepted"); end;
+            end case;
+            Assert (False, "invalid plane homography request accepted");
+         exception when OpenCV.OpenCV_Error => null; end;
+      end loop;
+   end Plane_H_Invalid;
+
+   procedure Plane_H_Brown (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant World_To_Camera_Pose := ([0.31, -0.22, 0.14], [0.2, -0.3, 1.0]);
+      B : constant World_To_Camera_Pose := ([-0.18, 0.29, -0.24], [-0.7, 0.4, 0.5]);
+      KA : constant Camera_Intrinsics := (1000.0, 1000.0, 320.0, 240.0);
+      KB : constant Camera_Intrinsics := (800.0, 700.0, 300.0, 200.0);
+      DA : constant Distortion_Coefficients := (0.08, -0.02, 0.003, -0.004, 0.005);
+      DB : constant Distortion_Coefficients := (-0.06, 0.013, -0.002, 0.003, -0.001);
+      Plane : constant World_Plane := ([0.0, 0.0, 4.0], [-0.2, 0.5, 1.0]);
+      Points : constant Object_Point_Array := [[1.0, 2.0, 3.2], [-2.0, 1.0, 3.1], [0.3, -0.4, 4.26]];
+      P, Q : Image_Point_Array (Points'Range);
+      G : constant Known_Plane_Homography_Result := Construct_Known_Plane_Homography (A, B, Plane);
+   begin
+      for I in Points'Range loop
+         P (I) := Plane_Oracle_Pixel (Points (I), A, KA, DA);
+         Q (I) := Plane_Oracle_Pixel (Points (I), B, KB, DB);
+      end loop;
+      declare
+         X : constant Normalized_Image_Point_Array := Undistort_To_Normalized (P, KA, DA);
+         Y : constant Normalized_Image_Point_Array := Undistort_To_Normalized (Q, KB, DB);
+      begin
+         for I in X'Range loop Assert_Plane_Map (G, Image_Point (X (I)), Image_Point (Y (I)), 1.0E-9); end loop;
+      end;
+   end Plane_H_Brown;
+
+   procedure Plane_H_Crosscheck (T : in out Fixture) is
+      pragma Unreferenced (T);
+      KA : constant Camera_Intrinsics := (1000.0, 1000.0, 320.0, 240.0);
+      KB : constant Camera_Intrinsics := (800.0, 700.0, 300.0, 200.0);
+      Policy : constant Plane_Correspondence_Verification_Options := ((0.0, 0.0, 100.0, 1.0E-10), 1.0E-8);
+      G : constant Known_Plane_Homography_Result := Construct_Known_Plane_Homography (Plane_H_A, Plane_H_B, Plane_H_Ground);
+      Rays : constant World_Plane_Intersection_Array := Unproject_Pixels_Onto_World_Plane
+        ([[420.0, 440.0]], KA, No_Distortion, Plane_H_A, Plane_H_Ground, Policy.Intersection);
+      Forward : constant Plane_Correspondence_Result_Array := Verify_Plane_Constrained_Correspondences
+        ([[420.0, 440.0]], [[220.0, 340.0]], KA, KB, No_Distortion, No_Distortion, Plane_H_A, Plane_H_B, Plane_H_Ground, Policy);
+      Both : constant Reciprocal_Plane_Result_Array := Verify_Reciprocal_Plane_Correspondences
+        ([[420.0, 440.0]], [[220.0, 340.0]], KA, KB, No_Distortion, No_Distortion, Plane_H_A, Plane_H_B, Plane_H_Ground,
+         (Policy, Policy, 1.0E-8));
+   begin
+      Assert_Plane_Map (G, [0.1, 0.2], [-0.1, 0.2]);
+      Assert (Accepted (Rays (1)) and then Point_Gap (Accepted_World_Position (Rays (1)), [1.0, -2.0, 0.0]) < 1.0E-11,
+              "independent world oracle versus ray-plane");
+      Assert (Accepted (Forward (1)) and then Accepted (Both (1)), "separate forward and reciprocal physical acceptance");
+      declare
+         Reject : Plane_Correspondence_Verification_Options := Policy;
+      begin
+         Reject.Intersection.Maximum_Forward_Range := 1.0;
+         declare
+            R : constant Reciprocal_Plane_Result_Array := Verify_Reciprocal_Plane_Correspondences
+              ([[420.0, 440.0]], [[220.0, 340.0]], KA, KB, No_Distortion, No_Distortion, Plane_H_A, Plane_H_B, Plane_H_Ground,
+               (Policy, Reject, 1.0E-8));
+         begin Assert (not Accepted (R (1)), "correct projective map is not reciprocal range acceptance"); end;
+      end;
+   end Plane_H_Crosscheck;
+
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
+      Result.Add_Test (Caller.Create ("known plane rectified scalar mapping", Plane_H_Rectified'Access));
+      Result.Add_Test (Caller.Create ("known plane independent ideal-pixel calibrations", Plane_H_Pixels'Access));
+      Result.Add_Test (Caller.Create ("known plane noncommuting scalar projection and reversal", Plane_H_Rotations'Access));
+      Result.Add_Test (Caller.Create ("known plane normal sign and extreme magnitude", Plane_H_Normals'Access));
+      Result.Add_Test (Caller.Create ("known plane exact common center pure rotation", Plane_H_Pure'Access));
+      Result.Add_Test (Caller.Create ("known plane degeneracy tiny baseline and representability", Plane_H_Degenerate'Access));
+      Result.Add_Test (Caller.Create ("known plane projective horizon overflow bounds and h22 zero", Plane_H_Transfer'Access));
+      Result.Add_Test (Caller.Create ("known plane invalid input and absent guards", Plane_H_Invalid'Access));
+      Result.Add_Test (Caller.Create ("known plane independent five-coefficient Brown calibration", Plane_H_Brown'Access));
+      Result.Add_Test (Caller.Create ("known plane crosscheck ray forward reciprocal distinct semantics", Plane_H_Crosscheck'Access));
       Result.Add_Test (Caller.Create ("reference batch four hypotheses analytic positional errors", Reference_Batch_Mapping'Access));
       Result.Add_Test (Caller.Create ("reference batch mixed transform and residual unavailability", Reference_Batch_Unavailable'Access));
       Result.Add_Test (Caller.Create ("reference batch native failure atomicity empty and no positive depth", Reference_Batch_Atomic'Access));
