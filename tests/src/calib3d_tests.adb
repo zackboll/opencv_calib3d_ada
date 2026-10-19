@@ -10237,9 +10237,448 @@ package body Calib3D_Tests is
       end;
    end Plane_H_Crosscheck;
 
+   --  Task 028: scalar independent fixtures, with disjoint world-point grids.
+   Consistency_K : constant Camera_Intrinsics := (1.0, 1.0, 0.0, 0.0);
+   Consistency_Policy : constant Plane_Homography_Consistency_Options :=
+     (3000, 1.0E-5, 0.999, 18, 2.0E-6, 2.0E-6, 2.0E-6);
+   procedure Consistency_Data (F1, F2, H1, H2 : out Image_Point_Array) is
+   begin
+      for I in 1 .. F1'Length loop
+         declare
+            X : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((I - 1) mod 6) * 0.11 - 0.29;
+            Y : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((I - 1) / 6) * 0.13 - 0.21;
+         begin
+            F1 (F1'First + (I - 1)) := [X, Y];
+            F2 (F2'First + (I - 1)) := [X - 0.2, Y];
+         end;
+      end loop;
+      for I in 1 .. H1'Length loop
+         declare
+            X : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((I - 1) mod 4) * 0.14 - 0.23;
+            Y : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((I - 1) / 4) * 0.19 - 0.08;
+         begin
+            H1 (H1'First + (I - 1)) := [X, Y];
+            H2 (H2'First + (I - 1)) := [X - 0.2, Y];
+         end;
+      end loop;
+   end Consistency_Data;
+   function Consistency_Request
+     (F1, F2, H1, H2 : Image_Point_Array;
+      O : Plane_Homography_Consistency_Options := Consistency_Policy)
+      return Plane_Homography_Consistency_Result is
+     (Verify_Known_Plane_Homography_Consistency (F1, F2, H1, H2,
+       Consistency_K, Consistency_K, No_Distortion, No_Distortion, Plane_H_A, Plane_H_B, Plane_H_Ground, O));
+
+   procedure Consistency_Exact (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      declare
+         R : constant Plane_Homography_Consistency_Result := Consistency_Request (F1, F2, H1, H2);
+         Copy : constant Plane_Homography_Consistency_Result := R;
+      begin
+         Assert (Accepted (Copy) and then Empirical_Found (Copy) and then Inlier_Count (Copy) >= 18
+                 and then Holdout_Count (Copy) = 8, "owned consistent fit and independent holdout");
+         Assert_Plane_Map (Predicted_Model (Copy), [0.1, 0.2], [-0.1, 0.2]);
+         for D of Holdouts (Copy) loop
+            Assert (Accepted (D) and then Original_Position (D) in 1 .. 8, "all independent held-out observations pass");
+            for M in Plane_Homography_Consistency_Metric loop
+               Assert (Metric_Available (D, M) and then Normalized_Error (D, M) < 2.0E-6, "qualified Float32 fit tolerance");
+            end loop;
+         end loop;
+         declare
+            M : constant Homography_Point_Result := Map_With_Homography (Empirical_Homography (Copy), [0.1, 0.2]);
+         begin Assert (M.Finite and then Near (M.Point (0), -0.1, 2.0E-6), "copied final empirical matrix"); end;
+      end;
+   end Consistency_Exact;
+
+   procedure Consistency_Outliers (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      for I in F2'Range loop
+         if I = 2 or else I = 7 or else I = 15 then F2 (I) := [8.0, -7.0]; end if;
+      end loop;
+      declare
+         R : constant Plane_Homography_Consistency_Result := Consistency_Request (F1, F2, H1, H2);
+         Ids : constant Inlier_Index_Array := Inliers (R);
+      begin
+         Assert (Accepted (R) and then Inlier_Count (R) >= 18, "robust outlier consensus supports independent heldout");
+         for I in Ids'Range loop
+            Assert (Ids (I) in 1 .. 24 and then Ids (I) /= 2 and then Ids (I) /= 7 and then Ids (I) /= 15,
+                    "original final-model fitting identities");
+            if I > 1 then Assert (Ids (I) > Ids (I - 1), "unique ordered original positions"); end if;
+         end loop;
+         Assert (Near (H2 (1) (0), -0.43) and then H2 (1) (1) = -0.08, "fitting corruption did not modify heldout");
+      end;
+   end Consistency_Outliers;
+
+   procedure Consistency_Wrong_Model (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      for P of F2 loop P (0) := P (0) + 0.1; end loop;
+      declare
+         R : constant Plane_Homography_Consistency_Result := Consistency_Request (F1, F2, H1, H2);
+      begin
+         Assert (Empirical_Found (R) and then not Accepted (R), "valid empirical image model is not geometric truth");
+         Assert_Plane_Map (Predicted_Model (R), [0.1, 0.2], [-0.1, 0.2]);
+         for D of Holdouts (R) loop
+            Assert (Normalized_Error (D, Model_Separation) > 0.09 and then
+                    Normalized_Error (D, Predicted_Observed) < 1.0E-10, "separate model disagreement");
+         end loop;
+      end;
+   end Consistency_Wrong_Model;
+
+   procedure Consistency_Holdout_Mismatch (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      H2 (3) (1) := H2 (3) (1) + 0.2;
+      declare
+         R : constant Plane_Homography_Consistency_Result := Consistency_Request (F1, F2, H1, H2);
+         D : constant Plane_Homography_Holdout_Array := Holdouts (R);
+      begin
+         Assert (Disposition (R) = Heldout_Verification_Rejected and then
+                 Disposition (D (3)) = Predicted_Observation_Rejected, "deterministic observation rejection precedence");
+         Assert (Normalized_Error (D (3), Predicted_Observed) > 0.19 and then
+                 Normalized_Error (D (3), Empirical_Observed) > 0.19 and then
+                 Normalized_Error (D (3), Model_Separation) < 2.0E-6, "all independent diagnostics survive rejection");
+         for I in D'Range loop
+            if I /= 3 then Assert (Accepted (D (I)), "neighbor diagnostics retained"); end if;
+         end loop;
+      end;
+   end Consistency_Holdout_Mismatch;
+
+   procedure Consistency_Brown (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant World_To_Camera_Pose := ([0.31, -0.22, 0.14], [0.2, -0.3, 1.0]);
+      B : constant World_To_Camera_Pose := ([-0.18, 0.29, -0.24], [-0.7, 0.4, 0.5]);
+      KA : constant Camera_Intrinsics := (900.0, 870.0, 320.0, 240.0);
+      KB : constant Camera_Intrinsics := (760.0, 810.0, 300.0, 210.0);
+      DA : constant Distortion_Coefficients := (0.012, -0.004, 0.001, -0.002, 0.0003);
+      DB : constant Distortion_Coefficients := (-0.009, 0.003, -0.002, 0.001, -0.0002);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+      procedure Generate (P, Q : out Image_Point_Array; Offset : OpenCV.Float64_Value) is
+      begin
+         for I in P'Range loop
+            declare
+               X : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((I - 1) mod 6) * 0.23 - 0.6 + Offset;
+               Y : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((I - 1) / 6) * 0.25 - 0.4 + Offset;
+               W : constant Object_Point := [X, Y, 4.0 + 0.2 * X - 0.5 * Y];
+            begin
+               P (I) := Plane_Oracle_Pixel (W, A, KA, DA);
+               Q (I) := Plane_Oracle_Pixel (W, B, KB, DB);
+            end;
+         end loop;
+      end Generate;
+   begin
+      Generate (F1, F2, 0.0); Generate (H1, H2, 0.073);
+      declare
+         R : constant Plane_Homography_Consistency_Result := Verify_Known_Plane_Homography_Consistency
+           (F1, F2, H1, H2, KA, KB, DA, DB, A, B, ([0.0, 0.0, 4.0], [-0.2, 0.5, 1.0]), Consistency_Policy);
+      begin Assert (Accepted (R), "independent tilted scalar Brown projections, qualified moderate fixture only"); end;
+   end Consistency_Brown;
+
+   procedure Consistency_Absence (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+      A : constant World_To_Camera_Pose := (others => <>);
+      B : constant World_To_Camera_Pose := ([0.0, 0.0, 0.0], [-2.0, 0.0, -1.0]);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      for Mode in 1 .. 4 loop
+         declare
+            Plane : constant World_Plane :=
+              (if Mode = 1 then ([0.0, 0.0, 0.0], [0.0, 0.0, 1.0])
+               elsif Mode = 2 then ([0.0, 0.0, 1.0], [0.0, 0.0, 1.0])
+               elsif Mode = 3 then ([0.0, 0.0, 1.0E308], [0.0, 0.0, 1.0])
+               else ([0.0, 0.0, 0.0], [0.0, 0.0, 1.0]));
+            First : constant World_To_Camera_Pose :=
+              (if Mode = 3 then World_To_Camera_Pose'([others => 0.0], [0.0, 0.0, 1.0E308]) else A);
+            R : constant Plane_Homography_Consistency_Result := Verify_Known_Plane_Homography_Consistency
+              (F1, (if Mode = 4 then F1 else F2), H1, (if Mode = 4 then H1 else H2),
+               Consistency_K, Consistency_K, No_Distortion, No_Distortion,
+               First, (if Mode = 4 then A elsif Mode = 3 then
+                 World_To_Camera_Pose'([others => 0.0], [1.0, 0.0, 1.0E308]) else B), Plane, Consistency_Policy);
+         begin
+            if Mode = 4 then
+               Assert (Accepted (R) and then Disposition (Predicted_Model (R)) = Pure_Rotation_Homography,
+                       "common-center plane algebraic comparison, no physical intersection claim");
+            else
+               Assert (Disposition (R) = Predicted_Model_Unavailable and then not Accepted (R), "undefined geometry never verified by fit");
+               Assert (Disposition (Predicted_Model (R)) =
+                 (if Mode = 1 then Plane_Through_First_Camera_Center
+                  elsif Mode = 2 then Plane_Through_Second_Camera_Center else Homography_Numerically_Unavailable), "exact Task 027 absence retained");
+            end if;
+         end;
+      end loop;
+      declare
+         Turn : constant World_To_Camera_Pose := ([0.0, 0.0, Ada.Numerics.Pi / 2.0], [others => 0.0]);
+      begin
+         for I in F1'Range loop F2 (I) := [-F1 (I) (1), F1 (I) (0)]; end loop;
+         for I in H1'Range loop H2 (I) := [-H1 (I) (1), H1 (I) (0)]; end loop;
+         declare R : constant Plane_Homography_Consistency_Result := Verify_Known_Plane_Homography_Consistency
+           (F1, F2, H1, H2, Consistency_K, Consistency_K, No_Distortion, No_Distortion,
+            A, Turn, Plane_H_Ground, Consistency_Policy);
+         begin Assert (Accepted (R) and then Disposition (Predicted_Model (R)) = Pure_Rotation_Homography,
+                       "nonidentity exact common-center rotation, plane through common center"); end;
+      end;
+   end Consistency_Absence;
+
+   procedure Consistency_Support (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+      O : Plane_Homography_Consistency_Options := Consistency_Policy;
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      --  Explicit noncollinear five-point subset (not the first grid row).
+      O.Minimum_Final_Fitting_Inliers := 4;
+      declare
+         R : constant Plane_Homography_Consistency_Result := Consistency_Request
+           ([F1 (1), F1 (3), F1 (8), F1 (17), F1 (24)], [F2 (1), F2 (3), F2 (8), F2 (17), F2 (24)], H1, H2, O);
+      begin Assert (Accepted (R), "robust-only exactly five request"); end;
+      F2 (7) := [8.0, -7.0];
+      O.Minimum_Final_Fitting_Inliers := 24;
+      declare R : constant Plane_Homography_Consistency_Result := Consistency_Request (F1, F2, H1, H2, O);
+      begin
+         Assert (Empirical_Found (R) and then Disposition (R) = Insufficient_Empirical_Inliers, "caller requires more final support");
+         Assert (Accepted (Holdouts (R) (1)), "weak support does not erase heldout diagnostics");
+      end;
+      F1 := [others => [0.0, 0.0]]; F2 := F1;
+      declare R : constant Plane_Homography_Consistency_Result := Consistency_Request (F1, F2, H1, H2);
+      begin
+         Assert (Disposition (R) = Empirical_Model_Not_Found and then not Empirical_Found (R) and then
+                 Inlier_Count (R) = 0 and then Inliers (R)'Length = 0, "legitimate native no-model outcome");
+         Assert (Metric_Available (Holdouts (R) (1), Predicted_Observed) and then
+                 not Metric_Available (Holdouts (R) (1), Empirical_Observed), "independent predicted metric on absent empirical");
+         begin declare H : constant Homography_Matrix := Empirical_Homography (R); pragma Unreferenced (H);
+         begin Assert (False, "absent empirical guard"); end; exception when OpenCV.OpenCV_Error => null; end;
+         begin declare V : constant OpenCV.Float64_Value := Normalized_Error (Holdouts (R) (1), Model_Separation); pragma Unreferenced (V);
+         begin Assert (False, "absent residual guard"); end; exception when OpenCV.OpenCV_Error => null; end;
+         begin declare P : constant Normalized_Image_Point := Empirical_Target (Holdouts (R) (1)); pragma Unreferenced (P);
+         begin Assert (False, "absent target guard"); end; exception when OpenCV.OpenCV_Error => null; end;
+      end;
+   end Consistency_Support;
+
+   procedure Consistency_Boundaries (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      for P of F2 loop P (0) := P (0) + 0.01; end loop;
+      H2 (1) (1) := H2 (1) (1) + 0.02;
+      declare
+         Baseline : constant Plane_Homography_Consistency_Result := Consistency_Request (F1, F2, H1 (1 .. 1), H2 (1 .. 1));
+      begin
+         for Metric in Plane_Homography_Consistency_Metric loop
+            declare
+               Measured : constant OpenCV.Float64_Value := Normalized_Error (Holdouts (Baseline) (1), Metric);
+            begin
+               Assert (Measured > 0.0, "positive measured boundary");
+               for Mode in 1 .. 4 loop
+                  declare
+                     O : Plane_Homography_Consistency_Options := (3000, 1.0E-5, 0.999, 18, 1.0, 1.0, 1.0);
+                     Limit : constant OpenCV.Float64_Value :=
+                       (if Mode = 1 then 0.0 elsif Mode = 2 then OpenCV.Float64_Value'Adjacent (Measured, 1.0)
+                        elsif Mode = 3 then Measured else OpenCV.Float64_Value'Adjacent (Measured, 0.0));
+                  begin
+                     case Metric is
+                        when Predicted_Observed => O.Maximum_Predicted_Observed_Error_Normalized := Limit;
+                        when Empirical_Observed => O.Maximum_Empirical_Observed_Error_Normalized := Limit;
+                        when Model_Separation => O.Maximum_Model_Separation_Normalized := Limit;
+                     end case;
+                     declare R : constant Plane_Homography_Consistency_Result := Consistency_Request (F1, F2, H1 (1 .. 1), H2 (1 .. 1), O);
+                     begin
+                        Assert (Normalized_Error (Holdouts (R) (1), Metric) = Measured, "repeat fitting boundary reproducibility for this fixture");
+                        Assert (Accepted (R) = (Mode = 2 or else Mode = 3), "inclusive measured boundary and one represented step above");
+                     end;
+                  end;
+               end loop;
+            end;
+         end loop;
+      end;
+   end Consistency_Boundaries;
+
+   procedure Consistency_Bounds (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1 : Image_Point_Array (7 .. 30);
+      F2 : Image_Point_Array (Positive'Last - 23 .. Positive'Last);
+      H1 : Image_Point_Array (Positive'Last - 7 .. Positive'Last);
+      H2 : Image_Point_Array (43 .. 50);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      declare
+         R : constant Plane_Homography_Consistency_Result := Consistency_Request (F1, F2, H1, H2);
+         D : constant Plane_Homography_Holdout_Array := Holdouts (R);
+      begin
+         Assert (Accepted (R) and then D'First = 1 and then D'Last = 8, "four independent lower bounds including maximum index");
+         for I in D'Range loop Assert (Original_Position (D (I)) = I, "one-based positional identity"); end loop;
+      end;
+   end Consistency_Bounds;
+
+   procedure Consistency_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      pragma Suppress (Validity_Check);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+      Bad : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (0));
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      for Mode in 1 .. 31 loop
+         declare
+            O : Plane_Homography_Consistency_Options := Consistency_Policy;
+            Q : Image_Point_Array := H2;
+            P : Image_Point_Array := F1;
+            K1, K2 : Camera_Intrinsics := Consistency_K;
+            D1, D2 : Distortion_Coefficients := No_Distortion;
+            A, B : World_To_Camera_Pose := Plane_H_A;
+            Plane : World_Plane := Plane_H_Ground;
+         begin
+            case Mode is
+               when 1 => O.Maximum_Model_Separation_Normalized := -1.0;
+               when 2 => O.Maximum_Empirical_Observed_Error_Normalized := -1.0;
+               when 3 => O.Maximum_Predicted_Observed_Error_Normalized := -1.0;
+               when 4 => O.Minimum_Final_Fitting_Inliers := 3;
+               when 5 => O.Minimum_Final_Fitting_Inliers := 25;
+               when 6 => O.RANSAC_Threshold_Normalized := 1.0E-300;
+               when 7 => O.RANSAC_Confidence := 1.0;
+               when 8 => Q (Q'Last) (1) := OpenCV.Float64_Value (Nonfinite (0));
+               when 13 => O.Maximum_Model_Separation_Normalized := Bad;
+               when 14 => O.Maximum_Empirical_Observed_Error_Normalized := Bad;
+               when 15 => O.Maximum_Predicted_Observed_Error_Normalized := Bad;
+               when 16 => O.RANSAC_Threshold_Normalized := Bad;
+               when 17 => O.RANSAC_Threshold_Normalized := 1.0E300;
+               when 18 => O.RANSAC_Threshold_Normalized := 0.0;
+               when 19 => O.RANSAC_Confidence := Bad;
+               when 20 => O.RANSAC_Confidence := 0.0;
+               when 21 => K1.Focal_X := 0.0;
+               when 22 => K2.Center_Y := Bad;
+               when 23 => D1.K1 := Bad;
+               when 24 => D2.K3 := Bad;
+               when 25 => A.Rotation (0) := Bad;
+               when 26 => B.Translation (2) := Bad;
+               when 27 => Plane.Anchor (2) := Bad;
+               when 28 => Plane.Normal := [others => 0.0];
+               when 29 => Plane.Normal (2) := Bad;
+               when 30 => P (P'Last) (0) := Bad;
+               when others => null;
+            end case;
+            begin
+               declare R : constant Plane_Homography_Consistency_Result := Verify_Known_Plane_Homography_Consistency
+                 ((if Mode = 9 then P (1 .. 4) elsif Mode = 10 then P (1 .. 23) elsif Mode = 31 then P (1 .. 0) else P),
+                  (if Mode = 9 then F2 (1 .. 4) else F2),
+                  (if Mode = 11 then H1 (1 .. 0) else H1), (if Mode = 12 then Q (1 .. 7) else Q),
+                  K1, K2, D1, D2, A, B, Plane, O);
+                  pragma Unreferenced (R);
+               begin Assert (False, "invalid full request accepted"); end;
+            exception when OpenCV.OpenCV_Error => null; end;
+         end;
+      end loop;
+   end Consistency_Invalid;
+
+   procedure Consistency_Numerical (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+      O : constant Plane_Homography_Consistency_Options := (3000, 1.0E-5, 0.999, 18, 1.0E308, 1.0E308, 1.0E308);
+      A : constant World_To_Camera_Pose := (others => <>);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      --  Dyadic identity fixture qualifies a genuine zero-limit acceptance.
+      declare
+         Grid : constant Image_Point_Array := [[-0.25, -0.25], [0.25, -0.25], [-0.25, 0.25], [0.25, 0.25], [0.0, 0.0]];
+         R : constant Plane_Homography_Consistency_Result := Verify_Known_Plane_Homography_Consistency
+           (Grid, Grid, [[0.0, 0.0]], [[0.0, 0.0]], Consistency_K, Consistency_K,
+            No_Distortion, No_Distortion, A, A, Plane_H_Ground, (3000, 1.0E-5, 0.999, 4, 0.0, 1.0E-10, 1.0E-10));
+      begin
+         Assert (Accepted (R) and then Normalized_Error (Holdouts (R) (1), Predicted_Observed) = 0.0,
+                 "exact zero predicted residual passes zero limit without epsilon");
+      end;
+      --  Identity plane map: normalized undistortion remains finite even at
+      --  huge coordinates, and finite endpoints can have an overflowing gap.
+      declare
+         R : constant Plane_Homography_Consistency_Result := Verify_Known_Plane_Homography_Consistency
+           (F1, F1, [[0.1, 0.2], [1.0E308, 0.0], [0.0, 0.0]],
+            [[0.1, 0.2], [-1.0E308, 0.0], [1.0E-200, 0.0]],
+            Consistency_K, Consistency_K, No_Distortion, No_Distortion, A, A, Plane_H_Ground, O);
+         D : constant Plane_Homography_Holdout_Array := Holdouts (R);
+      begin
+         Assert (Accepted (D (1)), "valid neighbor survives residual overflow");
+         Assert (Predicted_Target_Available (D (2)) and then not Metric_Available (D (2), Predicted_Observed),
+                 "finite endpoints but unrepresentable difference");
+         Assert (Normalized_Error (D (3), Predicted_Observed) = 1.0E-200, "tiny positive norm does not underflow to zero");
+         Assert (Normalized_Error (D (1), Predicted_Observed) = 0.0, "exact zero norm");
+      end;
+      --  Tiny geometric shift is nonzero algebraic evidence, never clamped.
+      declare
+         R : constant Plane_Homography_Consistency_Result := Verify_Known_Plane_Homography_Consistency
+           (F1, F1, [[0.0, 0.0]], [[0.0, 0.0]], Consistency_K, Consistency_K,
+            No_Distortion, No_Distortion, A, ([others => 0.0], [-1.0E-150, 0.0, 0.0]),
+            ([0.0, 0.0, 1.0], [0.0, 0.0, 1.0]), O);
+      begin
+         Assert (Normalized_Error (Holdouts (R) (1), Predicted_Observed) = 1.0E-150 and then
+                 Normalized_Error (Holdouts (R) (1), Model_Separation) > 0.0, "tiny positive model disagreement retained");
+      end;
+      --  General plane H has denominator .5-x, horizon x=.5.
+      for I in F1'Range loop
+         F2 (I) := [F1 (I) (0) / (0.5 - F1 (I) (0)), F1 (I) (1) / (0.5 - F1 (I) (0))];
+      end loop;
+      declare
+         R : constant Plane_Homography_Consistency_Result := Verify_Known_Plane_Homography_Consistency
+           (F1, F2, [[0.0, 0.1], [0.5, 0.0], [0.25, OpenCV.Float64_Value'Last]],
+            [[0.0, 0.2], [0.0, 0.0], [0.0, 0.0]],
+            Consistency_K, Consistency_K, No_Distortion, No_Distortion,
+            A, ([others => 0.0], [0.0, 0.0, -1.0]), ([0.0, 0.0, 2.0], [2.0, 0.0, 1.0]), Consistency_Policy);
+         D : constant Plane_Homography_Holdout_Array := Holdouts (R);
+      begin
+         Assert (Empirical_Found (R) and then Accepted (D (1)) and then not Accepted (R), "mixed finite and horizon transfers");
+         Assert (Disposition (D (2)) = Predicted_Transfer_Unavailable and then
+                 not Predicted_Target_Available (D (3)), "projective absence distinct from false zero evidence");
+         begin declare P : constant Normalized_Image_Point := Predicted_Target (D (2)); pragma Unreferenced (P);
+         begin Assert (False, "unavailable predicted target unguarded"); end; exception when OpenCV.OpenCV_Error => null; end;
+      end;
+      --  Reverse roles: prediction is identity while empirical model alone
+      --  has the horizon. Its independently finite observation error remains.
+      declare
+         R : constant Plane_Homography_Consistency_Result := Verify_Known_Plane_Homography_Consistency
+           (F1, F2, [[0.0, 0.1], [0.25, OpenCV.Float64_Value'Last]],
+            [[0.0, 0.1], [0.0, 0.0]], Consistency_K, Consistency_K, No_Distortion, No_Distortion,
+            A, A, Plane_H_Ground, O);
+         D : constant Plane_Homography_Holdout_Array := Holdouts (R);
+      begin
+         Assert (Predicted_Target_Available (D (2)) and then not Empirical_Target_Available (D (2)) and then
+                 Disposition (D (2)) = Empirical_Transfer_Unavailable and then Metric_Available (D (2), Predicted_Observed),
+                 "empirical-only mapping overflow preserves predicted diagnostics");
+      end;
+   end Consistency_Numerical;
+
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
+      Result.Add_Test (Caller.Create ("plane consistency exact independent fit heldout and ownership", Consistency_Exact'Access));
+      Result.Add_Test (Caller.Create ("plane consistency fitting outliers final inlier provenance", Consistency_Outliers'Access));
+      Result.Add_Test (Caller.Create ("plane consistency valid empirical wrong physical geometry", Consistency_Wrong_Model'Access));
+      Result.Add_Test (Caller.Create ("plane consistency heldout mismatch preserves three metrics", Consistency_Holdout_Mismatch'Access));
+      Result.Add_Test (Caller.Create ("plane consistency tilted noncommuting independent Brown cameras", Consistency_Brown'Access));
+      Result.Add_Test (Caller.Create ("plane consistency pure rotation and exact geometric absence", Consistency_Absence'Access));
+      Result.Add_Test (Caller.Create ("plane consistency five point weak support no model and guards", Consistency_Support'Access));
+      Result.Add_Test (Caller.Create ("plane consistency three inclusive adjacent metric boundaries", Consistency_Boundaries'Access));
+      Result.Add_Test (Caller.Create ("plane consistency independent array bounds maximum index", Consistency_Bounds'Access));
+      Result.Add_Test (Caller.Create ("plane consistency complete malformed request rejection", Consistency_Invalid'Access));
+      Result.Add_Test (Caller.Create ("plane consistency horizon overflow zero tiny normalized residuals", Consistency_Numerical'Access));
       Result.Add_Test (Caller.Create ("known plane rectified scalar mapping", Plane_H_Rectified'Access));
       Result.Add_Test (Caller.Create ("known plane independent ideal-pixel calibrations", Plane_H_Pixels'Access));
       Result.Add_Test (Caller.Create ("known plane noncommuting scalar projection and reversal", Plane_H_Rotations'Access));

@@ -1,5 +1,25 @@
 # Architecture
 
+## Held-out plane-homography model consistency (Task 028)
+
+Full request preflight precedes native geometry or calibration. One Task 027
+construction retains its exact geometric outcome. If defined, four whole-array
+`Undistort_To_Normalized` calls independently calibrate each camera and data split.
+Only the fitting split enters the single `Estimate_Homography_RANSAC`; structural
+Image_Point conversion does not change its normalized coordinate domain. The
+legacy threshold field receives normalized units, with the existing Float32 policy.
+The local controlled estimate supplies copied final matrix/inlier identities to
+an owned discriminated Ada aggregate; no pointer or limited object escapes.
+
+One public predicted batch transfer and existing empirical projective mapping
+feed three independently guarded scaled residuals. Native calls/accessors never
+enter arithmetic-unavailability handlers. Deterministic rejection precedence does
+not suppress other available metrics; every held-out pair must pass every explicit
+inclusive gate. No depth/FOV/physical intersection claim is added. Undefined models
+short-circuit without fitting. No production C++, dependency, Core ownership,
+private 48-operation ABI, or Windows policy changes. See
+[contract](plane-homography-consistency-contract.md).
+
 ## Known-pose plane homography (Task 027)
 
 Ada-only construction reuses `Measure_Camera_Motion` (native pose inversion and

@@ -1160,6 +1160,201 @@ package body OpenCV.Calib3D is
       end return;
    end Transfer_Normalized_Plane_Points;
 
+   function Disposition (Result : Plane_Homography_Consistency_Result)
+      return Plane_Homography_Consistency_Disposition is (Result.State);
+   function Predicted_Model (Result : Plane_Homography_Consistency_Result)
+      return Known_Plane_Homography_Result is (Result.Geometry);
+   function Empirical_Found (Result : Plane_Homography_Consistency_Result) return Boolean is (Result.Has_Empirical);
+   function Empirical_Homography (Result : Plane_Homography_Consistency_Result) return Homography_Matrix is
+   begin
+      if not Result.Has_Empirical then
+         raise OpenCV.OpenCV_Error with "Empirical homography unavailable";
+      end if;
+      return Result.Matrix;
+   end Empirical_Homography;
+   function Inlier_Count (Result : Plane_Homography_Consistency_Result) return Natural is (Result.Fitting_Count);
+   function Inliers (Result : Plane_Homography_Consistency_Result) return Inlier_Index_Array is (Result.Positions);
+   function Holdout_Count (Result : Plane_Homography_Consistency_Result) return Natural is (Result.Heldout_Count);
+   function Holdouts (Result : Plane_Homography_Consistency_Result) return Plane_Homography_Holdout_Array is (Result.Diagnostics);
+   function Accepted (Result : Plane_Homography_Consistency_Result) return Boolean is
+     (Result.State = Plane_Homography_Consistency_Accepted);
+   function Disposition (Result : Plane_Homography_Holdout_Result) return Plane_Homography_Holdout_Disposition is (Result.State);
+   function Original_Position (Result : Plane_Homography_Holdout_Result) return Positive is (Result.Position);
+   function Predicted_Target_Available (Result : Plane_Homography_Holdout_Result) return Boolean is (Result.Predicted.Finite);
+   function Empirical_Target_Available (Result : Plane_Homography_Holdout_Result) return Boolean is (Result.Empirical.Finite);
+   function Predicted_Target (Result : Plane_Homography_Holdout_Result) return Normalized_Image_Point is
+   begin
+      if not Result.Predicted.Finite then raise OpenCV.OpenCV_Error with "Predicted transfer unavailable"; end if;
+      return Result.Predicted.Point;
+   end Predicted_Target;
+   function Empirical_Target (Result : Plane_Homography_Holdout_Result) return Normalized_Image_Point is
+   begin
+      if not Result.Empirical.Finite then raise OpenCV.OpenCV_Error with "Empirical transfer unavailable"; end if;
+      return Result.Empirical.Point;
+   end Empirical_Target;
+   function Metric_Available
+     (Result : Plane_Homography_Holdout_Result; Metric : Plane_Homography_Consistency_Metric) return Boolean is
+     (Result.Available (Metric));
+   function Normalized_Error
+     (Result : Plane_Homography_Holdout_Result; Metric : Plane_Homography_Consistency_Metric)
+      return OpenCV.Float64_Value is
+   begin
+      if not Result.Available (Metric) then raise OpenCV.OpenCV_Error with "Normalized residual unavailable"; end if;
+      return Result.Errors (Metric);
+   end Normalized_Error;
+   function Accepted (Result : Plane_Homography_Holdout_Result) return Boolean is
+     (Result.State = Holdout_Consistency_Accepted);
+
+   --  Only checked Ada subtraction/norm arithmetic lives inside this handler.
+   --  Scale before squaring: retain tiny nonzero and large finite residuals.
+   procedure Evaluate_Normalized_Residual
+     (Left, Right : Normalized_Image_Point; Result : in out Plane_Homography_Holdout_Result;
+      Metric : Plane_Homography_Consistency_Metric)
+   is
+      use Plane_Projective_Arithmetic;
+      DX, DY, Scale, Value : OpenCV.Float64_Value;
+   begin
+      DX := Difference (Left (0), Right (0));
+      DY := Difference (Left (1), Right (1));
+      Scale := OpenCV.Float64_Value'Max (abs DX, abs DY);
+      if Scale = 0.0 then
+         Value := 0.0;
+      else
+         Value := Product (Scale, Math.Sqrt ((DX / Scale) ** 2 + (DY / Scale) ** 2));
+      end if;
+      Result.Errors (Metric) := Value;
+      Result.Available (Metric) := True;
+   exception
+      when Unavailable | Constraint_Error => null;
+   end Evaluate_Normalized_Residual;
+
+   function Verify_Known_Plane_Homography_Consistency
+     (Fitting_First_Pixels, Fitting_Second_Pixels : Image_Point_Array;
+      Holdout_First_Pixels, Holdout_Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose : World_To_Camera_Pose;
+      Plane : World_Plane; Options : Plane_Homography_Consistency_Options)
+      return Plane_Homography_Consistency_Result
+   is
+      Limits : constant Consistency_Metric_Values :=
+        [Options.Maximum_Predicted_Observed_Error_Normalized,
+         Options.Maximum_Empirical_Observed_Error_Normalized,
+         Options.Maximum_Model_Separation_Normalized];
+      --  Structural Image_Point storage only: these values are NORMALIZED,
+      --  so the legacy estimator's Pixels field receives normalized units.
+      function Estimator_Points (Points : Normalized_Image_Point_Array) return Image_Point_Array is
+      begin
+         return Result : Image_Point_Array (1 .. Points'Length) do
+            for I in Result'Range loop Result (I) := Image_Point (Points (Points'First + (I - 1))); end loop;
+         end return;
+      end Estimator_Points;
+   begin
+      if Fitting_First_Pixels'Length /= Fitting_Second_Pixels'Length or else
+        Fitting_First_Pixels'Length < 5 or else Fitting_First_Pixels'Length > Interfaces.Integer_32'Last or else
+        Holdout_First_Pixels'Length /= Holdout_Second_Pixels'Length or else
+        Holdout_First_Pixels'Length = 0 or else Holdout_First_Pixels'Length > Interfaces.Integer_32'Last
+      then
+         raise OpenCV.OpenCV_Error with "Consistency requires matched fitting >=5 and held-out >=1 counts fitting INT32";
+      end if;
+      Validate (Fitting_First_Pixels); Validate (Fitting_Second_Pixels);
+      Validate (Holdout_First_Pixels); Validate (Holdout_Second_Pixels);
+      Validate (First_Intrinsics); Validate (Second_Intrinsics);
+      Validate (First_Distortion); Validate (Second_Distortion);
+      Validate (First_Pose); Validate (Second_Pose);
+      Validate_Vector (Plane.Anchor); Validate_Vector (Object_Point (Plane.Normal));
+      if (for all V of Plane.Normal => V = 0.0) then
+         raise OpenCV.OpenCV_Error with "Plane normal must be nonzero";
+      end if;
+      Validate (RANSAC_Options'(Options.Maximum_RANSAC_Iterations,
+                Options.RANSAC_Threshold_Normalized, Options.RANSAC_Confidence));
+      if Options.Minimum_Final_Fitting_Inliers < 4 or else
+        Options.Minimum_Final_Fitting_Inliers > Fitting_First_Pixels'Length
+      then raise OpenCV.OpenCV_Error with "Minimum fitting support must be 4..fitting count"; end if;
+      for Limit of Limits loop
+         if not Is_Finite (Limit) or else Limit < 0.0 then
+            raise OpenCV.OpenCV_Error with "Normalized comparison limits must be finite and nonnegative";
+         end if;
+      end loop;
+      --  All request validation precedes the first native-backed operation.
+      declare
+         Geometry : constant Known_Plane_Homography_Result := Construct_Known_Plane_Homography
+           (First_Pose, Second_Pose, Plane);
+      begin
+         if not Defined (Geometry) then
+            return Result : Plane_Homography_Consistency_Result (0, Holdout_First_Pixels'Length) do
+               Result.Geometry := Geometry;
+               for I in Result.Diagnostics'Range loop Result.Diagnostics (I).Position := I; end loop;
+            end return;
+         end if;
+         declare
+            Fit_First : constant Normalized_Image_Point_Array := Undistort_To_Normalized
+              (Fitting_First_Pixels, First_Intrinsics, First_Distortion);
+            Fit_Second : constant Normalized_Image_Point_Array := Undistort_To_Normalized
+              (Fitting_Second_Pixels, Second_Intrinsics, Second_Distortion);
+            Estimate : constant Homography_Estimate := Estimate_Homography_RANSAC
+              (Estimator_Points (Fit_First), Estimator_Points (Fit_Second),
+               (Options.Maximum_RANSAC_Iterations, Options.RANSAC_Threshold_Normalized, Options.RANSAC_Confidence));
+            Held_First : constant Normalized_Image_Point_Array := Undistort_To_Normalized
+              (Holdout_First_Pixels, First_Intrinsics, First_Distortion);
+            Held_Second : constant Normalized_Image_Point_Array := Undistort_To_Normalized
+              (Holdout_Second_Pixels, Second_Intrinsics, Second_Distortion);
+            Predicted : constant Normalized_Plane_Transfer_Array := Transfer_Normalized_Plane_Points (Geometry, Held_First);
+         begin
+            return Result : Plane_Homography_Consistency_Result (Inlier_Count (Estimate), Held_First'Length) do
+               Result.Geometry := Geometry;
+               Result.Has_Empirical := Found (Estimate);
+               Result.Positions := Inliers (Estimate);
+               if Result.Has_Empirical then Result.Matrix := Homography (Estimate); end if;
+               for I in Result.Diagnostics'Range loop
+                  declare
+                     D : Plane_Homography_Holdout_Result renames Result.Diagnostics (I);
+                     P : constant Normalized_Plane_Transfer := Predicted (I);
+                  begin
+                     D.Position := I;
+                     D.Predicted := Predicted (I);
+                     if Result.Has_Empirical then
+                        declare
+                           M : constant Homography_Point_Result := Map_With_Homography (Result.Matrix, Image_Point (Held_First (I)));
+                        begin
+                           if M.Finite then D.Empirical := (True, Normalized_Image_Point (M.Point)); end if;
+                        end;
+                     end if;
+                     --  Independently evaluate every available metric BEFORE
+                     --  deterministic summary precedence. No limit short-circuit.
+                     declare
+                        E : constant Normalized_Plane_Transfer := D.Empirical;
+                     begin
+                        if P.Finite then
+                           Evaluate_Normalized_Residual (P.Point, Held_Second (I), D, Predicted_Observed);
+                        end if;
+                        if E.Finite then
+                           Evaluate_Normalized_Residual (E.Point, Held_Second (I), D, Empirical_Observed);
+                        end if;
+                        if P.Finite and then E.Finite then
+                           Evaluate_Normalized_Residual (P.Point, E.Point, D, Model_Separation);
+                        end if;
+                     end;
+                     D.State :=
+                       (if not D.Predicted.Finite then Predicted_Transfer_Unavailable
+                        elsif not D.Empirical.Finite then Empirical_Transfer_Unavailable
+                        elsif (for some Flag of D.Available => not Flag) then Holdout_Arithmetic_Unavailable
+                        elsif D.Errors (Predicted_Observed) > Limits (Predicted_Observed) then Predicted_Observation_Rejected
+                        elsif D.Errors (Empirical_Observed) > Limits (Empirical_Observed) then Empirical_Observation_Rejected
+                        elsif D.Errors (Model_Separation) > Limits (Model_Separation) then Model_Agreement_Rejected
+                        else Holdout_Consistency_Accepted);
+                  end;
+               end loop;
+               Result.State :=
+                 (if not Result.Has_Empirical then Empirical_Model_Not_Found
+                  elsif Result.Fitting_Count < Options.Minimum_Final_Fitting_Inliers then Insufficient_Empirical_Inliers
+                  elsif (for some D of Result.Diagnostics => not Accepted (D)) then Heldout_Verification_Rejected
+                  else Plane_Homography_Consistency_Accepted);
+            end return;
+         end;
+      end;
+   end Verify_Known_Plane_Homography_Consistency;
+
    function Essential_From_Camera_Poses
      (First, Second : World_To_Camera_Pose) return Known_Pose_Essential_Result
    is

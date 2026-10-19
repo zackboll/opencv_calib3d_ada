@@ -11,7 +11,8 @@ project Opencv_Calib3D_Examples is
                    "relative_motion_synthetic.adb", "metric_triangulation_synthetic.adb", "metric_refinement_synthetic.adb",
                      "landmark_relocalization_synthetic.adb", "known_pose_epipolar_synthetic.adb", "three_view_landmarks_synthetic.adb",
                      "ray_plane_unprojection_synthetic.adb", "plane_correspondence_synthetic.adb",
-                     "reciprocal_plane_correspondence_synthetic.adb", "known_plane_homography_synthetic.adb");
+                     "reciprocal_plane_correspondence_synthetic.adb", "known_plane_homography_synthetic.adb",
+                     "plane_homography_consistency_synthetic.adb");
    for Create_Missing_Dirs use "True";
    package Compiler is
       for Default_Switches ("Ada") use

@@ -1,5 +1,28 @@
 # Coverage
 
+## Task 028 held-out plane-homography consistency
+
+252 AUnit registrations preserve all 241 baseline expressions and add eleven
+cohesive groups: independent 24-point fitting/eight-point holdout scalar planar
+oracles; fitting outliers/final inlier provenance; valid but geometrically shifted
+empirical model; one held-out mismatch with all three diagnostics retained;
+noncommuting independent all-five Brown calibrations and tilted plane; pure
+rotation/through-center/numerical absence; exactly-five robust fitting, weak support,
+no-model and accessor guards; all three inclusive/adjacent measured thresholds;
+four independent array bounds including Positive'Last; invalid complete requests;
+and zero/tiny/overflow residuals and mixed finite/horizon/overflow transfers.
+Measured boundaries qualify comparison semantics, not estimator accuracy.
+
+The sixteenth example asserts all five synthetic scenarios, printing owned
+diagnostics and accepted maxima. Actual-shim fault coverage adds 80 reachable
+pipeline faults plus ten separately isolated second-camera undistortion faults.
+First-hit hooks do not claim to reach later calibration calls; found/count native
+accessors have no injection checkpoint. No synthetic mapping hook is added.
+Source tests enforce one construction/fit/predicted batch, four calibration batches,
+preflight, no leakage, independent metrics, and no native arithmetic handler.
+Inventory alone is not execution evidence; see
+[qualification/developer review](plane-homography-consistency-validation.md).
+
 ## Task 027 known-pose plane homography
 
 241 AUnit registrations preserve all 231 baseline expressions and add ten grouped

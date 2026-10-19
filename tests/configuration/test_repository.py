@@ -8,6 +8,42 @@ from workflow_topology import check_topology  # noqa: E402
 
 
 class RepositoryTests(unittest.TestCase):
+    def test_plane_consistency_normalized_batches_and_separation(self):
+        text = (ROOT / "src/opencv-calib3d.adb").read_text()
+        start = text.index("   function Verify_Known_Plane_Homography_Consistency")
+        stop = text.index("   end Verify_Known_Plane_Homography_Consistency;", start)
+        operation = text[start:stop]
+        self.assertEqual(operation.count(":= Construct_Known_Plane_Homography"), 1)
+        self.assertEqual(operation.count(":= Undistort_To_Normalized"), 4)
+        self.assertEqual(operation.count(":= Estimate_Homography_RANSAC"), 1)
+        self.assertEqual(operation.count(":= Transfer_Normalized_Plane_Points"), 1)
+        estimate = operation[operation.index("Estimate : constant"):operation.index("Held_First : constant")]
+        self.assertIn("Estimator_Points (Fit_First), Estimator_Points (Fit_Second)", estimate)
+        self.assertNotIn("Holdout", estimate)
+        self.assertNotIn("Held_", estimate)
+        for validation in ("Validate (Holdout_Second_Pixels)", "Validate (Second_Distortion)",
+                           "Validate (Second_Pose)", "for Limit of Limits loop",
+                           "Options.Minimum_Final_Fitting_Inliers >", "Validate (RANSAC_Options'"):
+            self.assertLess(operation.index(validation), operation.index(":= Construct_Known_Plane_Homography"))
+        loop = operation[operation.index("for I in Result.Diagnostics'Range", operation.index("Estimate : constant")):]
+        self.assertNotIn("Undistort_To_Normalized", loop)
+        self.assertNotIn("Estimate_Homography_RANSAC", loop)
+        self.assertEqual(loop.count("Evaluate_Normalized_Residual ("), 3)
+        self.assertLess(loop.index("D, Model_Separation)"), loop.index("D.State :="))
+        self.assertNotIn("exception", operation)
+        for forbidden in ("C.", "Ideal_Pixel_Homography", "Project_Points", "when OpenCV"):
+            self.assertNotIn(forbidden, operation)
+
+    def test_plane_consistency_baseline_preserved_and_example_registered(self):
+        tests = (ROOT / "tests/src/calib3d_tests.adb").read_text()
+        self.assertEqual(tests.count("Result.Add_Test (Caller.Create (\"plane consistency"), 11)
+        for name in ("cross-platform.yml", "opencv-compatibility.yml"):
+            self.assertIn("bin/plane_homography_consistency_synthetic",
+                          (ROOT / ".github/workflows" / name).read_text())
+        contract = (ROOT / "docs/plane-homography-consistency-contract.md").read_text()
+        for limitation in ("statistical", "Float32", "not pixels", "posterior", "physical"):
+            self.assertIn(limitation, contract)
+
     def test_known_plane_reuses_geometry_and_public_mapping(self):
         text = (ROOT / "src/opencv-calib3d.adb").read_text()
         start = text.index("   function Construct_Known_Plane_Homography")
@@ -25,7 +61,7 @@ class RepositoryTests(unittest.TestCase):
         self.assertLess(construction.index("not Motion.Baseline_Direction_Defined"),
                         construction.index("if D1 = 0.0"))
         start = text.index("   function Transfer_Normalized_Plane_Points")
-        stop = text.index("   function Essential_From_Camera_Poses", start)
+        stop = text.index("   end Transfer_Normalized_Plane_Points;", start)
         transfer = text[start:stop]
         self.assertIn("Map_With_Homography", transfer)
         self.assertIn("Points'First + (I - 1)", transfer)
