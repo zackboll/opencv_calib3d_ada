@@ -1,5 +1,24 @@
 # Architecture
 
+## Known-pose plane homography (Task 027)
+
+Ada-only construction reuses `Measure_Camera_Motion` (native pose inversion and
+composition, camera centers), Rodrigues rotation and world-to-camera normal
+conversion. `H12 ~ d1*R21+t21*n1^T` uses second-camera-frame translation and a
+robustly normalized world normal. Exact common centers precede through-center
+plane dispositions. A private arithmetic-only package checks scale, coefficients,
+offsets, underflow and matrix products; its exception handlers contain no native
+calls or guarded reads. Native errors remain `OpenCV_Error`, not numerical absence.
+
+Owned private results guard normalized matrices; discriminated transfer values
+guard coordinates. Transfer validates the entire batch then delegates to existing
+`Map_With_Homography`, preserving positional order including extreme Ada bounds.
+Ideal-pixel conversion uses scaled `K2 * H * adjugate(K1)` and independent validated
+calibrations; no Brown implementation or raw-distorted-pixel homography claim.
+Public `Homography_Matrix` remains unchanged, without h22 normalization.
+No private ABI, Core ownership, dependency or Windows-policy change. See
+[contract](known-plane-homography-contract.md).
+
 ## Reciprocal plane correspondence verification (Task 026)
 
 Complete validation of both directional policies precedes either Task 025 call.

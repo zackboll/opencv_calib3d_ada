@@ -34,6 +34,36 @@ procedure Run_Refinement_Faults is
    end Check;
 begin
    declare
+      A : constant World_To_Camera_Pose := (others => <>);
+      B : constant World_To_Camera_Pose := ([0.1, -0.2, 0.3], [-1.0, 0.2, 0.1]);
+      Plane : constant World_Plane := ([0.0, 0.0, 4.0], [0.0, 0.0, 1.0]);
+      Saved : Known_Plane_Homography_Result := Construct_Known_Plane_Homography (A, B, Plane);
+      Previous : constant Known_Plane_Homography_Result := Saved;
+      type Stages is array (Positive range <>) of Interfaces.C.int;
+   begin
+      for Stage of Stages'[3, 4, 15, 16, 54, 55, 56, 57] loop
+         for Kind in Interfaces.C.int range 1 .. 5 loop
+            Fail (Stage, Kind);
+            --  Pure Ada transfer cannot consume any armed native checkpoint.
+            declare
+               M : constant Normalized_Plane_Transfer_Array := Transfer_Normalized_Plane_Points (Saved, [[0.1, 0.2]]);
+            begin Check (M (1).Finite, "fault-armed algebraic transfer"); end;
+            begin
+               Saved := Construct_Known_Plane_Homography (A, B, ([others => 0.0], [others => 0.0]));
+               raise Program_Error with "invalid normal entered native construction";
+            exception when OpenCV.OpenCV_Error => null; end;
+            begin
+               Saved := Construct_Known_Plane_Homography (A, B, Plane);
+               raise Program_Error with "known-plane native fault swallowed";
+            exception when OpenCV.OpenCV_Error => null; end;
+            Check (Saved = Previous, "known-plane failed assignment published a partial result");
+            Saved := Construct_Known_Plane_Homography (A, B, Plane);
+            Check (Saved = Previous and then Defined (Saved), "known-plane healthy recovery");
+         end loop;
+      end loop;
+      Ada.Text_IO.Put_Line ("PASS: known-plane 40 native faults; prevalidation, native-free transfer, assignment atomicity, recovery");
+   end;
+   declare
       Plane : constant World_Plane := ([0.0, 0.0, 10.0], [0.0, 0.0, 1.0]);
       Direction_Policy : constant Plane_Correspondence_Verification_Options := ((0.0, 0.0, 100.0, 1.0E-10), 1.0E-8);
       Policy : constant Reciprocal_Plane_Verification_Options := (Direction_Policy, Direction_Policy, 1.0E-8);

@@ -8,6 +8,39 @@ from workflow_topology import check_topology  # noqa: E402
 
 
 class RepositoryTests(unittest.TestCase):
+    def test_known_plane_reuses_geometry_and_public_mapping(self):
+        text = (ROOT / "src/opencv-calib3d.adb").read_text()
+        start = text.index("   function Construct_Known_Plane_Homography")
+        stop = text.index("   function Ideal_Pixel_Homography", start)
+        construction = text[start:stop]
+        for reused in ("Unit_Vector", "Measure_Camera_Motion", "Rotation_Matrix_Of",
+                       "World_To_Camera_Direction"):
+            self.assertIn(reused, construction)
+        native_end = construction.index("N1 : constant Camera_Direction")
+        handler_start = construction.index("         begin", native_end)
+        self.assertNotIn("when OpenCV", construction)
+        for forbidden in ("C.", "Compose_Poses (", "Camera_Center (", "Rotation_Matrix_Of",
+                          "World_To_Camera_Direction", "Estimate_Homography"):
+            self.assertNotIn(forbidden, construction[handler_start:])
+        self.assertLess(construction.index("not Motion.Baseline_Direction_Defined"),
+                        construction.index("if D1 = 0.0"))
+        start = text.index("   function Transfer_Normalized_Plane_Points")
+        stop = text.index("   function Essential_From_Camera_Poses", start)
+        transfer = text[start:stop]
+        self.assertIn("Map_With_Homography", transfer)
+        self.assertIn("Points'First + (I - 1)", transfer)
+        self.assertLess(transfer.index("Is_Finite"), transfer.index("Map_With_Homography"))
+        self.assertNotIn("C.", transfer)
+        self.assertNotIn("exception", transfer)
+
+    def test_known_plane_example_in_hosted_qualification(self):
+        for name in ("cross-platform.yml", "opencv-compatibility.yml"):
+            text = (ROOT / ".github/workflows" / name).read_text()
+            self.assertIn("bin/known_plane_homography_synthetic", text)
+        contract = (ROOT / "docs/known-plane-homography-contract.md").read_text()
+        self.assertIn("raw Brown-distorted", contract)
+        self.assertIn("does not test positive depth", contract)
+
     def test_reciprocal_validation_batches_and_arithmetic_isolation(self):
         text = (ROOT / "src/opencv-calib3d.adb").read_text()
         start = text.index("   function Verify_Reciprocal_Plane_Correspondences")

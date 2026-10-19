@@ -1,5 +1,17 @@
 # Roadmap
 
+## Task 027 approved scope
+
+Known-pose, known-Cartesian-plane homography construction only: normalized mapping,
+exact pure rotation/through-center dispositions, checked projective representation,
+independent-intrinsics ideal-pixel conversion and algebraic normalized point batches.
+No correspondence estimator, image warp, terrain lookup, pose/plane fitting,
+distortion matrix approximation, refinement, navigation or uncertainty estimator.
+Task 024–026 physical acceptance contracts remain distinct and authoritative.
+ABI stays at 48 operations; fifteen examples; Windows qualification after merge only.
+Stop at independent review. See [contract](known-plane-homography-contract.md) and
+[qualification](known-plane-homography-validation.md).
+
 ## Task 026 approved scope
 
 Reciprocal supplied-plane correspondence verification only: Task 025 once per

@@ -1,5 +1,26 @@
 # Coverage
 
+## Task 027 known-pose plane homography
+
+241 AUnit registrations preserve all 231 baseline expressions and add ten grouped
+regressions: rectified scalar mapping; independent ideal-pixel intrinsics and
+conversion rejection; noncommuting 3-D rotations/tilted-plane scalar projections
+with camera reversal; normal sign/positive/1e300 scaling; pure rotation including a
+plane containing the common center; exact first/second-center degeneracy, near
+plane, tiny baseline, large origin, signed-offset overflow and required-term
+underflow; mixed projective horizon/coordinate-overflow batches, empty/rebased/
+Positive'Last bounds and valid zero-h22 model; invalid inputs and guarded absence;
+separate all-five Brown calibration; and Task 024–026 physical crosschecks including
+correct algebraic transfer with reciprocal physical-range rejection.
+
+The fifteenth synthetic example independently asserts rectified and tilted/Brown
+geometry, different intrinsics, nonidentity rotation, pure rotation, plane-through-
+center and unavailable projective mapping. Forty existing-hook native faults test
+propagation, invalid-plane preflight, native-free algebraic transfer, failed
+assignment preservation and healthy recovery. No fabricated mapping hook or new
+C++ hook is added. Inventory is not execution evidence; see
+[actual qualification and developer review](known-plane-homography-validation.md).
+
 ## Task 026 reciprocal plane correspondence verification
 
 231 AUnit registrations preserve all 223 baseline registrations and add eight

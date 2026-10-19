@@ -178,6 +178,41 @@ package OpenCV.Calib3D is
       Anchor : Object_Point;
       Normal : World_Direction;
    end record;
+
+   type Known_Plane_Homography_Disposition is
+     (General_Plane_Homography, Pure_Rotation_Homography,
+      Plane_Through_First_Camera_Center, Plane_Through_Second_Camera_Center,
+      Homography_Numerically_Unavailable);
+   type Known_Plane_Homography_Result is private;
+   --  Supplied poses share one Cartesian world frame and length units.
+   --  X2 = R21 * X1 + t21; t21 is in CAMERA 2, not world displacement.
+   --  H12 ~ d1 * R21 + t21 * n1^T; arbitrary nonzero projective scale.
+   --  Exact common centers give R21 independently of the plane, even when
+   --  it contains that center. This does NOT establish forward physical depth.
+   --  Invalid inputs/native failures raise OpenCV_Error. Checked matrix/offset
+   --  arithmetic failure returns Homography_Numerically_Unavailable.
+   function Disposition (Result : Known_Plane_Homography_Result)
+      return Known_Plane_Homography_Disposition;
+   function Defined (Result : Known_Plane_Homography_Result) return Boolean;
+   --  Raises OpenCV_Error unless Defined; no placeholder matrix on absence.
+   function Normalized_Homography (Result : Known_Plane_Homography_Result)
+      return Homography_Matrix;
+   type Normalized_Plane_Transfer (Finite : Boolean := False) is record
+      case Finite is
+         when True => Point : Normalized_Image_Point;
+         when False => null;
+      end case;
+   end record;
+   type Normalized_Plane_Transfer_Array is
+     array (Positive range <>) of Normalized_Plane_Transfer;
+   --  Algebraic transfer only: no positive-depth/range/patch/FOV acceptance.
+   --  Validate the model and ALL points before mapping, including empty input.
+   --  Owned one-based output preserves positional order, independent of bounds.
+   --  Zero denominator/unrepresentable mapping gives Finite=False, not (0,0).
+   function Transfer_Normalized_Plane_Points
+     (Geometry : Known_Plane_Homography_Result;
+      Points : Normalized_Image_Point_Array) return Normalized_Plane_Transfer_Array;
+
    type World_Plane_Intersection_Options is record
       Minimum_Absolute_Incidence_Cosine : OpenCV.Float64_Value;
       Minimum_Forward_Range : OpenCV.Float64_Value;
@@ -622,6 +657,19 @@ package OpenCV.Calib3D is
    --  infinity, a saturated coordinate, or a fabricated zero displacement.
    function Measure_Camera_Motion
      (First, Second : World_To_Camera_Pose) return Camera_Motion_Result;
+
+   --  Geometry-derived normalized plane mapping; see the result contract above.
+   function Construct_Known_Plane_Homography
+     (First_Pose, Second_Pose : World_To_Camera_Pose; Plane : World_Plane)
+      return Known_Plane_Homography_Result;
+   --  K2 * H12 * inverse(K1), with independent zero-skew calibrations.
+   --  ONLY ideal undistorted pinhole pixels, NOT raw Brown-distorted pixels.
+   --  Raises OpenCV_Error on absent model, invalid calibration, or arithmetic
+   --  unavailability. No h22=1 assumption, distortion model, or image warp.
+   function Ideal_Pixel_Homography
+     (Result : Known_Plane_Homography_Result;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics)
+      return Homography_Matrix;
 
    --  R = native Rodrigues(Pose.Rotation), X_camera = R * X_world + t.
    --  All six pose components must be finite, even for direction operations.
@@ -1433,6 +1481,10 @@ private
       Data      : Inlier_Buffer := null;
    end record;
    overriding procedure Finalize (Self : in out Homography_Estimate);
+   type Known_Plane_Homography_Result is record
+      State : Known_Plane_Homography_Disposition := Homography_Numerically_Unavailable;
+      Matrix : Homography_Matrix := [others => [others => 0.0]];
+   end record;
    type Pose_Estimate is new Ada.Finalization.Limited_Controlled with record
       Has_Pose : Boolean := False;
       Value    : World_To_Camera_Pose :=

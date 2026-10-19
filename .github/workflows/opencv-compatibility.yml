@@ -78,3 +78,4 @@ jobs:
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/ray_plane_unprojection_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/plane_correspondence_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/reciprocal_plane_correspondence_synthetic
+          alr -n -C examples exec -- sh ../scripts/run_native.sh bin/known_plane_homography_synthetic
