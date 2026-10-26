@@ -1428,6 +1428,45 @@ package OpenCV.Calib3D is
    function Reciprocal_Plane_Landmark_Observations
      (Landmarks : Reciprocal_Plane_Result_Array; Pixels : Image_Point_Array) return Accepted_Landmark_Set;
 
+   --  Task 029: independently obtained algebraic and physical evidence. No
+   --  fitting on held-out pixels, pose/plane adjustment, or world-point fusion.
+   --  Summary precedence is algebraic rejection, physical rejection, accepted.
+   type Physical_Plane_Homography_Disposition is
+     (Algebraic_Consistency_Rejected, Physical_Verification_Rejected,
+      Physical_Plane_Homography_Accepted);
+   type Physical_Plane_Holdout_Result is private;
+   type Physical_Plane_Holdout_Array is array (Positive range <>) of Physical_Plane_Holdout_Result;
+   type Physical_Plane_Homography_Result (<>) is private;
+   --  Entire request (including BOTH policies) validated before native entry.
+   --  Then Task 028 once, Task 026 once on held-out observations, even when
+   --  algebraically rejected. Native failure raises OpenCV_Error, no partial
+   --  result. All outputs are owned Ada values, positions are one-based.
+   --  Normalized limits are dimensionless; physical reprojection is in pixels;
+   --  ranges/depth/separation use the caller's Cartesian world length unit.
+   function Verify_Physical_Plane_Homography_Consistency
+     (Fitting_First_Pixels, Fitting_Second_Pixels : Image_Point_Array;
+      Holdout_First_Pixels, Holdout_Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose : World_To_Camera_Pose;
+      Plane : World_Plane; Consistency_Options : Plane_Homography_Consistency_Options;
+      Physical_Options : Reciprocal_Plane_Verification_Options)
+      return Physical_Plane_Homography_Result;
+   function Algebraic_Consistency (Result : Physical_Plane_Homography_Result)
+      return Plane_Homography_Consistency_Result;
+   function Holdout_Count (Result : Physical_Plane_Homography_Result) return Natural;
+   function Holdouts (Result : Physical_Plane_Homography_Result) return Physical_Plane_Holdout_Array;
+   function Disposition (Result : Physical_Plane_Homography_Result) return Physical_Plane_Homography_Disposition;
+   function Accepted (Result : Physical_Plane_Homography_Result) return Boolean;
+   function Original_Position (Result : Physical_Plane_Holdout_Result) return Positive;
+   function Algebraic_Verification (Result : Physical_Plane_Holdout_Result) return Plane_Homography_Holdout_Result;
+   --  Unavailable default diagnostics raise OpenCV_Error. Returned diagnostics
+   --  retain all original Task 026/028 availability predicates and guards.
+   function Diagnostics_Evaluated (Result : Physical_Plane_Holdout_Result) return Boolean;
+   function Physical_Verification (Result : Physical_Plane_Holdout_Result) return Reciprocal_Plane_Result;
+   function Disposition (Result : Physical_Plane_Holdout_Result) return Physical_Plane_Homography_Disposition;
+   function Accepted (Result : Physical_Plane_Holdout_Result) return Boolean;
+
 private
    type World_Plane_Intersection is record
       State : World_Plane_Intersection_Disposition := Numerically_Unavailable;
@@ -1566,6 +1605,18 @@ private
       Matrix : Homography_Matrix := [others => [others => 0.0]];
       Positions : Inlier_Index_Array (1 .. Fitting_Count);
       Diagnostics : Plane_Homography_Holdout_Array (1 .. Heldout_Count);
+   end record;
+   type Physical_Plane_Holdout_Result is record
+      Position : Positive := 1;
+      Evaluated : Boolean := False;
+      Algebraic : Plane_Homography_Holdout_Result;
+      Physical : Reciprocal_Plane_Result;
+      State : Physical_Plane_Homography_Disposition := Algebraic_Consistency_Rejected;
+   end record;
+   type Physical_Plane_Homography_Result (Fitting_Count, Heldout_Count : Natural) is record
+      Algebraic : Plane_Homography_Consistency_Result (Fitting_Count, Heldout_Count);
+      Diagnostics : Physical_Plane_Holdout_Array (1 .. Heldout_Count);
+      State : Physical_Plane_Homography_Disposition := Algebraic_Consistency_Rejected;
    end record;
    type Pose_Estimate is new Ada.Finalization.Limited_Controlled with record
       Has_Pose : Boolean := False;
