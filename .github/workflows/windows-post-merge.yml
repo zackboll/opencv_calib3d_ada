@@ -35,12 +35,47 @@ jobs:
           echo "=== Installed MSYS2 dependency versions ==="
           alr exec -- pacman -Q \
             mingw-w64-x86_64-gcc \
-            mingw-w64-x86_64-gcc-libs \
             mingw-w64-x86_64-cc-libs \
+            mingw-w64-x86_64-libgcc \
+            mingw-w64-x86_64-libstdc++ \
             mingw-w64-x86_64-libgfortran \
             mingw-w64-x86_64-libquadmath \
+            mingw-w64-x86_64-libgomp \
             mingw-w64-x86_64-opencv \
             mingw-w64-x86_64-pkgconf
+
+          echo "=== Installed dependency graph (not repository availability) ==="
+          alr exec -- pacman -Qi \
+            mingw-w64-x86_64-gcc \
+            mingw-w64-x86_64-cc-libs \
+            mingw-w64-x86_64-openblas \
+            mingw-w64-x86_64-opencv
+
+          # GCC 16.2 split the DLLs out of the empty gcc-libs/cc-libs packages.
+          # Query file lists AND installed ownership; never install a metapackage
+          # just to satisfy its historical name. Keep MSYS paths literal when
+          # Git Bash launches native Alire/pacman from the Alire MSYS2 root.
+          verify_runtime() {
+            package="mingw-w64-x86_64-$1"
+            dll="/mingw64/bin/$2"
+            files=$(alr exec -- pacman -Ql "$package")
+            printf '%s\n' "$files"
+            printf '%s\n' "$files" | grep -Fx "$package $dll"
+            owner=$(MSYS2_ARG_CONV_EXCL='*' alr exec -- pacman -Qqo "$dll")
+            test "$owner" = "$package"
+            alr exec -- pacman -Qk "$package"
+          }
+          verify_runtime libgcc libgcc_s_seh-1.dll
+          verify_runtime libstdc++ libstdc++-6.dll
+          verify_runtime libgfortran libgfortran-5.dll
+          verify_runtime libquadmath libquadmath-0.dll
+          verify_runtime libgomp libgomp-1.dll
+          # libatomic is optional for GCC, not a dependency of this deployment.
+          # If present, verify it too; missing required dependencies still fail Dk.
+          installed=$(alr exec -- pacman -Qq)
+          if printf '%s\n' "$installed" | grep -Fxq mingw-w64-x86_64-libatomic; then
+            verify_runtime libatomic libatomic-1.dll
+          fi
 
           echo "=== MSYS2 package database consistency ==="
           alr exec -- pacman -Dk
