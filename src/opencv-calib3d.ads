@@ -1467,6 +1467,51 @@ package OpenCV.Calib3D is
    function Disposition (Result : Physical_Plane_Holdout_Result) return Physical_Plane_Homography_Disposition;
    function Accepted (Result : Physical_Plane_Holdout_Result) return Boolean;
 
+   --  Task 030: complete owned prior evidence, independently supplied third
+   --  camera. See docs/physical-plane-third-view-contract.md for precedence.
+   --  Validate the entire request before native entry, including unused pixels.
+   --  Threshold is finite nonnegative distorted-camera pixels, inclusive <=.
+   type Physical_Plane_Third_View_Options is record
+      Maximum_Third_Pixel_Error : OpenCV.Float64_Value;
+   end record;
+   type Physical_Plane_Third_View_Disposition is
+     (Prior_Heldout_Rejected, Prior_Model_Rejected,
+      Plane_Third_Non_Positive_Depth, Plane_Third_Numerically_Unavailable,
+      Plane_Third_Reprojection_Rejected, Physical_Plane_Third_View_Accepted);
+   type Physical_Plane_Third_View_Holdout_Result is private;
+   type Physical_Plane_Third_View_Holdout_Array is
+     array (Positive range <>) of Physical_Plane_Third_View_Holdout_Result;
+   type Physical_Plane_Third_View_Result (<>) is private;
+   function Verify_Physical_Plane_Third_View
+     (Evidence : Physical_Plane_Homography_Result;
+      Third_Pixels : Image_Point_Array;
+      Third_Intrinsics : Camera_Intrinsics;
+      Third_Distortion : Distortion_Coefficients;
+      Third_Pose : World_To_Camera_Pose;
+      Options : Physical_Plane_Third_View_Options) return Physical_Plane_Third_View_Result;
+   function Prior_Evidence (Result : Physical_Plane_Third_View_Result) return Physical_Plane_Homography_Result;
+   function Holdout_Count (Result : Physical_Plane_Third_View_Result) return Natural;
+   function Holdouts (Result : Physical_Plane_Third_View_Result) return Physical_Plane_Third_View_Holdout_Array;
+   function Accepted (Result : Physical_Plane_Third_View_Result) return Boolean;
+   function Original_Position (Result : Physical_Plane_Third_View_Holdout_Result) return Positive;
+   function Prior_Heldout_Accepted (Result : Physical_Plane_Third_View_Holdout_Result) return Boolean;
+   function Third_View_Evaluated (Result : Physical_Plane_Third_View_Holdout_Result) return Boolean;
+   function Disposition (Result : Physical_Plane_Third_View_Holdout_Result) return Physical_Plane_Third_View_Disposition;
+   --  Diagnostic first-camera representative; requires prior individual acceptance.
+   function Selected_World_Position (Result : Physical_Plane_Third_View_Holdout_Result) return Object_Point;
+   --  Guarded: evaluation; evaluation with available depth; positive projection.
+   --  Missing diagnostics raise OpenCV_Error, never return placeholder zeros.
+   function Third_View_Disposition (Result : Physical_Plane_Third_View_Holdout_Result) return AP3P_Reference_Disposition;
+   function Third_Camera_Depth (Result : Physical_Plane_Third_View_Holdout_Result) return OpenCV.Float64_Value;
+   function Third_Pixel_Error (Result : Physical_Plane_Third_View_Holdout_Result) return OpenCV.Float64_Value;
+   function Accepted (Result : Physical_Plane_Third_View_Holdout_Result) return Boolean;
+   function Accepted_World_Position (Result : Physical_Plane_Third_View_Holdout_Result) return Object_Point;
+   --  Prior aggregate is an absolute gate; third aggregate need not fully pass.
+   --  Validate ALL later pixels. No later pose estimation or verification.
+   --  Coplanar count alone guarantees neither depth diversity nor PnP uniqueness.
+   function Physical_Plane_Third_View_Landmark_Observations
+     (Result : Physical_Plane_Third_View_Result; Later_Pixels : Image_Point_Array) return Accepted_Landmark_Set;
+
 private
    type World_Plane_Intersection is record
       State : World_Plane_Intersection_Disposition := Numerically_Unavailable;
@@ -1617,6 +1662,17 @@ private
       Algebraic : Plane_Homography_Consistency_Result (Fitting_Count, Heldout_Count);
       Diagnostics : Physical_Plane_Holdout_Array (1 .. Heldout_Count);
       State : Physical_Plane_Homography_Disposition := Algebraic_Consistency_Rejected;
+   end record;
+   type Physical_Plane_Third_View_Holdout_Result is record
+      Position : Positive := 1;
+      Prior_Accepted, Has_Third : Boolean := False;
+      World : Object_Point := [others => 0.0];
+      Third : AP3P_Reference_Result;
+      State : Physical_Plane_Third_View_Disposition := Prior_Heldout_Rejected;
+   end record;
+   type Physical_Plane_Third_View_Result (Fitting_Count, Heldout_Count : Natural) is record
+      Prior : Physical_Plane_Homography_Result (Fitting_Count, Heldout_Count);
+      Diagnostics : Physical_Plane_Third_View_Holdout_Array (1 .. Heldout_Count);
    end record;
    type Pose_Estimate is new Ada.Finalization.Limited_Controlled with record
       Has_Pose : Boolean := False;

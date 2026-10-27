@@ -1,5 +1,34 @@
 # OpenCV Calib3D for Ada
 
+## Physical plane third-view verification and landmark handoff (Task 030)
+
+`Verify_Physical_Plane_Third_View` consumes the complete owned Task 029 evidence
+without refitting or repeating physical verification. Only individually accepted
+reciprocal first-camera world representatives enter one compact existing-pose
+reference evaluation. Supply independent third-camera Brown pixels, calibration,
+world-to-camera pose and an explicit finite nonnegative inclusive pixel limit.
+Complete prior diagnostics, original held-out identities, signed third depth,
+available pixel errors and final dispositions remain owned Ada values.
+
+Prior aggregate rejection is an absolute acceptance/export gate, even when
+individual third-view diagnostics succeed. The accepted-only
+`Physical_Plane_Third_View_Landmark_Observations` adapter can retain individual
+survivors of a partially rejected third view and pairs them with separately
+supplied later pixels; it does not estimate or verify the later camera.
+Coplanar landmark count alone guarantees neither depth diversity, PnP uniqueness,
+general six-DOF observability nor navigation accuracy. Third-camera agreement is
+not ground truth. No DTED, geodesy, estimator, fusion, dependency or native ABI
+operation is added (48 unchanged operations).
+
+See the [contract](docs/physical-plane-third-view-contract.md) and
+[qualification ledger](docs/physical-plane-third-view-validation.md). Run the
+eighteenth file-free example from `/home/zboll/git/opencv/calib3d`:
+
+```sh
+alr -n -C examples build
+alr -n -C examples exec -- sh ../scripts/run_native.sh bin/physical_plane_third_view_synthetic
+```
+
 ## Physically qualified plane-homography verification (Task 029)
 
 `Verify_Physical_Plane_Homography_Consistency` integrates Task 028's independently

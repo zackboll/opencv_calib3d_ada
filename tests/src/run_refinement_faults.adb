@@ -101,6 +101,95 @@ begin
             end loop;
          end loop;
       end;
+      declare
+         Evidence : constant Physical_Plane_Homography_Result := Request;
+         Bad_Policy : Reciprocal_Plane_Verification_Options := Policy;
+         function Third_Request (Pixels : Image_Point_Array := H1;
+            Pose : World_To_Camera_Pose := A;
+            Intrinsics : Camera_Intrinsics := Calibration;
+            Distortion : Distortion_Coefficients := No_Distortion;
+            Limit : OpenCV.Float64_Value := 1.0E-8;
+            E : Physical_Plane_Homography_Result := Evidence) return Physical_Plane_Third_View_Result is
+           (Verify_Physical_Plane_Third_View (E, Pixels, Intrinsics, Distortion, Pose,
+              (Maximum_Third_Pixel_Error => Limit)));
+         Saved : Physical_Plane_Third_View_Result := Third_Request;
+         Previous : constant Physical_Plane_Third_View_Result := Saved;
+         Faults, Invalids : Natural := 0;
+      begin
+         Bad_Policy.Backward.Intersection.Maximum_Forward_Range := 0.1;
+         declare
+            No_Candidates : constant Physical_Plane_Homography_Result := Request (Bad_Policy);
+         begin
+            --  Evidence is already owned: these are specifically the third
+            --  evaluator's Rodrigues 15/16 and projection 1/2 checkpoints,
+            --  not first hits in fitting or reciprocal verification.
+            for Stage of Stages'[15, 16, 1, 2] loop
+               for Kind in Interfaces.C.int range 1 .. 5 loop
+                  Fail (Stage, Kind);
+                  for Field in 1 .. 21 loop
+                     declare
+                        pragma Suppress (Validity_Check);
+                        Bad : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Invalid_Number (0));
+                        Pixels : Image_Point_Array := H1;
+                        C : Camera_Intrinsics := Calibration;
+                        D : Distortion_Coefficients := No_Distortion;
+                        P : World_To_Camera_Pose := A;
+                        Limit : OpenCV.Float64_Value := 1.0E-8;
+                     begin
+                        case Field is
+                           when 1 .. 2 => Pixels (Pixels'Last) (Field - 1) := Bad;
+                           when 3 => C.Focal_X := 0.0;
+                           when 4 => C.Focal_Y := -1.0;
+                           when 5 => C.Center_X := Bad;
+                           when 6 => C.Center_Y := Bad;
+                           when 7 => D.K1 := Bad;
+                           when 8 => D.K2 := Bad;
+                           when 9 => D.P1 := Bad;
+                           when 10 => D.P2 := Bad;
+                           when 11 => D.K3 := Bad;
+                           when 12 .. 14 => P.Rotation (Field - 12) := Bad;
+                           when 15 .. 17 => P.Translation (Field - 15) := Bad;
+                           when 18 => Limit := -1.0;
+                           when 19 => Limit := Bad;
+                           when 20 .. 21 => Pixels (Pixels'Last) (1) := Bad;
+                        end case;
+                        begin
+                           Saved := Third_Request
+                             ((if Field = 20 then H1 (1 .. 1) else Pixels), P, C, D, Limit,
+                              (if Field = 21 then No_Candidates else Evidence));
+                           raise Program_Error with "third-view malformed request accepted";
+                        exception when OpenCV.OpenCV_Error => Invalids := Invalids + 1; end;
+                     end;
+                  end loop;
+                  Check (Saved = Previous, "third pre-native failure atomicity");
+                  declare
+                     Skipped : constant Physical_Plane_Third_View_Result := Third_Request (E => No_Candidates);
+                  begin
+                     Check (not Accepted (Skipped) and then not Third_View_Evaluated (Holdouts (Skipped) (1)),
+                            "no eligible source skips evaluator and preserves armed fault");
+                  end;
+                  if Stage = 1 or else Stage = 2 then
+                     declare
+                        Behind : constant Physical_Plane_Third_View_Result := Third_Request
+                          (Pose => ([others => 0.0], [0.0, 0.0, -2.0]));
+                     begin
+                        Check (Third_View_Disposition (Holdouts (Behind) (1)) = Non_Positive_Depth,
+                               "nonpositive batch skips projection and preserves projection fault");
+                     end;
+                  end if;
+                  begin Saved := Third_Request;
+                     raise Program_Error with "third native fault swallowed or prematurely consumed";
+                  exception when OpenCV.OpenCV_Error => Faults := Faults + 1; end;
+                  Check (Saved = Previous, "third native failure preserves complete prior result assignment");
+                  Saved := Third_Request;
+                  Check (Saved = Previous and then Accepted (Saved), "third healthy recovery");
+               end loop;
+            end loop;
+         end;
+         Check (Faults = 20 and then Invalids = 420, "third fault and pre-native campaign inventory");
+         Ada.Text_IO.Put_Line
+           ("PASS: plane third-view checkpoints 15/16 Rodrigues, 1/2 projection: 20 faults, 420 pre-native rejections, skipped batches, atomicity/recovery");
+      end;
       Check (Count = 90, "physical homography fault campaign count");
       Ada.Text_IO.Put_Line ("PASS: physical homography 90 first-hit native faults, 1080 pre-native invalid requests, owned atomicity/recovery");
    end;

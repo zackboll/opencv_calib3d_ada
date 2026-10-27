@@ -8,6 +8,53 @@ from workflow_topology import check_topology  # noqa: E402
 
 
 class RepositoryTests(unittest.TestCase):
+    def test_plane_third_validation_single_batch_and_provenance(self):
+        text = (ROOT / "src/opencv-calib3d.adb").read_text()
+        start = text.index("   function Verify_Physical_Plane_Third_View")
+        stop = text.index("   end Verify_Physical_Plane_Third_View;", start)
+        operation = text[start:stop]
+        batch = operation.index(":= Evaluate_AP3P_References")
+        for validation in ("Third_Pixels'Length /= Holdout_Count (Evidence)",
+                           "Third_Pixels'Length > Interfaces.Integer_32'Last",
+                           "Validate (Third_Pixels)", "Validate (Third_Intrinsics)",
+                           "Validate (Third_Distortion)", "Validate (Third_Pose)",
+                           "not Is_Finite (Options.Maximum_Third_Pixel_Error)",
+                           "Options.Maximum_Third_Pixel_Error < 0.0"):
+            self.assertLess(operation.index(validation), batch)
+        self.assertEqual(operation.count(":= Evaluate_AP3P_References"), 1)
+        self.assertIn("[(Pose => Third_Pose)]", operation)
+        self.assertIn("if Count > 0 then", operation)
+        self.assertIn("if Accepted (Evidence.Diagnostics (I)) then", operation)
+        self.assertIn(":= Accepted_First_Source_World_Position", operation)
+        self.assertIn("(Physical_Verification (Evidence.Diagnostics (I)))", operation)
+        self.assertIn("Original_Positions (Count) := I", operation)
+        self.assertIn("Third_Pixels'First + (I - 1)", operation)
+        self.assertLess(operation.index("D.Third := Values (1, J)"), operation.index("if not Accepted (Evidence)"))
+        self.assertIn("D.Third.Error_Pixels <= Options.Maximum_Third_Pixel_Error", operation)
+        for forbidden in ("exception", "C.", "Project_Points", "Verify_Reciprocal_", "Estimate_",
+                          "Intersect_", "Refine_", "Solve_", "Unchecked", "Access"):
+            self.assertNotIn(forbidden, operation)
+
+    def test_plane_third_owned_result_adapter_and_example(self):
+        spec = (ROOT / "src/opencv-calib3d.ads").read_text()
+        start = spec.index("   type Physical_Plane_Third_View_Result (Fitting_Count")
+        record = spec[start:spec.index("   type Pose_Estimate", start)]
+        self.assertIn("Prior : Physical_Plane_Homography_Result (Fitting_Count, Heldout_Count)", record)
+        self.assertIn("Diagnostics : Physical_Plane_Third_View_Holdout_Array (1 .. Heldout_Count)", record)
+        self.assertNotIn("access", record)
+        body = (ROOT / "src/opencv-calib3d.adb").read_text()
+        start = body.index("   function Physical_Plane_Third_View_Landmark_Observations")
+        operation = body[start:body.index("   end Physical_Plane_Third_View_Landmark_Observations;", start)]
+        self.assertLess(operation.index("Validate (Later_Pixels)"), operation.index("if Accepted (Result.Prior)"))
+        self.assertIn("if not Accepted (Result.Prior) then return", operation)
+        self.assertIn("Accepted_World_Position (Result.Diagnostics (I))", operation)
+        self.assertNotIn("if not Accepted (Result) then", operation)
+        for workflow in ("cross-platform.yml", "opencv-compatibility.yml"):
+            self.assertIn("bin/physical_plane_third_view_synthetic", (ROOT / ".github/workflows" / workflow).read_text())
+        contract = (ROOT / "docs/physical-plane-third-view-contract.md").read_text()
+        for warning in ("coplanar", "PnP uniqueness", "ground truth", "navigation accuracy"):
+            self.assertIn(warning, contract)
+
     def test_physical_homography_execution_order_and_independence(self):
         text = (ROOT / "src/opencv-calib3d.adb").read_text()
         start = text.index("   function Verify_Physical_Plane_Homography_Consistency")

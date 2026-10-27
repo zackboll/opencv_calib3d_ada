@@ -1,5 +1,20 @@
 # Roadmap
 
+## Task 030 approved scope
+
+Third supplied-camera verification of accepted Task 029 per-heldout reciprocal
+world representatives only, without refitting, recomputing intersections or
+estimating a pose. Preserve complete owned prior evidence and original identities;
+reject final acceptance/export whenever the prior aggregate rejected. One compact
+existing AP3P-reference evaluation, inclusive explicit pixel policy, guarded
+diagnostics and an accepted-only later-observation handoff. Planar landmark count
+is not depth diversity or a relocalization/navigation guarantee. No native C++/ABI
+change (48 operations), dependency, DTED, geodesy, SLAM or fusion. Eighteen synthetic
+examples; 276 AUnit registrations preserve the original 266 in their original order.
+See [contract](physical-plane-third-view-contract.md) and
+[qualification](physical-plane-third-view-validation.md). Stop at independent
+source/numerical review; Windows remains under its separate workflow policy.
+
 ## Task 028 approved scope
 
 Compare Task 027 supplied-geometry H with one robust empirical normalized H from
