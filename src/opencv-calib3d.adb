@@ -1228,27 +1228,18 @@ package body OpenCV.Calib3D is
       when Unavailable | Constraint_Error => null;
    end Evaluate_Normalized_Residual;
 
-   function Verify_Known_Plane_Homography_Consistency
+   procedure Validate_Consistency_Request
      (Fitting_First_Pixels, Fitting_Second_Pixels : Image_Point_Array;
       Holdout_First_Pixels, Holdout_Second_Pixels : Image_Point_Array;
       First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
       First_Distortion, Second_Distortion : Distortion_Coefficients;
       First_Pose, Second_Pose : World_To_Camera_Pose;
       Plane : World_Plane; Options : Plane_Homography_Consistency_Options)
-      return Plane_Homography_Consistency_Result
    is
       Limits : constant Consistency_Metric_Values :=
         [Options.Maximum_Predicted_Observed_Error_Normalized,
          Options.Maximum_Empirical_Observed_Error_Normalized,
          Options.Maximum_Model_Separation_Normalized];
-      --  Structural Image_Point storage only: these values are NORMALIZED,
-      --  so the legacy estimator's Pixels field receives normalized units.
-      function Estimator_Points (Points : Normalized_Image_Point_Array) return Image_Point_Array is
-      begin
-         return Result : Image_Point_Array (1 .. Points'Length) do
-            for I in Result'Range loop Result (I) := Image_Point (Points (Points'First + (I - 1))); end loop;
-         end return;
-      end Estimator_Points;
    begin
       if Fitting_First_Pixels'Length /= Fitting_Second_Pixels'Length or else
         Fitting_First_Pixels'Length < 5 or else Fitting_First_Pixels'Length > Interfaces.Integer_32'Last or else
@@ -1276,6 +1267,34 @@ package body OpenCV.Calib3D is
             raise OpenCV.OpenCV_Error with "Normalized comparison limits must be finite and nonnegative";
          end if;
       end loop;
+   end Validate_Consistency_Request;
+
+   function Verify_Known_Plane_Homography_Consistency
+     (Fitting_First_Pixels, Fitting_Second_Pixels : Image_Point_Array;
+      Holdout_First_Pixels, Holdout_Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose : World_To_Camera_Pose;
+      Plane : World_Plane; Options : Plane_Homography_Consistency_Options)
+      return Plane_Homography_Consistency_Result
+   is
+      Limits : constant Consistency_Metric_Values :=
+        [Options.Maximum_Predicted_Observed_Error_Normalized,
+         Options.Maximum_Empirical_Observed_Error_Normalized,
+         Options.Maximum_Model_Separation_Normalized];
+      --  Structural Image_Point storage only: these values are NORMALIZED,
+      --  so the legacy estimator's Pixels field receives normalized units.
+      function Estimator_Points (Points : Normalized_Image_Point_Array) return Image_Point_Array is
+      begin
+         return Result : Image_Point_Array (1 .. Points'Length) do
+            for I in Result'Range loop Result (I) := Image_Point (Points (Points'First + (I - 1))); end loop;
+         end return;
+      end Estimator_Points;
+   begin
+      Validate_Consistency_Request
+        (Fitting_First_Pixels, Fitting_Second_Pixels, Holdout_First_Pixels, Holdout_Second_Pixels,
+         First_Intrinsics, Second_Intrinsics, First_Distortion, Second_Distortion,
+         First_Pose, Second_Pose, Plane, Options);
       --  All request validation precedes the first native-backed operation.
       declare
          Geometry : constant Known_Plane_Homography_Result := Construct_Known_Plane_Homography
@@ -4936,6 +4955,15 @@ package body OpenCV.Calib3D is
       return Second_Source_World_Position (Result);
    end Accepted_Second_Source_World_Position;
 
+   procedure Validate (Plane : World_Plane; Options : Reciprocal_Plane_Verification_Options) is
+   begin
+      Validate (Plane, Options.Forward);
+      Validate (Plane, Options.Backward);
+      if not Is_Finite (Options.Maximum_World_Separation) or else Options.Maximum_World_Separation < 0.0 then
+         raise OpenCV.OpenCV_Error with "Invalid reciprocal world separation limit";
+      end if;
+   end Validate;
+
    function Verify_Reciprocal_Plane_Correspondences
      (First_Pixels, Second_Pixels : Image_Point_Array;
       First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
@@ -4963,11 +4991,7 @@ package body OpenCV.Calib3D is
       Validate (Second_Distortion);
       Validate (First_Pose);
       Validate (Second_Pose);
-      Validate (Plane, Options.Forward);
-      Validate (Plane, Options.Backward);
-      if not Is_Finite (Options.Maximum_World_Separation) or else Options.Maximum_World_Separation < 0.0 then
-         raise OpenCV.OpenCV_Error with "Invalid reciprocal world separation limit";
-      end if;
+      Validate (Plane, Options);
       if First_Pixels'Length = 0 then
          return [1 .. 0 => <>];
       end if;
@@ -5036,6 +5060,78 @@ package body OpenCV.Calib3D is
          end return;
       end;
    end Verify_Reciprocal_Plane_Correspondences;
+
+   function Algebraic_Consistency (Result : Physical_Plane_Homography_Result)
+      return Plane_Homography_Consistency_Result is (Result.Algebraic);
+   function Holdout_Count (Result : Physical_Plane_Homography_Result) return Natural is (Result.Heldout_Count);
+   function Holdouts (Result : Physical_Plane_Homography_Result) return Physical_Plane_Holdout_Array is (Result.Diagnostics);
+   function Disposition (Result : Physical_Plane_Homography_Result)
+      return Physical_Plane_Homography_Disposition is (Result.State);
+   function Accepted (Result : Physical_Plane_Homography_Result) return Boolean is
+     (Result.State = Physical_Plane_Homography_Accepted);
+   function Original_Position (Result : Physical_Plane_Holdout_Result) return Positive is (Result.Position);
+   function Diagnostics_Evaluated (Result : Physical_Plane_Holdout_Result) return Boolean is (Result.Evaluated);
+   function Algebraic_Verification (Result : Physical_Plane_Holdout_Result) return Plane_Homography_Holdout_Result is
+   begin
+      if not Diagnostics_Evaluated (Result) then
+         raise OpenCV.OpenCV_Error with "Physical homography algebraic diagnostics unavailable";
+      end if;
+      return Result.Algebraic;
+   end Algebraic_Verification;
+   function Physical_Verification (Result : Physical_Plane_Holdout_Result) return Reciprocal_Plane_Result is
+   begin
+      if not Diagnostics_Evaluated (Result) then
+         raise OpenCV.OpenCV_Error with "Physical homography reciprocal diagnostics unavailable";
+      end if;
+      return Result.Physical;
+   end Physical_Verification;
+   function Disposition (Result : Physical_Plane_Holdout_Result)
+      return Physical_Plane_Homography_Disposition is (Result.State);
+   function Accepted (Result : Physical_Plane_Holdout_Result) return Boolean is
+     (Result.State = Physical_Plane_Homography_Accepted);
+
+   function Verify_Physical_Plane_Homography_Consistency
+     (Fitting_First_Pixels, Fitting_Second_Pixels : Image_Point_Array;
+      Holdout_First_Pixels, Holdout_Second_Pixels : Image_Point_Array;
+      First_Intrinsics, Second_Intrinsics : Camera_Intrinsics;
+      First_Distortion, Second_Distortion : Distortion_Coefficients;
+      First_Pose, Second_Pose : World_To_Camera_Pose;
+      Plane : World_Plane; Consistency_Options : Plane_Homography_Consistency_Options;
+      Physical_Options : Reciprocal_Plane_Verification_Options)
+      return Physical_Plane_Homography_Result
+   is
+   begin
+      Validate_Consistency_Request
+        (Fitting_First_Pixels, Fitting_Second_Pixels, Holdout_First_Pixels, Holdout_Second_Pixels,
+         First_Intrinsics, Second_Intrinsics, First_Distortion, Second_Distortion,
+         First_Pose, Second_Pose, Plane, Consistency_Options);
+      Validate (Plane, Physical_Options);
+      declare
+         Algebraic : constant Plane_Homography_Consistency_Result := Verify_Known_Plane_Homography_Consistency
+           (Fitting_First_Pixels, Fitting_Second_Pixels, Holdout_First_Pixels, Holdout_Second_Pixels,
+            First_Intrinsics, Second_Intrinsics, First_Distortion, Second_Distortion,
+            First_Pose, Second_Pose, Plane, Consistency_Options);
+         Physical : constant Reciprocal_Plane_Result_Array := Verify_Reciprocal_Plane_Correspondences
+           (Holdout_First_Pixels, Holdout_Second_Pixels, First_Intrinsics, Second_Intrinsics,
+            First_Distortion, Second_Distortion, First_Pose, Second_Pose, Plane, Physical_Options);
+      begin
+         return Result : Physical_Plane_Homography_Result (Algebraic.Fitting_Count, Algebraic.Heldout_Count) do
+            Result.Algebraic := Algebraic;
+            for I in Result.Diagnostics'Range loop
+               Result.Diagnostics (I) :=
+                 (Position => I, Evaluated => True,
+                  Algebraic => Algebraic.Diagnostics (I), Physical => Physical (I),
+                  State => (if not Accepted (Algebraic.Diagnostics (I)) then Algebraic_Consistency_Rejected
+                            elsif not Accepted (Physical (I)) then Physical_Verification_Rejected
+                            else Physical_Plane_Homography_Accepted));
+            end loop;
+            Result.State :=
+              (if not Accepted (Algebraic) then Algebraic_Consistency_Rejected
+               elsif (for some D of Physical => not Accepted (D)) then Physical_Verification_Rejected
+               else Physical_Plane_Homography_Accepted);
+         end return;
+      end;
+   end Verify_Physical_Plane_Homography_Consistency;
 
    function Reciprocal_Plane_Landmark_Observations
      (Landmarks : Reciprocal_Plane_Result_Array; Pixels : Image_Point_Array) return Accepted_Landmark_Set

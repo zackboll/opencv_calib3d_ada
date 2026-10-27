@@ -56,7 +56,7 @@ def main() -> None:
 
     tests = (ROOT / "tests/src/calib3d_tests.adb").read_text()
     registrations = re.findall(r"Result\.Add_Test\s*\(Caller\.Create", tests)
-    check(len(registrations) == 252, "update documented AUnit inventory when changing tests")
+    check(len(registrations) == 266, "update documented AUnit inventory when changing tests")
     check(len(declared) == 48, "update private ABI inventory when changing exports")
     # Task 022 is Ada orchestration, not another native estimator/solver.
     public_body = (ROOT / "src/opencv-calib3d.adb").read_text()
@@ -93,14 +93,18 @@ def main() -> None:
                    "Essential_", "Refine_", "C.", "when others", "when OpenCV")),
           "plane verification must not duplicate geometry, estimate, or swallow native errors")
     start = public_body.index("   function Verify_Reciprocal_Plane_Correspondences")
-    stop = public_body.index("   function Reciprocal_Plane_Landmark_Observations", start)
+    stop = public_body.index("   end Verify_Reciprocal_Plane_Correspondences;", start)
     reciprocal = public_body[start:stop]
     check(reciprocal.count(":= Verify_Plane_Constrained_Correspondences") == 2 and
-          reciprocal.index("Validate (Plane, Options.Backward)") < reciprocal.index("Forward : constant") and
+          reciprocal.index("Validate (Plane, Options)") < reciprocal.index("Forward : constant") and
           reciprocal.index("Backward : constant") < reciprocal.index("for I in Results'Range"),
           "reciprocal must validate both policies and delegate once per directional batch")
     check("Project_Points" not in reciprocal and "C." not in reciprocal,
           "reciprocal must not duplicate native projection or add ABI operations")
+    policy = public_body[public_body.index("   procedure Validate (Plane : World_Plane; Options : Reciprocal_Plane_Verification_Options)"):start]
+    check("Validate (Plane, Options.Forward)" in policy and "Validate (Plane, Options.Backward)" in policy and
+          "not Is_Finite (Options.Maximum_World_Separation)" in policy,
+          "shared reciprocal validator must preserve complete policy validation")
     layout = (ROOT / "tests/layout/calib3d_layout.c").read_text()
     check("calib3d_test_triangulation_layout" in layout and
           "calib3d_test_fill_triangulation" in tests and

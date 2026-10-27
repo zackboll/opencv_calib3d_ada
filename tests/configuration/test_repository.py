@@ -8,6 +8,34 @@ from workflow_topology import check_topology  # noqa: E402
 
 
 class RepositoryTests(unittest.TestCase):
+    def test_physical_homography_execution_order_and_independence(self):
+        text = (ROOT / "src/opencv-calib3d.adb").read_text()
+        start = text.index("   function Verify_Physical_Plane_Homography_Consistency")
+        stop = text.index("   end Verify_Physical_Plane_Homography_Consistency;", start)
+        operation = text[start:stop]
+        self.assertLess(operation.index("Validate_Consistency_Request"), operation.index("Validate (Plane, Physical_Options)"))
+        self.assertLess(operation.index("Validate (Plane, Physical_Options)"), operation.index("Algebraic : constant"))
+        self.assertLess(operation.index("Algebraic : constant"), operation.index("Physical : constant"))
+        self.assertLess(operation.index("Physical : constant"), operation.index("return Result"))
+        self.assertEqual(operation.count(":= Verify_Known_Plane_Homography_Consistency"), 1)
+        self.assertEqual(operation.count(":= Verify_Reciprocal_Plane_Correspondences"), 1)
+        physical = operation[operation.index("Physical : constant"):operation.index("      begin", operation.index("Physical : constant"))]
+        self.assertNotIn("Fitting_", physical)
+        self.assertNotIn("if ", operation[:operation.index("return Result")])
+        for forbidden in ("exception", "C.", "Estimate_", "Refine_", "Project_Points", "Solve_", "Unchecked", "Access"):
+            self.assertNotIn(forbidden, operation)
+        self.assertIn("not Accepted (Algebraic)", operation)
+        self.assertIn("for some D of Physical => not Accepted (D)", operation)
+
+    def test_physical_homography_owned_representation_and_example(self):
+        spec = (ROOT / "src/opencv-calib3d.ads").read_text()
+        record = spec[spec.index("   type Physical_Plane_Homography_Result (Fitting_Count"):]
+        self.assertIn("Algebraic : Plane_Homography_Consistency_Result (Fitting_Count, Heldout_Count)", record)
+        self.assertIn("Diagnostics : Physical_Plane_Holdout_Array (1 .. Heldout_Count)", record)
+        self.assertNotIn("access", record)
+        for name in ("cross-platform.yml", "opencv-compatibility.yml"):
+            self.assertIn("bin/physical_plane_homography_synthetic", (ROOT / ".github/workflows" / name).read_text())
+
     def test_plane_consistency_normalized_batches_and_separation(self):
         text = (ROOT / "src/opencv-calib3d.adb").read_text()
         start = text.index("   function Verify_Known_Plane_Homography_Consistency")
@@ -24,7 +52,9 @@ class RepositoryTests(unittest.TestCase):
         for validation in ("Validate (Holdout_Second_Pixels)", "Validate (Second_Distortion)",
                            "Validate (Second_Pose)", "for Limit of Limits loop",
                            "Options.Minimum_Final_Fitting_Inliers >", "Validate (RANSAC_Options'"):
-            self.assertLess(operation.index(validation), operation.index(":= Construct_Known_Plane_Homography"))
+            validator = text[text.index("   procedure Validate_Consistency_Request"):start]
+            self.assertIn(validation, validator)
+            self.assertLess(operation.index("Validate_Consistency_Request"), operation.index(":= Construct_Known_Plane_Homography"))
         loop = operation[operation.index("for I in Result.Diagnostics'Range", operation.index("Estimate : constant")):]
         self.assertNotIn("Undistort_To_Normalized", loop)
         self.assertNotIn("Estimate_Homography_RANSAC", loop)
@@ -80,15 +110,17 @@ class RepositoryTests(unittest.TestCase):
     def test_reciprocal_validation_batches_and_arithmetic_isolation(self):
         text = (ROOT / "src/opencv-calib3d.adb").read_text()
         start = text.index("   function Verify_Reciprocal_Plane_Correspondences")
-        stop = text.index("   function Reciprocal_Plane_Landmark_Observations", start)
+        stop = text.index("   end Verify_Reciprocal_Plane_Correspondences;", start)
         operation = text[start:stop]
         validation = operation[:operation.index("Forward : constant")]
         for name in ("First_Pixels", "Second_Pixels", "First_Intrinsics", "Second_Intrinsics",
                      "First_Distortion", "Second_Distortion", "First_Pose", "Second_Pose"):
             self.assertIn(f"Validate ({name})", validation)
+        self.assertIn("Validate (Plane, Options)", validation)
+        policy = text[text.index("   procedure Validate (Plane : World_Plane; Options : Reciprocal_Plane_Verification_Options)"):start]
         for name in ("Options.Forward", "Options.Backward"):
-            self.assertIn(f"Validate (Plane, {name})", validation)
-        self.assertIn("Is_Finite (Options.Maximum_World_Separation)", validation)
+            self.assertIn(f"Validate (Plane, {name})", policy)
+        self.assertIn("Is_Finite (Options.Maximum_World_Separation)", policy)
         self.assertIn("Interfaces.Integer_32'Last", validation)
         self.assertEqual(operation.count(":= Verify_Plane_Constrained_Correspondences"), 2)
         self.assertIn("(First_Pixels, Second_Pixels, First_Intrinsics, Second_Intrinsics,\n"

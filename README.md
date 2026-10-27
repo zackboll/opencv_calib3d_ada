@@ -1,5 +1,36 @@
 # OpenCV Calib3D for Ada
 
+## Physically qualified plane-homography verification (Task 029)
+
+`Verify_Physical_Plane_Homography_Consistency` integrates Task 028's independently
+fitted/known-plane algebraic comparison and Task 026's reciprocal ray-plane
+verification. Supply separate fitting and held-out Brown pixel batches, independent
+calibrations, two world-to-camera poses, a Cartesian plane and **both explicit
+policies**. The entire request is validated before native entry; each verifier is
+called once. A rejected algebraic model never suppresses available physical evidence.
+
+`Physical_Plane_Homography_Result` owns the complete `Algebraic_Consistency` result
+and `Holdouts`: complete algebraic/physical diagnostics, original one-based
+positions, per-point acceptance and disposition. Aggregate acceptance requires
+accepted algebraic consistency **and every held-out reciprocal verification**.
+Guarded accessors reject unavailable diagnostics; there are no borrowed handles.
+Pure rotation is not automatically plane evidence: forward intersections, positive
+depth, directional residuals and reciprocal separation must actually pass.
+
+Normalized residuals are dimensionless; physical reprojection limits are pixels;
+depth/range/separation use caller Cartesian world units. Agreement means compatibility
+with supplied models and policies, not terrain ground truth or navigation accuracy.
+No DTED reader, new estimator, dependencies, native code or ABI changes are added.
+Current inventory: **266 AUnit groups (all 252 baseline preserved), seventeen examples,
+48 private C ABI operations**. See the [contract](docs/physical-plane-homography-contract.md)
+and [qualification/source review](docs/physical-plane-homography-validation.md).
+From `/home/zboll/git/opencv/calib3d`, run serially:
+
+```sh
+alr -n -C examples build
+alr -n -C examples exec -- sh ../scripts/run_native.sh bin/physical_plane_homography_synthetic
+```
+
 ## Known-plane versus empirical homography with held-out verification (Task 028)
 
 `Verify_Known_Plane_Homography_Consistency` constructs the supplied-geometry H,
@@ -14,7 +45,7 @@ prove correct poses/plane/features or independent sampling; these remain caller
 obligations. Pure rotation can pass algebraically without physical plane evidence.
 Tasks 024–026 retain separate physical ray/plane and reciprocal acceptance.
 No production C++, dependency, solver, or private ABI expansion: still 48 operations.
-Current inventory: **252 AUnit groups (all 241 baseline preserved), sixteen examples**.
+Task 028 inventory at introduction: **252 AUnit groups (all 241 baseline preserved), sixteen examples**.
 See [contract](docs/plane-homography-consistency-contract.md) and
 [qualification/developer review](docs/plane-homography-consistency-validation.md).
 From `/home/zboll/git/opencv/calib3d`, run the sixteenth synthetic example serially:

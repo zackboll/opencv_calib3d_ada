@@ -10665,9 +10665,473 @@ package body Calib3D_Tests is
       end;
    end Consistency_Numerical;
 
+   Physical_Policy : constant Reciprocal_Plane_Verification_Options :=
+     (((0.0, 0.0, 100.0, 1.0E-10), 1.0E-8), ((0.0, 0.0, 100.0, 1.0E-10), 1.0E-8), 1.0E-8);
+   function Physical_Request
+     (F1, F2, H1, H2 : Image_Point_Array;
+      O : Plane_Homography_Consistency_Options := Consistency_Policy;
+      P : Reciprocal_Plane_Verification_Options := Physical_Policy;
+      A : World_To_Camera_Pose := Plane_H_A; B : World_To_Camera_Pose := Plane_H_B;
+      Plane : World_Plane := Plane_H_Ground) return Physical_Plane_Homography_Result is
+     (Verify_Physical_Plane_Homography_Consistency
+       (F1, F2, H1, H2, Consistency_K, Consistency_K, No_Distortion, No_Distortion, A, B, Plane, O, P));
+
+   procedure Physical_Exact (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      declare
+         Before_F1 : constant Image_Point_Array := F1;
+         Before_F2 : constant Image_Point_Array := F2;
+         Before_H1 : constant Image_Point_Array := H1;
+         Before_H2 : constant Image_Point_Array := H2;
+         R : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2);
+         Copy : constant Physical_Plane_Homography_Result := R;
+         Algebraic : constant Plane_Homography_Consistency_Result := Consistency_Request (F1, F2, H1, H2);
+         Physical : constant Reciprocal_Plane_Result_Array := Verify_Reciprocal_Plane_Correspondences
+           (H1, H2, Consistency_K, Consistency_K, No_Distortion, No_Distortion,
+            Plane_H_A, Plane_H_B, Plane_H_Ground, Physical_Policy);
+      begin
+         Assert (F1 = Before_F1 and then F2 = Before_F2 and then H1 = Before_H1 and then H2 = Before_H2,
+                 "all four caller batches unchanged");
+         Assert (Accepted (R) and then Holdout_Count (R) = 8 and then Algebraic_Consistency (R) = Algebraic,
+                 "complete owned algebraic result equals independent public operation");
+         for I in 1 .. 8 loop
+            declare D : constant Physical_Plane_Holdout_Result := Holdouts (R) (I);
+            begin
+               Assert (Accepted (D) and then Diagnostics_Evaluated (D) and then Original_Position (D) = I,
+                       "every heldout independently accepted with original identity");
+               Assert (Algebraic_Verification (D) = Holdouts (Algebraic) (I) and then
+                       Physical_Verification (D) = Physical (I), "complete independent diagnostics preserved");
+               Assert (Near (First_Source_World_Position (Physical_Verification (D)) (0), H1 (I) (0) * 10.0, 1.0E-10),
+                       "independent scalar world-coordinate oracle");
+            end;
+         end loop;
+         F1 := [others => [9.0, 9.0]]; F2 := F1;
+         H1 := [others => [8.0, 8.0]]; H2 := H1;
+         Assert (R = Copy and then Accepted (Copy) and then Algebraic_Consistency (Copy) = Algebraic,
+                 "owned results outlive source mutation and native temporaries");
+      end;
+   end Physical_Exact;
+
+   procedure Physical_Brown (T : in out Fixture) is
+      pragma Unreferenced (T);
+      A : constant World_To_Camera_Pose := ([0.31, -0.22, 0.14], [0.2, -0.3, 1.0]);
+      B : constant World_To_Camera_Pose := ([-0.18, 0.29, -0.24], [-0.7, 0.4, 0.5]);
+      DA : constant Distortion_Coefficients := (0.012, -0.004, 0.001, -0.002, 0.0003);
+      DB : constant Distortion_Coefficients := (-0.009, 0.003, -0.002, 0.001, -0.0002);
+      Plane : constant World_Plane := ([0.0, 0.0, 4.0], [-0.2, 0.5, 1.0]);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+      procedure Generate (P, Q : out Image_Point_Array; Offset : OpenCV.Float64_Value) is
+      begin
+         for I in P'Range loop
+            declare
+               X : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((I - 1) mod 6) * 0.23 - 0.6 + Offset;
+               Y : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((I - 1) / 6) * 0.25 - 0.4 + Offset;
+               W : constant Object_Point := [X, Y, 4.0 + 0.2 * X - 0.5 * Y];
+            begin
+               P (I) := Plane_Oracle_Pixel (W, A, PC_KA, DA);
+               Q (I) := Plane_Oracle_Pixel (W, B, PC_KB, DB);
+            end;
+         end loop;
+      end Generate;
+   begin
+      Generate (F1, F2, 0.0); Generate (H1, H2, 0.073);
+      declare
+         R : constant Physical_Plane_Homography_Result := Verify_Physical_Plane_Homography_Consistency
+           (F1, F2, H1, H2, PC_KA, PC_KB, DA, DB, A, B, Plane, Consistency_Policy, Physical_Policy);
+      begin
+         Assert (Accepted (R), "independent scalar Brown oracle, noncommuting rotations and tilted plane");
+         for I in 1 .. 8 loop
+            declare
+               D : constant Reciprocal_Plane_Result := Physical_Verification (Holdouts (R) (I));
+               P : constant Object_Point := First_Source_World_Position (D);
+               X : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((I - 1) mod 6) * 0.23 - 0.6 + 0.073;
+               Y : constant OpenCV.Float64_Value := OpenCV.Float64_Value ((I - 1) / 6) * 0.25 - 0.4 + 0.073;
+            begin
+               Assert (Near (P (0), X, 1.0E-9) and then Near (P (1), Y, 1.0E-9) and then
+                       Near (P (2), 4.0 + 0.2 * X - 0.5 * Y, 1.0E-9), "independent world oracle, no fused point");
+               Assert (World_Separation_Evaluated (D) and then World_Separation (D) <= 1.0E-8,
+                       "qualified moderate fixture separation, not universal accuracy bound");
+            end;
+         end loop;
+      end;
+   end Physical_Brown;
+
+   procedure Physical_Depth (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+      A : constant World_To_Camera_Pose := (others => <>);
+      B : constant World_To_Camera_Pose := ([others => 0.0], [0.0, 0.0, -2.0]);
+      Plane : constant World_Plane := ([0.0, 0.0, 1.0], [0.0, 0.0, 1.0]);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      for I in F1'Range loop F2 (I) := [-F1 (I) (0), -F1 (I) (1)]; end loop;
+      for I in H1'Range loop H2 (I) := [-H1 (I) (0), -H1 (I) (1)]; end loop;
+      declare
+         R : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2, A => A, B => B, Plane => Plane);
+         D : constant Reciprocal_Plane_Result := Physical_Verification (Holdouts (R) (1));
+      begin
+         Assert (Accepted (Algebraic_Consistency (R)) and then Disposition (R) = Physical_Verification_Rejected,
+                 "correct algebraic mapping does not imply positive depth");
+         Assert (Second_Camera_Depth (Forward_Verification (D)) = -1.0 and then
+                 not Accepted (Forward_Verification (D)) and then not Accepted (Reverse_Verification (D)),
+                 "negative target depth and reverse source rejection retained");
+         begin declare V : constant OpenCV.Float64_Value := World_Separation (D); pragma Unreferenced (V);
+         begin Assert (False, "rejected reverse source cannot supply separation"); end;
+         exception when OpenCV.OpenCV_Error => null; end;
+      end;
+   end Physical_Depth;
+
+   procedure Physical_Wrong_Models (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      for Mode in 1 .. 2 loop
+         declare
+            R : constant Physical_Plane_Homography_Result := Physical_Request
+              (F1, F2, H1, H2, B => (if Mode = 1 then Plane_H_B else
+                World_To_Camera_Pose'(Plane_H_B.Rotation, [-3.0, 0.0, 10.0])),
+               Plane => (if Mode = 1 then World_Plane'([0.0, 0.0, 2.0], [0.0, 0.0, 1.0]) else Plane_H_Ground));
+            D : constant Reciprocal_Plane_Result := Physical_Verification (Holdouts (R) (1));
+         begin
+            Assert (Empirical_Found (Algebraic_Consistency (R)) and then
+                    Disposition (R) = Algebraic_Consistency_Rejected, "plausible empirical fit cannot repair supplied plane or pose");
+            Assert (Directions_Evaluated (D) and then World_Separation_Evaluated (D) and then
+                    not Accepted (D) and then World_Separation (D) > 0.1,
+                    "algebraic rejection preserves independent reciprocal disagreement");
+         end;
+      end loop;
+   end Physical_Wrong_Models;
+
+   procedure Physical_Pure_Rotation (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+      A : constant World_To_Camera_Pose := (others => <>);
+      Turn : constant World_To_Camera_Pose := ([0.0, 0.0, Ada.Numerics.Pi / 2.0], [others => 0.0]);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      for I in F1'Range loop F2 (I) := [-F1 (I) (1), F1 (I) (0)]; end loop;
+      for I in H1'Range loop H2 (I) := [-H1 (I) (1), H1 (I) (0)]; end loop;
+      for Mode in 1 .. 2 loop
+         declare
+            R : constant Physical_Plane_Homography_Result := Physical_Request
+              (F1, F2, H1, H2, A => A, B => Turn,
+               Plane => (if Mode = 1 then Plane_H_Ground else World_Plane'([0.0, 0.0, 3.0], [0.0, 0.0, 1.0])));
+         begin
+            Assert (Accepted (Algebraic_Consistency (R)) and then
+                    Disposition (Predicted_Model (Algebraic_Consistency (R))) = Pure_Rotation_Homography,
+                    "pure rotation independent of plane");
+            Assert (Accepted (R) = (Mode = 2), "rotation requires real forward intersections, not baseline heuristic");
+            if Mode = 1 then
+               Assert (Disposition (Physical_Verification (Holdouts (R) (1))) = Both_Sources_Rejected,
+                       "common-center plane supplies no physical evidence");
+            end if;
+         end;
+      end loop;
+   end Physical_Pure_Rotation;
+
+   procedure Physical_Center_Plane (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+      A : constant World_To_Camera_Pose := (others => <>);
+      B : constant World_To_Camera_Pose := ([others => 0.0], [-2.0, 0.0, -1.0]);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      for Mode in 0 .. 1 loop
+         declare
+            R : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2, A => A, B => B,
+              Plane => ([0.0, 0.0, OpenCV.Float64_Value (Mode)], [0.0, 0.0, 1.0]));
+            G : constant Plane_Homography_Consistency_Result := Algebraic_Consistency (R);
+         begin
+            Assert (Disposition (G) = Predicted_Model_Unavailable and then Disposition (Predicted_Model (G)) =
+                    (if Mode = 0 then Plane_Through_First_Camera_Center else Plane_Through_Second_Camera_Center),
+                    "exact center-plane disposition retained");
+            Assert (Diagnostics_Evaluated (Holdouts (R) (1)) and then
+                    Directions_Evaluated (Physical_Verification (Holdouts (R) (1))),
+                    "undefined predicted model does not skip Task 026");
+            begin declare H : constant Homography_Matrix := Empirical_Homography (G); pragma Unreferenced (H);
+            begin Assert (False, "unattempted fit guard"); end; exception when OpenCV.OpenCV_Error => null; end;
+         end;
+      end loop;
+   end Physical_Center_Plane;
+
+   procedure Physical_Directional (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+      P : Reciprocal_Plane_Verification_Options := Physical_Policy;
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      P.Backward.Intersection.Maximum_Forward_Range := 1.0;
+      declare
+         R : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2, P => P);
+         D : constant Reciprocal_Plane_Result := Physical_Verification (Holdouts (R) (1));
+      begin
+         Assert (Accepted (Algebraic_Consistency (R)) and then not Accepted (R) and then
+                 Accepted (Forward_Verification (D)) and then not Accepted (Reverse_Verification (D)) and then
+                 Disposition (D) = Reverse_Source_Rejected, "forward passes but independent backward range fails");
+         Assert (not World_Separation_Evaluated (D), "rejected intersection cannot publish world position");
+      end;
+   end Physical_Directional;
+
+   procedure Physical_Separation (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+      O : Plane_Homography_Consistency_Options := Consistency_Policy;
+      P : Reciprocal_Plane_Verification_Options := Physical_Policy;
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      H2 (3) (0) := H2 (3) (0) + 0.001;
+      O.Maximum_Predicted_Observed_Error_Normalized := 0.01;
+      O.Maximum_Empirical_Observed_Error_Normalized := 0.01;
+      P.Forward.Maximum_Second_Pixel_Error := 0.01; P.Backward.Maximum_Second_Pixel_Error := 0.01;
+      P.Maximum_World_Separation := 0.001;
+      declare
+         R : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2, O, P);
+         D : constant Reciprocal_Plane_Result := Physical_Verification (Holdouts (R) (3));
+      begin
+         Assert (Accepted (Algebraic_Consistency (R)) and then Disposition (R) = Physical_Verification_Rejected,
+                 "algebraic limits pass while world separation fails");
+         Assert (Accepted (Forward_Verification (D)) and then Accepted (Reverse_Verification (D)) and then
+                 Disposition (D) = World_Separation_Rejected and then Near (World_Separation (D), 0.01, 1.0E-10),
+                 "both directions pass yet independent world positions differ by scalar 10*.001");
+         for I in 1 .. 8 loop
+            Assert (Accepted (Holdouts (R) (I)) = (I /= 3), "single rejection preserves accepted neighbors and identity");
+         end loop;
+         begin declare W : constant Object_Point := Accepted_First_Source_World_Position (D); pragma Unreferenced (W);
+         begin Assert (False, "diagnostic world point is not an accepted landmark"); end;
+         exception when OpenCV.OpenCV_Error => null; end;
+      end;
+   end Physical_Separation;
+
+   procedure Physical_Support (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+      O : Plane_Homography_Consistency_Options := Consistency_Policy;
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      F2 (7) := [8.0, -7.0]; O.Minimum_Final_Fitting_Inliers := 24;
+      declare R : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2, O);
+      begin
+         Assert (Disposition (Algebraic_Consistency (R)) = Insufficient_Empirical_Inliers and then not Accepted (R),
+                 "aggregate requires sufficient fitting support");
+         Assert (Accepted (Holdouts (R) (1)), "individual diagnostic acceptance does not imply aggregate support");
+      end;
+      F1 := [others => [0.0, 0.0]]; F2 := F1;
+      declare
+         R : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2);
+         D : constant Physical_Plane_Holdout_Result := Holdouts (R) (1);
+      begin
+         Assert (Disposition (Algebraic_Consistency (R)) = Empirical_Model_Not_Found and then
+                 Disposition (D) = Algebraic_Consistency_Rejected and then Accepted (Physical_Verification (D)),
+                 "no empirical model still returns complete accepted physical diagnostics");
+         begin declare V : constant OpenCV.Float64_Value := Normalized_Error (Algebraic_Verification (D), Model_Separation);
+            pragma Unreferenced (V);
+         begin Assert (False, "no model metric guard"); end; exception when OpenCV.OpenCV_Error => null; end;
+      end;
+   end Physical_Support;
+
+   procedure Physical_Bounds (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1 : Image_Point_Array (7 .. 30);
+      F2 : Image_Point_Array (Positive'Last - 23 .. Positive'Last);
+      H1 : Image_Point_Array (15 .. 22);
+      H2 : Image_Point_Array (Positive'Last - 7 .. Positive'Last);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      declare R : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2);
+      begin
+         Assert (Accepted (R) and then Holdouts (R)'First = 1, "distinct bounds and maximum subscripts supported");
+         for I in 1 .. 8 loop
+            declare D : constant Physical_Plane_Holdout_Result := Holdouts (R) (I);
+            begin Assert (Original_Position (D) = I and then Original_Position (Algebraic_Verification (D)) = I and then
+                          Original_Position (Physical_Verification (D)) = I, "all diagnostic identities agree positionally"); end;
+         end loop;
+      end;
+   end Physical_Bounds;
+
+   procedure Physical_Boundaries (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+      O : Plane_Homography_Consistency_Options := Consistency_Policy;
+      P : Reciprocal_Plane_Verification_Options := Physical_Policy;
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      H2 (1) (0) := H2 (1) (0) + 0.001;
+      O.Maximum_Predicted_Observed_Error_Normalized := 1.0;
+      O.Maximum_Empirical_Observed_Error_Normalized := 1.0;
+      O.Maximum_Model_Separation_Normalized := 1.0;
+      P.Forward.Maximum_Second_Pixel_Error := 1.0; P.Backward.Maximum_Second_Pixel_Error := 1.0;
+      P.Maximum_World_Separation := 1.0;
+      declare
+         Baseline : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1 (1 .. 1), H2 (1 .. 1), O, P);
+         A : constant Plane_Homography_Holdout_Result := Algebraic_Verification (Holdouts (Baseline) (1));
+         R : constant Reciprocal_Plane_Result := Physical_Verification (Holdouts (Baseline) (1));
+      begin
+         for Boundary in 1 .. 8 loop
+            for Side in 0 .. 1 loop
+               declare
+                  CO : Plane_Homography_Consistency_Options := O;
+                  PO : Reciprocal_Plane_Verification_Options := P;
+                  Value : constant OpenCV.Float64_Value :=
+                    (case Boundary is
+                        when 1 => Normalized_Error (A, Predicted_Observed),
+                        when 2 => Normalized_Error (A, Empirical_Observed),
+                        when 3 => Normalized_Error (A, Model_Separation),
+                        when 4 => Second_Pixel_Error (Forward_Verification (R)),
+                        when 5 => Second_Pixel_Error (Reverse_Verification (R)),
+                        when 6 => World_Separation (R),
+                        when 7 => Signed_Ray_Distance (Source_Intersection (Forward_Verification (R))),
+                        when 8 => Signed_Ray_Distance (Source_Intersection (Reverse_Verification (R))));
+                  Limit : constant OpenCV.Float64_Value :=
+                    (if Side = 0 then Value else OpenCV.Float64_Value'Adjacent (Value, -1.0));
+               begin
+                  Assert (Value > 0.0, "measured positive boundary");
+                  case Boundary is
+                     when 1 => CO.Maximum_Predicted_Observed_Error_Normalized := Limit;
+                     when 2 => CO.Maximum_Empirical_Observed_Error_Normalized := Limit;
+                     when 3 => CO.Maximum_Model_Separation_Normalized := Limit;
+                     when 4 => PO.Forward.Maximum_Second_Pixel_Error := Limit;
+                     when 5 => PO.Backward.Maximum_Second_Pixel_Error := Limit;
+                     when 6 => PO.Maximum_World_Separation := Limit;
+                     when 7 => PO.Forward.Intersection.Maximum_Forward_Range := Limit;
+                     when 8 => PO.Backward.Intersection.Maximum_Forward_Range := Limit;
+                  end case;
+                  declare Q : constant Physical_Plane_Homography_Result := Physical_Request
+                    (F1, F2, H1 (1 .. 1), H2 (1 .. 1), CO, PO);
+                  begin
+                     Assert (Accepted (Q) = (Side = 0), "inclusive equality passes; next representable smaller limit fails");
+                     Assert (Directions_Evaluated (Physical_Verification (Holdouts (Q) (1))),
+                             "rejection never erases diagnostics");
+                  end;
+               end;
+            end loop;
+         end loop;
+      end;
+   end Physical_Boundaries;
+
+   procedure Physical_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      for Mode in 1 .. 19 loop
+         declare
+            pragma Suppress (Validity_Check);
+            P : Reciprocal_Plane_Verification_Options := Physical_Policy;
+            O : Plane_Homography_Consistency_Options := Consistency_Policy;
+            Late : Image_Point_Array := H2;
+            A : World_To_Camera_Pose := Plane_H_A;
+            Plane : World_Plane := Plane_H_Ground;
+         begin
+            case Mode is
+               when 1 => P.Forward.Intersection.Minimum_Absolute_Incidence_Cosine := -1.0;
+               when 2 => P.Backward.Intersection.Minimum_Absolute_Incidence_Cosine := 2.0;
+               when 3 => P.Forward.Intersection.Minimum_Forward_Range := -1.0;
+               when 4 => P.Backward.Intersection.Maximum_Forward_Range := -1.0;
+               when 5 => P.Forward.Intersection.Maximum_Absolute_Plane_Residual := -1.0;
+               when 6 => P.Backward.Maximum_Second_Pixel_Error := -1.0;
+               when 7 => P.Forward.Maximum_Second_Pixel_Error := -1.0;
+               when 8 => P.Maximum_World_Separation := -1.0;
+               when 9 => Late (Late'Last) (1) := OpenCV.Float64_Value (Nonfinite (0));
+               when 10 => P.Maximum_World_Separation := OpenCV.Float64_Value (Nonfinite (1));
+               when 11 => P.Backward.Intersection.Maximum_Forward_Range := OpenCV.Float64_Value (Nonfinite (0));
+               when 12 => O.RANSAC_Threshold_Normalized := 0.0;
+               when 13 => O.Minimum_Final_Fitting_Inliers := 25;
+               when 14 => O.Maximum_Model_Separation_Normalized := -1.0;
+               when 15 => A.Translation (2) := OpenCV.Float64_Value (Nonfinite (0));
+               when 16 => Plane.Normal := [others => 0.0];
+               when others => null;
+            end case;
+            begin
+               declare R : constant Physical_Plane_Homography_Result := Physical_Request
+                 ((if Mode = 17 then F1 (1 .. 4) else F1), F2,
+                  (if Mode = 18 then H1 (1 .. 0) else H1), (if Mode = 19 then Late (1 .. 7) else Late), O, P, A => A, Plane => Plane);
+                  pragma Unreferenced (R);
+               begin Assert (False, "malformed integrated request rejected"); end;
+            exception when OpenCV.OpenCV_Error => null; end;
+         end;
+      end loop;
+   end Physical_Invalid;
+
+   procedure Physical_Numerical (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+      A : constant World_To_Camera_Pose := (others => <>);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      for I in F1'Range loop F2 (I) := [F1 (I) (0) / (0.5 - F1 (I) (0)), F1 (I) (1) / (0.5 - F1 (I) (0))]; end loop;
+      declare
+         R : constant Physical_Plane_Homography_Result := Physical_Request
+           (F1, F2, [[0.0, 0.1], [0.5, 0.0], [0.25, OpenCV.Float64_Value'Last]],
+            [[0.0, 0.2], [0.0, 0.0], [0.0, 0.0]], A => A,
+            B => ([others => 0.0], [0.0, 0.0, -1.0]), Plane => ([0.0, 0.0, 2.0], [2.0, 0.0, 1.0]));
+         D : constant Plane_Homography_Holdout_Result := Algebraic_Verification (Holdouts (R) (2));
+      begin
+         Assert (not Accepted (R) and then Disposition (D) = Predicted_Transfer_Unavailable,
+                 "exact projective horizon remains unavailable");
+         Assert (Accepted (Holdouts (R) (1)) and then not Accepted (Holdouts (R) (3)),
+                 "valid neighbor and large finite unavailable observation remain distinct");
+         for V of Holdouts (R) loop
+            Assert (Directions_Evaluated (Physical_Verification (V)), "numerical algebraic absence does not erase physical directions");
+         end loop;
+         begin declare P : constant Normalized_Image_Point := Predicted_Target (D); pragma Unreferenced (P);
+         begin Assert (False, "unavailable horizon target guard"); end; exception when OpenCV.OpenCV_Error => null; end;
+      end;
+      declare
+         R : constant Physical_Plane_Homography_Result := Physical_Request
+           (F1, F1, [[0.1, 0.2], [1.0E308, 0.0]], [[0.1, 0.2], [-1.0E308, 0.0]],
+            (3000, 1.0E-5, 0.999, 18, 1.0E308, 1.0E308, 1.0E308), A => A, B => A,
+            Plane => ([0.0, 0.0, 1.0], [0.0, 0.0, 1.0]));
+      begin
+         Assert (Accepted (Holdouts (R) (1)) and then not Accepted (Holdouts (R) (2)) and then
+                 not Metric_Available (Algebraic_Verification (Holdouts (R) (2)), Predicted_Observed),
+                 "overflowing finite endpoint difference unavailable, not zero");
+      end;
+   end Physical_Numerical;
+
+   procedure Physical_Guards (T : in out Fixture) is
+      pragma Unreferenced (T);
+      D : Physical_Plane_Holdout_Result;
+   begin
+      Assert (not Diagnostics_Evaluated (D) and then not Accepted (D), "default is unavailable, never accepted");
+      begin declare A : constant Plane_Homography_Holdout_Result := Algebraic_Verification (D); pragma Unreferenced (A);
+      begin Assert (False, "default algebraic guard"); end; exception when OpenCV.OpenCV_Error => null; end;
+      begin declare P : constant Reciprocal_Plane_Result := Physical_Verification (D); pragma Unreferenced (P);
+      begin Assert (False, "default physical guard"); end; exception when OpenCV.OpenCV_Error => null; end;
+   end Physical_Guards;
+
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
+      Result.Add_Test (Caller.Create ("physical homography complete independent evidence ownership and inputs", Physical_Exact'Access));
+      Result.Add_Test (Caller.Create ("physical homography independent Brown tilted plane scalar world oracles", Physical_Brown'Access));
+      Result.Add_Test (Caller.Create ("physical homography algebraically correct negative physical depth", Physical_Depth'Access));
+      Result.Add_Test (Caller.Create ("physical homography wrong supplied plane and relative pose precedence", Physical_Wrong_Models'Access));
+      Result.Add_Test (Caller.Create ("physical homography pure rotation requires plane evidence", Physical_Pure_Rotation'Access));
+      Result.Add_Test (Caller.Create ("physical homography first and second center plane complete diagnostics", Physical_Center_Plane'Access));
+      Result.Add_Test (Caller.Create ("physical homography forward accepted independent backward rejected", Physical_Directional'Access));
+      Result.Add_Test (Caller.Create ("physical homography separation and isolated rejected neighbor", Physical_Separation'Access));
+      Result.Add_Test (Caller.Create ("physical homography insufficient support no model physical diagnostics", Physical_Support'Access));
+      Result.Add_Test (Caller.Create ("physical homography distinct lower bounds and original identities", Physical_Bounds'Access));
+      Result.Add_Test (Caller.Create ("physical homography default diagnostic guards", Physical_Guards'Access));
+      Result.Add_Test (Caller.Create ("physical homography inclusive normalized pixel range separation boundaries", Physical_Boundaries'Access));
+      Result.Add_Test (Caller.Create ("physical homography complete invalid request and late pixel validation", Physical_Invalid'Access));
+      Result.Add_Test (Caller.Create ("physical homography horizons large finite arithmetic and availability", Physical_Numerical'Access));
       Result.Add_Test (Caller.Create ("plane consistency exact independent fit heldout and ownership", Consistency_Exact'Access));
       Result.Add_Test (Caller.Create ("plane consistency fitting outliers final inlier provenance", Consistency_Outliers'Access));
       Result.Add_Test (Caller.Create ("plane consistency valid empirical wrong physical geometry", Consistency_Wrong_Model'Access));
