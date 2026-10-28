@@ -11115,6 +11115,383 @@ package body Calib3D_Tests is
       begin Assert (False, "default physical guard"); end; exception when OpenCV.OpenCV_Error => null; end;
    end Physical_Guards;
 
+   --  Task 030: independent scalar third-camera observations. Source Z=0,
+   --  X=10*u, Y=-10*v follows analytically from the first downward camera.
+   Plane_Third_K : constant Camera_Intrinsics := (730.0, 910.0, 301.0, 227.0);
+   Plane_Third_Pose : constant World_To_Camera_Pose := ([0.23, -0.17, 0.31], [0.4, -0.6, 8.0]);
+   Plane_Third_D : constant Distortion_Coefficients := (0.012, -0.004, 0.001, -0.002, 0.0003);
+   function Plane_Third_Pixels (First : Image_Point_Array;
+      Pose : World_To_Camera_Pose := Plane_Third_Pose;
+      Calibration : Camera_Intrinsics := Plane_Third_K;
+      D : Distortion_Coefficients := Plane_Third_D) return Image_Point_Array
+   is
+   begin
+      return Pixels : Image_Point_Array (1 .. First'Length) do
+         for I in Pixels'Range loop
+            declare P : constant Image_Point := First (First'First + (I - 1));
+            begin Pixels (I) := Plane_Oracle_Pixel ([10.0 * P (0), -10.0 * P (1), 0.0], Pose, Calibration, D); end;
+         end loop;
+      end return;
+   end Plane_Third_Pixels;
+   function Plane_Third_Run (E : Physical_Plane_Homography_Result; Pixels : Image_Point_Array;
+      Limit : OpenCV.Float64_Value := 1.0E-8;
+      Pose : World_To_Camera_Pose := Plane_Third_Pose;
+      Calibration : Camera_Intrinsics := Plane_Third_K;
+      D : Distortion_Coefficients := Plane_Third_D) return Physical_Plane_Third_View_Result is
+     (Verify_Physical_Plane_Third_View (E, Pixels, Calibration, D, Pose, (Maximum_Third_Pixel_Error => Limit)));
+
+   procedure Plane_Third_Oracle (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      declare
+         E : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2);
+         Pixels : constant Image_Point_Array := Plane_Third_Pixels (H1);
+         R : constant Physical_Plane_Third_View_Result := Plane_Third_Run (E, Pixels);
+         C : constant Physical_Plane_Third_View_Holdout_Array := Holdouts (R);
+         L : constant Accepted_Landmark_Set := Physical_Plane_Third_View_Landmark_Observations (R, Pixels);
+      begin
+         Assert (Accepted (R) and then Prior_Evidence (R) = E and then Holdout_Count (R) = 8,
+                 "complete evidence retained; independent Brown/axis-angle/translation oracle passes");
+         Assert (L.Count = 8, "complete accepted handoff");
+         for I in C'Range loop
+            Assert (Accepted (C (I)) and then Prior_Heldout_Accepted (C (I)) and then
+                    Third_View_Evaluated (C (I)) and then Third_View_Disposition (C (I)) = Projected_Positive_Depth,
+                    "all independent gates and actual evaluator disposition");
+            Assert (Original_Position (C (I)) = I and then Third_Pixel_Error (C (I)) < 1.0E-8 and then
+                    Third_Camera_Depth (C (I)) > 0.0, "original positions and meaningful third metrics");
+            Assert (Accepted_World_Position (C (I)) = Accepted_First_Source_World_Position
+                      (Physical_Verification (Holdouts (E) (I))), "exact first-camera representative, no averaging");
+            Assert (Near (Accepted_World_Position (C (I)) (0), H1 (I) (0) * 10.0, 1.0E-11) and then
+                    Near (Accepted_World_Position (C (I)) (1), -H1 (I) (1) * 10.0, 1.0E-11), "independent world oracle");
+         end loop;
+      end;
+   end Plane_Third_Oracle;
+
+   procedure Plane_Third_Isolation (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      declare
+         E : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2);
+         Pixels : Image_Point_Array := Plane_Third_Pixels (H1);
+         Clean : constant Physical_Plane_Third_View_Result := Plane_Third_Run (E, Pixels);
+         Later : Image_Point_Array (21 .. 28) := [others => [12.0, 34.0]];
+      begin
+         Pixels (3) (0) := Pixels (3) (0) + 2.0;
+         declare
+            R : constant Physical_Plane_Third_View_Result := Plane_Third_Run (E, Pixels, 1.0);
+            L : constant Accepted_Landmark_Set := Physical_Plane_Third_View_Landmark_Observations (R, Later);
+         begin
+            Assert (not Accepted (R) and then L.Count = 7, "partial third rejection retains valid survivors");
+            Assert (Original_Positions (L) = [1, 2, 4, 5, 6, 7, 8], "original identities not compact positions");
+            Assert (Disposition (Holdouts (R) (3)) = Plane_Third_Reprojection_Rejected and then
+                    Near (Third_Pixel_Error (Holdouts (R) (3)), 2.0, 1.0E-9), "isolated pixel residual oracle");
+            for I in 1 .. 8 loop
+               Assert (Accepted (Holdouts (R) (I)) = (I /= 3), "accepted neighbors preserved");
+               Assert (Selected_World_Position (Holdouts (R) (I)) = Selected_World_Position (Holdouts (Clean) (I)),
+                       "third pixels cannot alter world positions");
+            end loop;
+            Assert (Image_Points (L) = [1 .. 7 => [12.0, 34.0]], "later observations paired positionally");
+            for I in 1 .. L.Count loop
+               Assert (World_Points (L) (I) = Accepted_World_Position (Holdouts (R) (Original_Positions (L) (I))),
+                       "accepted-only coordinates preserve mapping");
+            end loop;
+            Later := [others => [99.0, 99.0]];
+            Assert (Image_Points (L) (1) = [12.0, 34.0], "handoff owns later observations");
+            begin declare W : constant Object_Point := Accepted_World_Position (Holdouts (R) (3)); pragma Unreferenced (W);
+            begin Assert (False, "diagnostic point cannot escape as accepted"); end; exception when OpenCV.OpenCV_Error => null; end;
+         end;
+      end;
+   end Plane_Third_Isolation;
+
+   procedure Plane_Third_Boundary (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 1);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      declare
+         E : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2);
+         Pixels : Image_Point_Array := Plane_Third_Pixels (H1);
+      begin
+         Pixels (1) (0) := Pixels (1) (0) + 0.5;
+         declare
+            Base : constant Physical_Plane_Third_View_Result := Plane_Third_Run (E, Pixels, 1.0);
+            Error : constant OpenCV.Float64_Value := Third_Pixel_Error (Holdouts (Base) (1));
+         begin
+            Assert (Near (Error, 0.5, 1.0E-9), "independent residual magnitude");
+            for Side in -1 .. 1 loop
+               declare
+                  Limit : constant OpenCV.Float64_Value := (if Side = 0 then Error else
+                    OpenCV.Float64_Value'Adjacent (Error, (if Side < 0 then 0.0 else OpenCV.Float64_Value'Last)));
+                  R : constant Physical_Plane_Third_View_Result := Plane_Third_Run (E, Pixels, Limit);
+               begin Assert (Accepted (R) = (Side >= 0), "inclusive equality and immediately adjacent limits, no epsilon"); end;
+            end loop;
+         end;
+      end;
+   end Plane_Third_Boundary;
+
+   procedure Plane_Third_Depths (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      declare E : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2);
+      begin
+         for Z in -1 .. 1 loop
+            declare
+               Pose : constant World_To_Camera_Pose := ([others => 0.0], [0.0, 0.0, OpenCV.Float64_Value (Z)]);
+               R : constant Physical_Plane_Third_View_Result := Plane_Third_Run
+                 (E, [1 .. 8 => [0.0, 0.0]], OpenCV.Float64_Value'Last, Pose);
+            begin
+               for D of Holdouts (R) loop
+                  Assert (Third_Camera_Depth (D) = OpenCV.Float64_Value (Z), "actual zero/negative/positive depth retained");
+                  Assert (Accepted (D) = (Z > 0), "strict depth sign without hidden minimum");
+                  if Z <= 0 then
+                     Assert (Third_View_Disposition (D) = Non_Positive_Depth and then
+                             Disposition (D) = Plane_Third_Non_Positive_Depth, "depth disposition");
+                     begin declare V : constant OpenCV.Float64_Value := Third_Pixel_Error (D); pragma Unreferenced (V);
+                     begin Assert (False, "nonprojected error guard"); end; exception when OpenCV.OpenCV_Error => null; end;
+                  end if;
+               end loop;
+            end;
+         end loop;
+         declare
+            --  Finite transform/projection; residual subtraction overflows only
+            --  at the final deliberately opposite-sign finite observation.
+            Pixels : Image_Point_Array := Plane_Third_Pixels (H1);
+            Calibration : constant Camera_Intrinsics := (1.0, 1.0, -1.0E308, 0.0);
+         begin
+            Pixels (8) := [1.0E308, 0.0];
+            declare R : constant Physical_Plane_Third_View_Result := Plane_Third_Run
+              (E, Pixels, OpenCV.Float64_Value'Last, Plane_Third_Pose, Calibration, No_Distortion);
+            begin
+               Assert (Disposition (Holdouts (R) (8)) = Plane_Third_Numerically_Unavailable and then
+                       Third_View_Disposition (Holdouts (R) (8)) = Numerically_Unavailable, "evaluator numerical absence retained");
+               Assert (Accepted (Holdouts (R) (7)), "unavailable residual does not erase neighbor");
+               begin declare V : constant OpenCV.Float64_Value := Third_Camera_Depth (Holdouts (R) (8)); pragma Unreferenced (V);
+               begin Assert (False, "unavailable depth guard"); end; exception when OpenCV.OpenCV_Error => null; end;
+            end;
+         end;
+      end;
+   end Plane_Third_Depths;
+
+   procedure Plane_Third_Prior (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+   begin
+      for Mode in 1 .. 4 loop
+         Consistency_Data (F1, F2, H1, H2);
+         declare
+            O : Plane_Homography_Consistency_Options := Consistency_Policy;
+            P : Reciprocal_Plane_Verification_Options := Physical_Policy;
+         begin
+            case Mode is
+               when 1 => F2 (7) := [8.0, -7.0]; O.Minimum_Final_Fitting_Inliers := 24;
+               when 2 => H2 (3) (0) := H2 (3) (0) + 0.001;
+               when 3 => P.Backward.Intersection.Maximum_Forward_Range := 1.0;
+               when 4 =>
+                  H2 (3) (0) := H2 (3) (0) + 0.001;
+                  O.Maximum_Predicted_Observed_Error_Normalized := 0.01;
+                  O.Maximum_Empirical_Observed_Error_Normalized := 0.01;
+                  P.Forward.Maximum_Second_Pixel_Error := 0.01;
+                  P.Backward.Maximum_Second_Pixel_Error := 0.01;
+            end case;
+            declare
+               E : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2, O, P);
+               R : constant Physical_Plane_Third_View_Result := Plane_Third_Run (E, Plane_Third_Pixels (H1));
+               L : constant Accepted_Landmark_Set := Physical_Plane_Third_View_Landmark_Observations (R, H1);
+            begin
+               Assert (not Accepted (E) and then not Accepted (R) and then L.Count = 0, "prior aggregate is absolute export gate");
+               if Mode = 4 then
+                  Assert (Accepted (Algebraic_Consistency (E)) and then
+                          Disposition (Holdouts (E) (3)) = Physical_Verification_Rejected,
+                          "individual physical rejection remains ineligible despite algebraic and third agreement");
+               end if;
+               Assert (World_Points (L)'First = 1 and then World_Points (L)'Last = 0 and then
+                       Image_Points (L)'Last = 0 and then Original_Positions (L)'Last = 0, "correctly bounded empty arrays");
+               for I in 1 .. 8 loop
+                  declare D : constant Physical_Plane_Third_View_Holdout_Result := Holdouts (R) (I);
+                  begin
+                     Assert (not Accepted (D), "third agreement cannot repair rejected aggregate");
+                     if Mode = 3 or else ((Mode = 2 or else Mode = 4) and then I = 3) then
+                        Assert (not Prior_Heldout_Accepted (D) and then not Third_View_Evaluated (D) and then
+                                Disposition (D) = Prior_Heldout_Rejected, "prior individual rejection first; no candidate fabricated");
+                     else
+                        Assert (Prior_Heldout_Accepted (D) and then Third_View_Evaluated (D) and then
+                                Disposition (D) = Prior_Model_Rejected and then Third_Pixel_Error (D) < 1.0E-8,
+                                "eligible independent third diagnostics survive prior aggregate rejection");
+                     end if;
+                  end;
+               end loop;
+            end;
+         end;
+      end loop;
+   end Plane_Third_Prior;
+
+   procedure Plane_Third_Bounds_Ownership (T : in out Fixture) is
+      pragma Unreferenced (T);
+      function Owned return Physical_Plane_Third_View_Result is
+         F1 : Image_Point_Array (7 .. 30);
+         F2 : Image_Point_Array (Positive'Last - 23 .. Positive'Last);
+         H1 : Image_Point_Array (15 .. 22);
+         H2 : Image_Point_Array (Positive'Last - 7 .. Positive'Last);
+         Third : Image_Point_Array (Positive'Last - 7 .. Positive'Last);
+      begin
+         Consistency_Data (F1, F2, H1, H2); Third := Plane_Third_Pixels (H1);
+         declare
+            E : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2);
+            R : constant Physical_Plane_Third_View_Result := Plane_Third_Run (E, Third);
+         begin
+            F1 := [others => [9.0, 9.0]]; F2 := F1;
+            H1 := [others => [8.0, 8.0]]; H2 := H1; Third := H1;
+            return R;
+         end;
+      end Owned;
+      R : constant Physical_Plane_Third_View_Result := Owned;
+      Copy : constant Physical_Plane_Third_View_Result := R;
+      Later : Image_Point_Array (Positive'Last - 7 .. Positive'Last);
+   begin
+      for I in 1 .. 8 loop Later (Later'First + (I - 1)) := [OpenCV.Float64_Value (I), 19.0]; end loop;
+      declare L : constant Accepted_Landmark_Set := Physical_Plane_Third_View_Landmark_Observations (R, Later);
+      begin
+         Assert (R = Copy and then Accepted (R) and then Accepted (Prior_Evidence (R)), "owned evidence outlives native and Ada sources");
+         Assert (Image_Points (L) = Later and then Original_Positions (L) = [1, 2, 3, 4, 5, 6, 7, 8], "maximum-bound positional handoff");
+      end;
+   end Plane_Third_Bounds_Ownership;
+
+   procedure Plane_Third_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      declare E : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2);
+      begin
+         --  Every pixel component, calibration field, Brown coefficient and pose
+         --  component, plus threshold, must reject NaN and both infinities.
+         for Kind in Interfaces.Integer_32 range 0 .. 2 loop
+            for Field in 1 .. 19 loop
+               declare
+                  pragma Suppress (Validity_Check);
+                  Bad : constant OpenCV.Float64_Value := OpenCV.Float64_Value (Nonfinite (Kind));
+                  Pixels : Image_Point_Array := Plane_Third_Pixels (H1);
+                  C : Camera_Intrinsics := Plane_Third_K;
+                  D : Distortion_Coefficients := Plane_Third_D;
+                  P : World_To_Camera_Pose := Plane_Third_Pose;
+                  Limit : OpenCV.Float64_Value := 1.0;
+               begin
+                  case Field is
+                     when 1 .. 2 => Pixels (Pixels'Last) (Field - 1) := Bad;
+                     when 3 => C.Focal_X := Bad;
+                     when 4 => C.Focal_Y := Bad;
+                     when 5 => C.Center_X := Bad;
+                     when 6 => C.Center_Y := Bad;
+                     when 7 => D.K1 := Bad;
+                     when 8 => D.K2 := Bad;
+                     when 9 => D.P1 := Bad;
+                     when 10 => D.P2 := Bad;
+                     when 11 => D.K3 := Bad;
+                     when 12 .. 14 => P.Rotation (Field - 12) := Bad;
+                     when 15 .. 17 => P.Translation (Field - 15) := Bad;
+                     when 18 => Limit := Bad;
+                     when 19 => Limit := -1.0;
+                  end case;
+                  begin declare R : constant Physical_Plane_Third_View_Result := Plane_Third_Run (E, Pixels, Limit, P, C, D);
+                     pragma Unreferenced (R);
+                  begin Assert (False, "malformed third request rejected"); end; exception when OpenCV.OpenCV_Error => null; end;
+               end;
+            end loop;
+         end loop;
+         for Mode in 1 .. 4 loop
+            declare C : Camera_Intrinsics := Plane_Third_K;
+            begin
+               if Mode <= 2 then C.Focal_X := (if Mode = 1 then 0.0 else -1.0);
+               else C.Focal_Y := (if Mode = 3 then 0.0 else -1.0); end if;
+               begin declare R : constant Physical_Plane_Third_View_Result := Plane_Third_Run (E, H1, Calibration => C);
+                  pragma Unreferenced (R);
+               begin Assert (False, "nonpositive focal rejected"); end; exception when OpenCV.OpenCV_Error => null; end;
+            end;
+         end loop;
+         begin declare R : constant Physical_Plane_Third_View_Result := Plane_Third_Run (E, H1 (1 .. 7)); pragma Unreferenced (R);
+         begin Assert (False, "third count mismatch"); end; exception when OpenCV.OpenCV_Error => null; end;
+      end;
+   end Plane_Third_Invalid;
+
+   procedure Plane_Third_Adapter_Invalid (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      H2 (3) (0) := H2 (3) (0) + 1.0;
+      declare
+         E : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2);
+         R : constant Physical_Plane_Third_View_Result := Plane_Third_Run (E, Plane_Third_Pixels (H1));
+         pragma Suppress (Validity_Check);
+         Later : Image_Point_Array := H1;
+      begin
+         Later (Later'Last) (1) := OpenCV.Float64_Value (Nonfinite (0));
+         begin declare L : constant Accepted_Landmark_Set := Physical_Plane_Third_View_Landmark_Observations (R, Later);
+            pragma Unreferenced (L);
+         begin Assert (False, "invalid late pixel cannot be ignored on rejected aggregate"); end; exception when OpenCV.OpenCV_Error => null; end;
+         begin declare L : constant Accepted_Landmark_Set := Physical_Plane_Third_View_Landmark_Observations (R, H1 (1 .. 7));
+            pragma Unreferenced (L);
+         begin Assert (False, "adapter count mismatch"); end; exception when OpenCV.OpenCV_Error => null; end;
+      end;
+   end Plane_Third_Adapter_Invalid;
+
+   procedure Plane_Third_Native_Atomic (T : in out Fixture) is
+      pragma Unreferenced (T);
+      F1, F2 : Image_Point_Array (1 .. 24);
+      H1, H2 : Image_Point_Array (1 .. 8);
+   begin
+      Consistency_Data (F1, F2, H1, H2);
+      declare
+         E : constant Physical_Plane_Homography_Result := Physical_Request (F1, F2, H1, H2);
+         Pixels : constant Image_Point_Array := Plane_Third_Pixels (H1);
+         R : Physical_Plane_Third_View_Result := Plane_Third_Run (E, Pixels);
+         Before : constant Physical_Plane_Third_View_Result := R;
+      begin
+         --  Finite positive depth but native Brown projection overflows: this
+         --  must be OpenCV_Error, not a fabricated per-point diagnostic.
+         begin
+            R := Plane_Third_Run (E, Pixels, Pose => ([others => 0.0], [1.0E308, 0.0, 1.0]),
+                                  Calibration => (1.0E308, 1.0, 0.0, 0.0), D => No_Distortion);
+            Assert (False, "invalid native output must propagate");
+         exception when OpenCV.OpenCV_Error => null; end;
+         Assert (R = Before, "invalid native output publishes no partial assignment");
+         R := Plane_Third_Run (E, Pixels);
+         Assert (Accepted (R) and then R = Before, "healthy recovery after native nonfinite output");
+      end;
+   end Plane_Third_Native_Atomic;
+
+   procedure Plane_Third_Guards (T : in out Fixture) is
+      pragma Unreferenced (T);
+      D : Physical_Plane_Third_View_Holdout_Result;
+   begin
+      Assert (not Accepted (D) and then not Prior_Heldout_Accepted (D) and then not Third_View_Evaluated (D), "default fail closed");
+      for Mode in 1 .. 5 loop
+         begin
+            case Mode is
+               when 1 => declare W : constant Object_Point := Selected_World_Position (D); pragma Unreferenced (W); begin null; end;
+               when 2 => declare W : constant Object_Point := Accepted_World_Position (D); pragma Unreferenced (W); begin null; end;
+               when 3 => declare V : constant AP3P_Reference_Disposition := Third_View_Disposition (D); pragma Unreferenced (V); begin null; end;
+               when 4 => declare V : constant OpenCV.Float64_Value := Third_Camera_Depth (D); pragma Unreferenced (V); begin null; end;
+               when 5 => declare V : constant OpenCV.Float64_Value := Third_Pixel_Error (D); pragma Unreferenced (V); begin null; end;
+            end case;
+            Assert (False, "missing diagnostic accessor must raise");
+         exception when OpenCV.OpenCV_Error => null; end;
+      end loop;
+   end Plane_Third_Guards;
+
    function Suite return AUnit.Test_Suites.Access_Test_Suite is
       Result : constant AUnit.Test_Suites.Access_Test_Suite := AUnit.Test_Suites.New_Suite;
    begin
@@ -11385,6 +11762,16 @@ package body Calib3D_Tests is
       Result.Add_Test (Caller.Create ("plane correspondence numerical and atomic native failures", PC_Numerical'Access));
       Result.Add_Test (Caller.Create ("plane correspondence ownership bounds guards adapter", PC_Bounds_Guards'Access));
       Result.Add_Test (Caller.Create ("plane correspondence complete invalid empty validation", PC_Invalid'Access));
+      Result.Add_Test (Caller.Create ("plane third independent Brown noncommuting pose world oracle", Plane_Third_Oracle'Access));
+      Result.Add_Test (Caller.Create ("plane third isolated rejection accepted-only original identity adapter", Plane_Third_Isolation'Access));
+      Result.Add_Test (Caller.Create ("plane third inclusive exact adjacent pixel threshold", Plane_Third_Boundary'Access));
+      Result.Add_Test (Caller.Create ("plane third signed depth and numerical unavailability", Plane_Third_Depths'Access));
+      Result.Add_Test (Caller.Create ("plane third prior individual aggregate support and no candidates", Plane_Third_Prior'Access));
+      Result.Add_Test (Caller.Create ("plane third distinct maximum bounds source ownership finalization", Plane_Third_Bounds_Ownership'Access));
+      Result.Add_Test (Caller.Create ("plane third complete malformed calibration pose pixels threshold", Plane_Third_Invalid'Access));
+      Result.Add_Test (Caller.Create ("plane third adapter complete invalid batch rejected aggregate", Plane_Third_Adapter_Invalid'Access));
+      Result.Add_Test (Caller.Create ("plane third unavailable diagnostic guards", Plane_Third_Guards'Access));
+      Result.Add_Test (Caller.Create ("plane third invalid native projection output atomicity recovery", Plane_Third_Native_Atomic'Access));
       return Result;
    end Suite;
 end Calib3D_Tests;

@@ -64,6 +64,7 @@ jobs:
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/known_plane_homography_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/plane_homography_consistency_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/physical_plane_homography_synthetic
+          alr -n -C examples exec -- sh ../scripts/run_native.sh bin/physical_plane_third_view_synthetic
   linux-sanitizers:
     runs-on: ubuntu-24.04
     steps:
@@ -136,3 +137,4 @@ jobs:
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/known_plane_homography_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/plane_homography_consistency_synthetic
           alr -n -C examples exec -- sh ../scripts/run_native.sh bin/physical_plane_homography_synthetic
+          alr -n -C examples exec -- sh ../scripts/run_native.sh bin/physical_plane_third_view_synthetic

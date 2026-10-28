@@ -5133,6 +5133,162 @@ package body OpenCV.Calib3D is
       end;
    end Verify_Physical_Plane_Homography_Consistency;
 
+   function Prior_Evidence (Result : Physical_Plane_Third_View_Result) return Physical_Plane_Homography_Result is
+     (Result.Prior);
+   function Holdout_Count (Result : Physical_Plane_Third_View_Result) return Natural is (Result.Heldout_Count);
+   function Holdouts (Result : Physical_Plane_Third_View_Result) return Physical_Plane_Third_View_Holdout_Array is
+     (Result.Diagnostics);
+   function Accepted (Result : Physical_Plane_Third_View_Result) return Boolean is
+     (Accepted (Result.Prior) and then (for all D of Result.Diagnostics => Accepted (D)));
+   function Original_Position (Result : Physical_Plane_Third_View_Holdout_Result) return Positive is (Result.Position);
+   function Prior_Heldout_Accepted (Result : Physical_Plane_Third_View_Holdout_Result) return Boolean is
+     (Result.Prior_Accepted);
+   function Third_View_Evaluated (Result : Physical_Plane_Third_View_Holdout_Result) return Boolean is (Result.Has_Third);
+   function Disposition (Result : Physical_Plane_Third_View_Holdout_Result) return Physical_Plane_Third_View_Disposition is
+     (Result.State);
+   function Accepted (Result : Physical_Plane_Third_View_Holdout_Result) return Boolean is
+     (Result.State = Physical_Plane_Third_View_Accepted);
+   function Selected_World_Position (Result : Physical_Plane_Third_View_Holdout_Result) return Object_Point is
+   begin
+      if not Prior_Heldout_Accepted (Result) then
+         raise OpenCV.OpenCV_Error with "Physical plane third-view source unavailable";
+      end if;
+      return Result.World;
+   end Selected_World_Position;
+   function Third_View_Disposition (Result : Physical_Plane_Third_View_Holdout_Result) return AP3P_Reference_Disposition is
+   begin
+      if not Third_View_Evaluated (Result) then
+         raise OpenCV.OpenCV_Error with "Physical plane third-view evaluation unavailable";
+      end if;
+      return Result.Third.Disposition;
+   end Third_View_Disposition;
+   function Third_Camera_Depth (Result : Physical_Plane_Third_View_Holdout_Result) return OpenCV.Float64_Value is
+   begin
+      if Third_View_Disposition (Result) = Numerically_Unavailable then
+         raise OpenCV.OpenCV_Error with "Physical plane third-view depth unavailable";
+      end if;
+      return Result.Third.Camera_Depth;
+   end Third_Camera_Depth;
+   function Third_Pixel_Error (Result : Physical_Plane_Third_View_Holdout_Result) return OpenCV.Float64_Value is
+   begin
+      if Third_View_Disposition (Result) /= Projected_Positive_Depth then
+         raise OpenCV.OpenCV_Error with "Physical plane third-view pixel error unavailable";
+      end if;
+      return Result.Third.Error_Pixels;
+   end Third_Pixel_Error;
+   function Accepted_World_Position (Result : Physical_Plane_Third_View_Holdout_Result) return Object_Point is
+   begin
+      if not Accepted (Result) then
+         raise OpenCV.OpenCV_Error with "Physical plane third-view landmark not accepted";
+      end if;
+      return Selected_World_Position (Result);
+   end Accepted_World_Position;
+
+   function Verify_Physical_Plane_Third_View
+     (Evidence : Physical_Plane_Homography_Result;
+      Third_Pixels : Image_Point_Array;
+      Third_Intrinsics : Camera_Intrinsics;
+      Third_Distortion : Distortion_Coefficients;
+      Third_Pose : World_To_Camera_Pose;
+      Options : Physical_Plane_Third_View_Options) return Physical_Plane_Third_View_Result
+   is
+      Count : Natural := 0;
+   begin
+      if Third_Pixels'Length /= Holdout_Count (Evidence) or else
+        Third_Pixels'Length > Interfaces.Integer_32'Last
+      then
+         raise OpenCV.OpenCV_Error with "Physical plane third-view counts must match and fit INT32";
+      end if;
+      Validate (Third_Pixels);
+      Validate (Third_Intrinsics);
+      Validate (Third_Distortion);
+      Validate (Third_Pose);
+      if not Is_Finite (Options.Maximum_Third_Pixel_Error) or else Options.Maximum_Third_Pixel_Error < 0.0 then
+         raise OpenCV.OpenCV_Error with "Invalid physical plane third-view pixel threshold";
+      end if;
+      for D of Evidence.Diagnostics loop
+         if Accepted (D) then Count := Count + 1; end if;
+      end loop;
+      return Result : Physical_Plane_Third_View_Result (Evidence.Fitting_Count, Evidence.Heldout_Count) do
+         Result.Prior := Evidence;
+         for I in Result.Diagnostics'Range loop
+            Result.Diagnostics (I).Position := Original_Position (Evidence.Diagnostics (I));
+         end loop;
+         if Count > 0 then
+            declare
+               World : Object_Point_Array (1 .. Count);
+               Pixels : Image_Point_Array (1 .. Count);
+               Original_Positions : Inlier_Index_Array (1 .. Count);
+            begin
+               Count := 0;
+               for I in Evidence.Diagnostics'Range loop
+                  if Accepted (Evidence.Diagnostics (I)) then
+                     Count := Count + 1;
+                     World (Count) := Accepted_First_Source_World_Position
+                       (Physical_Verification (Evidence.Diagnostics (I)));
+                     Pixels (Count) := Third_Pixels (Third_Pixels'First + (I - 1));
+                     Original_Positions (Count) := I;
+                  end if;
+               end loop;
+               declare
+                  Values : constant AP3P_Reference_Result_Matrix := Evaluate_AP3P_References
+                    ([(Pose => Third_Pose)], World, Pixels, Third_Intrinsics, Third_Distortion);
+               begin
+                  for J in Original_Positions'Range loop
+                     declare
+                        D : Physical_Plane_Third_View_Holdout_Result renames Result.Diagnostics (Original_Positions (J));
+                     begin
+                        D.Prior_Accepted := True;
+                        D.World := World (J);
+                        D.Has_Third := True;
+                        D.Third := Values (1, J);
+                        if not Accepted (Evidence) then
+                           D.State := Prior_Model_Rejected;
+                        else
+                           case D.Third.Disposition is
+                              when Non_Positive_Depth => D.State := Plane_Third_Non_Positive_Depth;
+                              when Numerically_Unavailable => D.State := Plane_Third_Numerically_Unavailable;
+                              when Projected_Positive_Depth =>
+                                 D.State := (if D.Third.Error_Pixels <= Options.Maximum_Third_Pixel_Error
+                                   then Physical_Plane_Third_View_Accepted else Plane_Third_Reprojection_Rejected);
+                           end case;
+                        end if;
+                     end;
+                  end loop;
+               end;
+            end;
+         end if;
+      end return;
+   end Verify_Physical_Plane_Third_View;
+
+   function Physical_Plane_Third_View_Landmark_Observations
+     (Result : Physical_Plane_Third_View_Result; Later_Pixels : Image_Point_Array) return Accepted_Landmark_Set
+   is
+      Count : Natural := 0;
+   begin
+      if Later_Pixels'Length /= Holdout_Count (Result) or else Later_Pixels'Length > Interfaces.Integer_32'Last then
+         raise OpenCV.OpenCV_Error with "Physical plane third-view adapter pixel count mismatch";
+      end if;
+      Validate (Later_Pixels);
+      if Accepted (Result.Prior) then
+         for D of Result.Diagnostics loop
+            if Accepted (D) then Count := Count + 1; end if;
+         end loop;
+      end if;
+      return Landmarks : Accepted_Landmark_Set (Count) do
+         if not Accepted (Result.Prior) then return; end if;
+         Count := 0;
+         for I in Result.Diagnostics'Range loop
+            if Accepted (Result.Diagnostics (I)) then
+               Count := Count + 1;
+               Landmarks.World (Count) := Accepted_World_Position (Result.Diagnostics (I));
+               Landmarks.Pixels (Count) := Later_Pixels (Later_Pixels'First + (I - 1));
+               Landmarks.Positions (Count) := Original_Position (Result.Diagnostics (I));
+            end if;
+         end loop;
+      end return;
+   end Physical_Plane_Third_View_Landmark_Observations;
+
    function Reciprocal_Plane_Landmark_Observations
      (Landmarks : Reciprocal_Plane_Result_Array; Pixels : Image_Point_Array) return Accepted_Landmark_Set
    is
